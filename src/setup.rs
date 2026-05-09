@@ -26,7 +26,12 @@ use crate::theme::{self, RESET};
 
 const MARKER_PATH: &str = "~/.mlx-code/.welcomed";
 const MTPLX_REPO_URL: &str = "https://github.com/daniel-farina/MTPLX";
-const MTPLX_BRANCH: &str = "perf/main-aligned-2026-05-08";
+// Integration branch: fork/main (which already has the merged upstream
+// #35 + #32 work) plus the cherry-picked #37 (postcommit-wait race fix)
+// and #33 (dense/repage chunk-size split + 128k bench). Refresh this when
+// new perf work lands on top of fork/main and we want fresh installs to
+// get it. 569/4 pytest passing on this branch.
+const MTPLX_BRANCH: &str = "share/install-2026-05-09";
 const MTPLX_DEFAULT_INSTALL_DIR: &str = "~/code/MTPLX";
 const MTPLX_PID_FILE: &str = "~/.mlx-code/mtplx.pid";
 const MTPLX_LOG_FILE: &str = "~/.mlx-code/mtplx.log";
