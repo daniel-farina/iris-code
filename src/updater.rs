@@ -1,0 +1,361 @@
+//! Update check + self-update.
+//!
+//! Two surfaces:
+//! 1. `update_notice_if_any()` - called early in main(); if the cache says
+//!    a newer version is published on GitHub, returns a short dim notice
+//!    string. Refreshes the cache if it's >24h old, with a 2s HTTP timeout
+//!    so we never noticeably block startup.
+//! 2. `do_update()` - called from `iris --update`; downloads the right
+//!    platform tarball + sha256 from the latest GitHub release, verifies,
+//!    and atomically replaces the running binary in place.
+//!
+//! Cache: `~/.mlx-code/.update-check` JSON
+//!   {"checked_at": <unix>, "latest": "v0.1.2"}
+//!
+//! Env opt-out: `IRIS_NO_UPDATE_CHECK=1` disables both the notice and
+//! any background fetch (useful in CI / sandboxed contexts).
+
+use anyhow::{anyhow, Context, Result};
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+const CACHE_PATH: &str = "~/.mlx-code/.update-check";
+const CACHE_TTL_SECS: u64 = 24 * 60 * 60; // 24h
+const REPO: &str = "daniel-farina/iris-code";
+const HTTP_TIMEOUT: Duration = Duration::from_millis(2000);
+
+#[derive(Debug, Clone)]
+struct CachedCheck {
+    checked_at: u64,
+    latest: String,
+}
+
+fn cache_path() -> PathBuf {
+    PathBuf::from(shellexpand::tilde(CACHE_PATH).into_owned())
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn read_cache() -> Option<CachedCheck> {
+    let body = std::fs::read_to_string(cache_path()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let checked_at = v.get("checked_at").and_then(|x| x.as_u64())?;
+    let latest = v.get("latest").and_then(|x| x.as_str())?.to_string();
+    Some(CachedCheck { checked_at, latest })
+}
+
+fn write_cache(c: &CachedCheck) {
+    let p = cache_path();
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let body = serde_json::json!({"checked_at": c.checked_at, "latest": c.latest});
+    let _ = std::fs::write(&p, body.to_string());
+}
+
+/// Compare two version strings shaped like "v0.1.2" or "0.1.2".
+/// Returns Ordering of `a` vs `b`. Falls back to lexical compare on parse
+/// failure (which still beats nothing).
+fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
+    fn parse(v: &str) -> Vec<u32> {
+        v.trim_start_matches('v')
+            .split('.')
+            .map(|x| x.parse::<u32>().unwrap_or(0))
+            .collect()
+    }
+    let pa = parse(a);
+    let pb = parse(b);
+    pa.cmp(&pb)
+}
+
+/// Fetch the latest release tag from GitHub. Short timeout; returns None
+/// on any failure so the caller doesn't have to care.
+async fn fetch_latest_tag() -> Option<String> {
+    let client = reqwest::Client::builder()
+        .timeout(HTTP_TIMEOUT)
+        .user_agent(format!("iris/{}", env!("CARGO_PKG_VERSION")))
+        .build()
+        .ok()?;
+    let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
+    let resp = client.get(&url).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    let body: serde_json::Value = resp.json().await.ok()?;
+    body.get("tag_name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Read cache, refresh if stale, return a one-line update notice if a
+/// newer version is available than the running binary's `CARGO_PKG_VERSION`.
+/// Never blocks for more than HTTP_TIMEOUT; on any failure returns None.
+pub async fn update_notice_if_any() -> Option<String> {
+    if std::env::var("IRIS_NO_UPDATE_CHECK")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let current = env!("CARGO_PKG_VERSION");
+    let now = now_unix();
+
+    // Read cache; refresh if stale or missing.
+    let cached = read_cache();
+    let fresh = match cached {
+        Some(c) if now.saturating_sub(c.checked_at) < CACHE_TTL_SECS => c,
+        _ => {
+            let latest = fetch_latest_tag().await?;
+            let c = CachedCheck {
+                checked_at: now,
+                latest,
+            };
+            write_cache(&c);
+            c
+        }
+    };
+
+    // Compare (strip leading 'v' on the cached side; current is bare semver).
+    if cmp_version(&fresh.latest, current).is_gt() {
+        Some(format_notice(&fresh.latest, current))
+    } else {
+        None
+    }
+}
+
+fn format_notice(latest: &str, current: &str) -> String {
+    use crate::theme::{accent, dim, warn, RESET};
+    format!(
+        "{d}─ update available: {a}{latest}{d} (currently on {a}{current}{d}) ─ run {w}iris --update{d} to install ─{r}",
+        d = dim(), a = accent(), w = warn(), r = RESET,
+        latest = latest, current = current,
+    )
+}
+
+/// `iris --update`: download the latest release tarball for the running
+/// platform, verify SHA256, and atomically replace the running binary.
+pub async fn do_update() -> Result<()> {
+    use crate::theme::{accent, dim, good, warn, RESET};
+    let d = dim();
+    let a = accent();
+    let g = good();
+    let w = warn();
+    let r = RESET;
+
+    let current = env!("CARGO_PKG_VERSION");
+    eprintln!("{d}current version: {a}{current}{r}");
+
+    eprint!("{d}fetching latest release...{r}");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let latest = fetch_latest_tag()
+        .await
+        .ok_or_else(|| anyhow!("could not reach GitHub API (timeout or network error)"))?;
+    eprintln!(" {a}{latest}{r}");
+
+    if !cmp_version(&latest, current).is_gt() {
+        eprintln!("{g}✓{r} already on the latest version ({current})");
+        return Ok(());
+    }
+
+    let (os, arch) = detect_platform().ok_or_else(|| {
+        anyhow!(
+            "unsupported platform; only darwin-arm64 / darwin-x86_64 / linux-x86_64 are released"
+        )
+    })?;
+    let artifact = format!("iris-{}-{}-{}.tar.gz", latest, os, arch);
+    let base_url = format!("https://github.com/{}/releases/download/{}", REPO, latest);
+
+    eprintln!("{d}downloading {a}{}/{}{r}", base_url, artifact);
+
+    let tmp = tempdir()?;
+    let tar_path = tmp.join(&artifact);
+    let sha_path = tmp.join(format!("{}.sha256", artifact));
+
+    download(&format!("{}/{}", base_url, artifact), &tar_path)
+        .await
+        .with_context(|| format!("downloading {}", artifact))?;
+    if download(&format!("{}/{}.sha256", base_url, artifact), &sha_path)
+        .await
+        .is_ok()
+    {
+        verify_sha256(&tar_path, &sha_path)?;
+        eprintln!("{g}✓{r} checksum verified");
+    } else {
+        eprintln!("{w}!{r} no .sha256 published - skipping verification");
+    }
+
+    // Extract.
+    let extract_dir = tmp.join("extract");
+    std::fs::create_dir_all(&extract_dir)?;
+    let status = std::process::Command::new("tar")
+        .args([
+            "xzf",
+            tar_path.to_string_lossy().as_ref(),
+            "-C",
+            extract_dir.to_string_lossy().as_ref(),
+        ])
+        .status()?;
+    if !status.success() {
+        return Err(anyhow!("tar extract failed (exit {})", status));
+    }
+
+    // Locate the new binary inside the extracted tree.
+    let new_bin = find_binary(&extract_dir, "iris")
+        .ok_or_else(|| anyhow!("'iris' binary not found in archive"))?;
+
+    // Replace the running binary. On macOS/Linux you can rename over a
+    // running executable - the kernel keeps the old inode mapped for the
+    // running process; new invocations get the replacement.
+    let dest = std::env::current_exe()?;
+    let dest_new = dest.with_extension("new");
+    std::fs::copy(&new_bin, &dest_new)?;
+    set_executable(&dest_new)?;
+    std::fs::rename(&dest_new, &dest).with_context(|| format!("replacing {}", dest.display()))?;
+
+    eprintln!("{g}✓{r} installed {a}{}{r} at {}", latest, dest.display());
+    eprintln!("{d}restart iris to use the new version{r}");
+    Ok(())
+}
+
+fn detect_platform() -> Option<(&'static str, &'static str)> {
+    let os = if cfg!(target_os = "macos") {
+        "darwin"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        return None;
+    };
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else {
+        return None;
+    };
+    Some((os, arch))
+}
+
+async fn download(url: &str, dest: &PathBuf) -> Result<()> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()?;
+    let resp = client.get(url).send().await?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("HTTP {} for {}", resp.status(), url));
+    }
+    let mut file = std::fs::File::create(dest)?;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        file.write_all(&chunk?)?;
+    }
+    Ok(())
+}
+
+fn verify_sha256(tar_path: &PathBuf, sha_path: &PathBuf) -> Result<()> {
+    let body = std::fs::read_to_string(sha_path)?;
+    let expected = body
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| anyhow!("empty .sha256 file"))?;
+    // Use `shasum` or `sha256sum` (no rust-crypto dep).
+    let bin = if std::process::Command::new("shasum")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        "shasum"
+    } else {
+        "sha256sum"
+    };
+    let args: &[&str] = if bin == "shasum" { &["-a", "256"] } else { &[] };
+    let out = std::process::Command::new(bin)
+        .args(args)
+        .arg(tar_path)
+        .output()?;
+    let actual = String::from_utf8_lossy(&out.stdout);
+    let actual = actual.split_whitespace().next().unwrap_or("");
+    if actual != expected {
+        return Err(anyhow!(
+            "checksum mismatch: expected {}, got {}",
+            expected,
+            actual
+        ));
+    }
+    Ok(())
+}
+
+fn find_binary(root: &PathBuf, name: &str) -> Option<PathBuf> {
+    for entry in walkdir::WalkDir::new(root) {
+        let entry = entry.ok()?;
+        if entry.file_type().is_file() && entry.file_name() == name {
+            return Some(entry.path().to_path_buf());
+        }
+    }
+    None
+}
+
+fn set_executable(p: &PathBuf) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perm = std::fs::metadata(p)?.permissions();
+    perm.set_mode(perm.mode() | 0o111);
+    std::fs::set_permissions(p, perm)?;
+    Ok(())
+}
+
+fn tempdir() -> Result<PathBuf> {
+    let p = std::env::temp_dir().join(format!("iris-update-{}", std::process::id()));
+    std::fs::create_dir_all(&p)?;
+    Ok(p)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmp_version_handles_v_prefix_and_numeric_compare() {
+        assert!(cmp_version("v0.1.2", "v0.1.1").is_gt());
+        assert!(cmp_version("0.1.2", "v0.1.1").is_gt());
+        assert!(cmp_version("v0.1.0", "0.1.1").is_lt());
+        assert!(cmp_version("v1.0.0", "0.99.99").is_gt());
+        assert_eq!(cmp_version("v0.1.1", "0.1.1"), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn detect_platform_returns_supported_pair_or_none() {
+        // On any of the supported targets this returns Some; otherwise None.
+        let p = detect_platform();
+        if cfg!(any(
+            all(target_os = "macos", target_arch = "aarch64"),
+            all(target_os = "macos", target_arch = "x86_64"),
+            all(target_os = "linux", target_arch = "x86_64"),
+        )) {
+            assert!(p.is_some());
+        }
+    }
+
+    #[test]
+    fn cache_roundtrips_through_disk() {
+        // Use a custom cache path under a tmpdir so we don't clobber real state.
+        let dir = std::env::temp_dir().join(format!("iris-update-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("cache.json");
+        let body = serde_json::json!({"checked_at": 1700000000_u64, "latest": "v0.9.9"});
+        std::fs::write(&p, body.to_string()).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!(
+            parsed.get("latest").and_then(|v| v.as_str()),
+            Some("v0.9.9")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

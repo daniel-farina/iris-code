@@ -18,6 +18,7 @@ mod sparkline;
 mod sticky_bar;
 mod theme;
 mod tools;
+mod updater;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -214,6 +215,11 @@ struct Cli {
     /// it to run again.
     #[arg(long)]
     setup: bool,
+
+    /// Download and install the latest GitHub release in place. Exits after
+    /// the swap; restart iris to use the new version.
+    #[arg(long)]
+    update: bool,
 }
 
 #[tokio::main]
@@ -249,6 +255,21 @@ async fn main() -> Result<()> {
     if cli.dry_run {
         std::env::set_var("MLX_CODE_DRY_RUN", "1");
         eprintln!("\x1b[2m─ dry-run ─ edit/bash will preview only; no writes\x1b[0m");
+    }
+
+    // --update: download + install latest release, exit.
+    if cli.update {
+        updater::do_update().await?;
+        return Ok(());
+    }
+
+    // Background-cached update notice. The fetch is short-circuited via a
+    // 24h cache so we only hit the GitHub API once a day; HTTP timeout is
+    // 2s so we never noticeably block startup. Skip in --quiet contexts.
+    if !cli.quiet && std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+        if let Some(notice) = updater::update_notice_if_any().await {
+            eprintln!("{}", notice);
+        }
     }
 
     // --setup OR first run: probe MTPLX and walk the user through any
