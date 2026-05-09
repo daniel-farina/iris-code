@@ -5,7 +5,7 @@
 //!    a newer version is published on GitHub, returns a short dim notice
 //!    string. Refreshes the cache if it's >24h old, with a 2s HTTP timeout
 //!    so we never noticeably block startup.
-//! 2. `do_update()` - called from `iris --update`; downloads the right
+//! 2. `do_update()` - called from `hip --update`; downloads the right
 //!    platform tarball + sha256 from the latest GitHub release, verifies,
 //!    and atomically replaces the running binary in place.
 //!
@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const CACHE_PATH: &str = "~/.mlx-code/.update-check";
 const CACHE_TTL_SECS: u64 = 24 * 60 * 60; // 24h
-const REPO: &str = "daniel-farina/iris-code";
+const REPO: &str = "daniel-farina/hippo-code";
 const HTTP_TIMEOUT: Duration = Duration::from_millis(2000);
 
 #[derive(Debug, Clone)]
@@ -78,7 +78,7 @@ fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
 async fn fetch_latest_tag() -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
-        .user_agent(format!("iris/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("hip/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .ok()?;
     let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
@@ -131,13 +131,13 @@ pub async fn update_notice_if_any() -> Option<String> {
 fn format_notice(latest: &str, current: &str) -> String {
     use crate::theme::{accent, dim, warn, RESET};
     format!(
-        "{d}─ update available: {a}{latest}{d} (currently on {a}{current}{d}) ─ run {w}iris --update{d} to install ─{r}",
+        "{d}─ update available: {a}{latest}{d} (currently on {a}{current}{d}) ─ run {w}hip --update{d} to install ─{r}",
         d = dim(), a = accent(), w = warn(), r = RESET,
         latest = latest, current = current,
     )
 }
 
-/// `iris --update`: download the latest release tarball for the running
+/// `hip --update`: download the latest release tarball for the running
 /// platform, verify SHA256, and atomically replace the running binary.
 pub async fn do_update() -> Result<()> {
     use crate::theme::{accent, dim, good, warn, RESET};
@@ -167,7 +167,7 @@ pub async fn do_update() -> Result<()> {
             "unsupported platform; only darwin-arm64 / darwin-x86_64 / linux-x86_64 are released"
         )
     })?;
-    let artifact = format!("iris-{}-{}-{}.tar.gz", latest, os, arch);
+    let artifact = format!("hip-{}-{}-{}.tar.gz", latest, os, arch);
     let base_url = format!("https://github.com/{}/releases/download/{}", REPO, latest);
 
     eprintln!("{d}downloading {a}{}/{}{r}", base_url, artifact);
@@ -205,8 +205,8 @@ pub async fn do_update() -> Result<()> {
     }
 
     // Locate the new binary inside the extracted tree.
-    let new_bin = find_binary(&extract_dir, "iris")
-        .ok_or_else(|| anyhow!("'iris' binary not found in archive"))?;
+    let new_bin = find_binary(&extract_dir, "hip")
+        .ok_or_else(|| anyhow!("'hip' binary not found in archive"))?;
 
     // Replace the running binary. On macOS/Linux you can rename over a
     // running executable - the kernel keeps the old inode mapped for the
@@ -218,7 +218,7 @@ pub async fn do_update() -> Result<()> {
     std::fs::rename(&dest_new, &dest).with_context(|| format!("replacing {}", dest.display()))?;
 
     eprintln!("{g}✓{r} installed {a}{}{r} at {}", latest, dest.display());
-    eprintln!("{d}restart iris to use the new version{r}");
+    eprintln!("{d}restart hip to use the new version{r}");
     Ok(())
 }
 
@@ -311,7 +311,7 @@ fn set_executable(p: &PathBuf) -> Result<()> {
 }
 
 fn tempdir() -> Result<PathBuf> {
-    let p = std::env::temp_dir().join(format!("iris-update-{}", std::process::id()));
+    let p = std::env::temp_dir().join(format!("hip-update-{}", std::process::id()));
     std::fs::create_dir_all(&p)?;
     Ok(p)
 }
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn cache_roundtrips_through_disk() {
         // Use a custom cache path under a tmpdir so we don't clobber real state.
-        let dir = std::env::temp_dir().join(format!("iris-update-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("hip-update-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join("cache.json");
         let body = serde_json::json!({"checked_at": 1700000000_u64, "latest": "v0.9.9"});

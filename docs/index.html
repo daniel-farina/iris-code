@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>iris - a lean coding agent for the local MTPLX model</title>
-  <meta name="description" content="iris: a tiny Rust CLI coding agent for a local MTPLX server. 10 tools, ~1.35K token prompt overhead, ~9.6x lighter than opencode." />
+  <title>hip - a lean coding agent for the local MTPLX model</title>
+  <meta name="description" content="hip: a tiny Rust CLI coding agent (hippo-code) for a local MTPLX server. 10 tools, ~1.35K token prompt overhead, ~9.6x lighter than opencode." />
   <meta name="color-scheme" content="dark light" />
-  <meta property="og:title" content="iris" />
+  <meta property="og:title" content="hip" />
   <meta property="og:description" content="A lean coding agent for the local MTPLX model. 10 tools, ~1.35K token prompt overhead." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      /* iris-flower palette */
+      /* river / hippo palette */
       --deep-violet: #5e17eb;
       --royal-purple: #7c3aed;
       --soft-violet: #a78bfa;
@@ -113,13 +113,13 @@
       font-weight: 700; letter-spacing: 0.02em;
       color: var(--text);
     }
-    nav.top .brand .iris-mini {
+    nav.top .brand .hip-mini {
       font-family: 'JetBrains Mono', monospace;
       color: var(--accent);
       font-size: 18px;
       line-height: 1;
     }
-    nav.top .brand .iris-mini .beard { color: var(--accent-gold); }
+    nav.top .brand .hip-mini .beard { color: var(--accent-gold); }
     nav.top .links { display: flex; gap: 22px; align-items: center; }
     nav.top .links a {
       color: var(--text-dim);
@@ -166,7 +166,7 @@
     }
     pre.logo .row { display: block; }
     pre.logo .flower { display: inline-block; padding-right: 16px; }
-    /* gradient stops mirror IRIS_GRADIENT */
+    /* gradient stops mirror RIVER_GRADIENT */
     .grad-1 { color: #5f0087; }
     .grad-2 { color: #8700af; }
     .grad-3 { color: #af5fff; }
@@ -470,14 +470,14 @@
       font-weight: 500;
     }
     footer .links a:hover { color: var(--accent); text-decoration: none; }
-    footer .iris-foot {
+    footer .hip-foot {
       font-family: 'JetBrains Mono', monospace;
       color: var(--accent);
       font-size: 16px;
       margin-bottom: 8px;
       letter-spacing: 1px;
     }
-    footer .iris-foot .beard { color: var(--accent-gold); }
+    footer .hip-foot .beard { color: var(--accent-gold); }
 
     /* ─────────── responsive ─────────── */
     @media (max-width: 720px) {
@@ -506,8 +506,8 @@
 <nav class="top">
   <div class="row">
     <div class="brand">
-      <span class="iris-mini">&#x2746;<span class="beard">&#x25C6;</span>&#x2746;</span>
-      <span>iris</span>
+      <span class="hip-mini">&#x2746;<span class="beard">&#x25C6;</span>&#x2746;</span>
+      <span>hip</span>
     </div>
     <div class="links">
       <a href="#install">Install</a>
@@ -515,7 +515,7 @@
       <a href="#quickstart">Quickstart</a>
       <a href="#architecture">Architecture</a>
       <a href="#performance">Performance</a>
-      <a class="gh" href="https://github.com/daniel-farina/iris-code" target="_blank" rel="noopener">GitHub</a>
+      <a class="gh" href="https://github.com/daniel-farina/hippo-code" target="_blank" rel="noopener">GitHub</a>
       <button class="theme-toggle" id="themeBtn" aria-label="Toggle theme" title="Toggle light/dark">&#9789;</button>
     </div>
   </div>
@@ -524,7 +524,7 @@
 <!-- ─────────── HERO ─────────── -->
 <section class="hero">
   <div class="container">
-    <div class="ascii-wrap" aria-label="iris logo">
+    <div class="ascii-wrap" aria-label="hip logo">
 <pre class="logo" aria-hidden="true"><span class="row"><span class="flower f-lavender"> &#x2572;&#x258E;&#x2502;&#x258E;&#x2571; </span><span class="grad-1">&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;     &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="flower f-violet-top"> &#x258E;&#x258E;&#x2502;&#x258E;&#x258E; </span><span class="grad-2">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;    &#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span><span class="row"><span class="flower f-gold">&#x2500;&#x25C6;&#x2500;&#x25C6;&#x2500;&#x25C6;&#x2500;</span><span class="grad-3">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;  </span></span><span class="row"><span class="flower f-violet-bot"> &#x2571;&#x258E;&#x2502;&#x258E;&#x2572; </span><span class="grad-4">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2551;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x255D;  </span></span><span class="row"><span class="flower f-stem">   &#x2502;   </span><span class="grad-5">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2551;    &#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;&#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="flower f-stem-dim">  &#x2500;&#x2534;&#x2500;  </span><span class="grad-6">&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;  &#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;     &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span></pre>
     </div>
 
@@ -533,7 +533,7 @@
 
     <div class="copybox">
       <span class="prompt">$</span>
-      <span class="cmd" id="installCmd"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh</span> | sh</span>
+      <span class="cmd" id="installCmd"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh</span> | sh</span>
       <button class="copy-btn" data-copy="installCmd">COPY</button>
     </div>
   </div>
@@ -547,34 +547,34 @@
 
     <div class="copybox">
       <span class="prompt">$</span>
-      <span class="cmd" id="installCmd2"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh</span> | sh</span>
+      <span class="cmd" id="installCmd2"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh</span> | sh</span>
       <button class="copy-btn" data-copy="installCmd2">COPY</button>
     </div>
 
     <div class="alts">
       <div class="card">
         <h4>Cargo install (from git)</h4>
-        <pre><span class="t-cmd">cargo install --git https://github.com/daniel-farina/iris-code</span></pre>
+        <pre><span class="t-cmd">cargo install --git https://github.com/daniel-farina/hippo-code</span></pre>
       </div>
       <div class="card">
         <h4>Build from source</h4>
-        <pre><span class="t-cmd">git clone https://github.com/daniel-farina/iris-code
-cd iris-code
+        <pre><span class="t-cmd">git clone https://github.com/daniel-farina/hippo-code
+cd hippo-code
 cargo build --release
-./target/release/iris --help</span></pre>
+./target/release/hip --help</span></pre>
       </div>
       <div class="card">
         <h4>Manual download</h4>
         <pre><span class="t-cmd"># grab a release binary
 curl -LO https://github.com/daniel-farina/\
-iris-code/releases/latest/download/iris-code
-chmod +x iris-code &amp;&amp; mv iris-code /usr/local/bin/</span></pre>
+hippo-code/releases/latest/download/hippo-code
+chmod +x hippo-code &amp;&amp; mv hippo-code /usr/local/bin/</span></pre>
       </div>
       <div class="card">
         <h4>Point at your MTPLX server</h4>
         <pre><span class="t-cmd">export MLX_CODE_URL=http://localhost:8088/v1
 export MLX_CODE_MODEL=mtplx-qwen36-27b-optimized-speed
-iris-code</span></pre>
+hippo-code</span></pre>
       </div>
     </div>
   </div>
@@ -591,7 +591,7 @@ iris-code</span></pre>
       <li><b>Thinking mode shown by default.</b> <code>&lt;think&gt;</code> blocks render in a dim panel above the response. Hide with <code>--hide-thinking</code> or <code>MLX_CODE_SHOW_THINKING=0</code>; verbose with <code>-v</code> to also get full tool output and stats.</li>
       <li><b>Dry run.</b> <code>--dry-run</code> makes <code>edit</code> and <code>bash</code> return <code>(dry_run) would&hellip;</code> previews instead of writing or executing - the agent loop still runs end-to-end so you can validate plans safely.</li>
       <li><b>Sticky bottom status bar.</b> ANSI scroll regions (DECSTBM) pin a live <code>tok / lines / tok-s / ttft / total</code> bar to the bottom row while output streams above. Falls back to inline <code>\r</code> if the terminal can't, or with <code>MLX_CODE_NO_STICKY=1</code>.</li>
-      <li><b>~1.35K token prompt overhead vs opencode's ~13K</b> - roughly 9.6&times; lighter cold prefills. Run <code>iris-code --inspect-prompt</code> for a live per-tool breakdown.</li>
+      <li><b>~1.35K token prompt overhead vs opencode's ~13K</b> - roughly 9.6&times; lighter cold prefills. Run <code>hippo-code --inspect-prompt</code> for a live per-tool breakdown.</li>
     </ul>
   </div>
 </section>
@@ -605,22 +605,22 @@ iris-code</span></pre>
     <div class="term">
       <div class="titlebar">
         <span class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></span>
-        <span>~/code &mdash; iris-code</span>
+        <span>~/code &mdash; hippo-code</span>
       </div>
-<pre><span class="t-prompt">$</span> <span class="t-cmd">iris-code</span>
+<pre><span class="t-prompt">$</span> <span class="t-cmd">hippo-code</span>
 <span class="t-dim">                  &mdash; a lean coding agent &middot; <span class="t-warn">MTPLX</span> &middot; qwen3.6-27b &mdash;</span>
 
-<span class="t-accent">iris&gt;</span> <span class="t-cmd">:help</span>
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">:help</span>
   <span class="t-key">:help</span>            show this help
   <span class="t-key">:tools</span>           list registered tools and their schemas
-  <span class="t-key">:theme</span> <span class="t-flag">[name]</span>    iris &middot; light &middot; mono     (current: <span class="t-accent">iris</span>)
+  <span class="t-key">:theme</span> <span class="t-flag">[name]</span>    river &middot; light &middot; mono   (current: <span class="t-accent">river</span>)
   <span class="t-key">:tps</span> <span class="t-flag">[N]</span>         tok/s sparkline for last N runs
   <span class="t-key">:overhead</span>        prompt-overhead breakdown (system + 10 tools)
   <span class="t-key">:dry-run</span> <span class="t-flag">on|off</span>  preview edits/bash without writing
   <span class="t-key">:peek</span> <span class="t-flag">[N]</span>        last N runs from runs.jsonl
   <span class="t-key">:reset</span> <span class="t-key">:quit</span>     conversation controls
 
-<span class="t-accent">iris&gt;</span> <span class="t-cmd">:tools</span>
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">:tools</span>
   <span class="t-good">read</span>      <span class="t-dim">text-file slice (offset/limit/around+context)</span>
   <span class="t-good">grep</span>      <span class="t-dim">regex search via the ignore crate</span>
   <span class="t-good">edit</span>      <span class="t-dim">exact-match replace (dry_run supported)</span>
@@ -632,13 +632,13 @@ iris-code</span></pre>
   <span class="t-good">tree</span>      <span class="t-dim">recursive view, gitignore-aware, 500 entries</span>
   <span class="t-good">peek_log</span>  <span class="t-dim">last N entries from runs.jsonl</span>
 
-<span class="t-accent">iris&gt;</span> <span class="t-cmd">:theme</span> <span class="t-str">light</span>
-  theme: <span class="t-accent">iris</span> &rarr; <span class="t-accent">light</span>
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">:theme</span> <span class="t-str">light</span>
+  theme: <span class="t-accent">river</span> &rarr; <span class="t-accent">light</span>
 
-<span class="t-accent">iris&gt;</span> <span class="t-cmd">:tps</span> <span class="t-num">10</span>
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">:tps</span> <span class="t-num">10</span>
   last 10 runs &nbsp;<span class="t-accent">&#x2581;&#x2583;&#x2585;&#x2587;&#x2587;&#x2585;&#x2583;&#x2585;&#x2587;&#x2588;</span>&nbsp; <span class="t-num">42.7</span> tok/s avg
 
-<span class="t-bar">&mdash;[iris-code]&mdash; <span class="t-num">247</span> tok &mdash; <span class="t-num">18</span> lines &mdash; <span class="t-num">102.9</span> tok/s &mdash; ttft <span class="t-num">0.6</span>s &mdash; total <span class="t-num">3.0</span>s</span></pre>
+<span class="t-bar">&mdash;[hippo-code]&mdash; <span class="t-num">247</span> tok &mdash; <span class="t-num">18</span> lines &mdash; <span class="t-num">102.9</span> tok/s &mdash; ttft <span class="t-num">0.6</span>s &mdash; total <span class="t-num">3.0</span>s</span></pre>
     </div>
   </div>
 </section>
@@ -660,8 +660,8 @@ iris-code</span></pre>
           <tr><td class="mod">schema.rs</td><td>Serde types for the chat-completions wire shape (only fields we use).</td></tr>
           <tr><td class="mod">repl.rs</td><td>rustyline Helper: <code>:command</code> completion, path completion, history.</td></tr>
           <tr><td class="mod">pretty.rs</td><td>Pretty-print streamed think blocks, content, tool calls, tool results.</td></tr>
-          <tr><td class="mod">theme.rs</td><td>iris / light / mono color themes &mdash; named accessors over 256-color ANSI.</td></tr>
-          <tr><td class="mod">logo.rs</td><td>Startup ASCII logo: 6-row "IRIS" with iris flower + violet gradient.</td></tr>
+          <tr><td class="mod">theme.rs</td><td>river / light / mono color themes &mdash; named accessors over 256-color ANSI.</td></tr>
+          <tr><td class="mod">logo.rs</td><td>Startup ASCII logo: 6-row "HIPPO" with hippo glyph + river-blue gradient.</td></tr>
           <tr><td class="mod">sticky_bar.rs</td><td>Sticky bottom status bar via DECSTBM scroll regions, with safe fallback.</td></tr>
           <tr><td class="mod">sparkline.rs</td><td>Tiny Unicode-block sparkline + small formatting helpers.</td></tr>
           <tr><td class="mod">runlog.rs</td><td>Append-only JSONL run log at <code>~/.mlx-code/logs/runs.jsonl</code>.</td></tr>
@@ -739,14 +739,14 @@ iris-code</span></pre>
 <!-- ─────────── FOOTER ─────────── -->
 <footer>
   <div class="container">
-    <div class="iris-foot">&#x2746;&#x2746;<span class="beard">&#x25C6;</span>&#x2746;&#x2746;</div>
+    <div class="hip-foot">&#x2746;&#x2746;<span class="beard">&#x25C6;</span>&#x2746;&#x2746;</div>
     <div class="links">
-      <a href="https://github.com/daniel-farina/iris-code" target="_blank" rel="noopener">GitHub</a>
-      <a href="https://github.com/daniel-farina/iris-code/blob/main/README.md" target="_blank" rel="noopener">README</a>
-      <a href="https://github.com/daniel-farina/iris-code/issues" target="_blank" rel="noopener">Issues</a>
-      <a href="https://github.com/daniel-farina/iris-code/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      <a href="https://github.com/daniel-farina/hippo-code" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/daniel-farina/hippo-code/blob/main/README.md" target="_blank" rel="noopener">README</a>
+      <a href="https://github.com/daniel-farina/hippo-code/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/daniel-farina/hippo-code/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
     </div>
-    <div>iris-code &middot; MIT License &middot; built for the local MTPLX stack</div>
+    <div>hippo-code &middot; MIT License &middot; built for the local MTPLX stack</div>
   </div>
 </footer>
 
@@ -754,7 +754,7 @@ iris-code</span></pre>
   // ─── theme toggle ────────────────────────────────────────────────────
   (function () {
     var btn = document.getElementById('themeBtn');
-    var key = 'iris-code-theme';
+    var key = 'hippo-code-theme';
     var saved = null;
     try { saved = localStorage.getItem(key); } catch (_) {}
     if (saved === 'light' || saved === 'dark') {

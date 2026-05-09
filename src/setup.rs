@@ -56,10 +56,10 @@ pub async fn run_wizard(url: &str) -> Result<bool> {
 
     eprintln!();
     eprintln!("{a}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{r}");
-    eprintln!("  {a}🌸 Welcome to iris{r}");
+    eprintln!("  {a}🌊 Welcome to hippo-code{r}");
     eprintln!("{a}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{r}");
     eprintln!();
-    eprintln!("  Running first-time setup. Re-run anytime with {a}iris --setup{r}.");
+    eprintln!("  Running first-time setup. Re-run anytime with {a}hip --setup{r}.");
     eprintln!();
 
     eprint!("  {d}1/3{r} probing MTPLX server at {a}{url}{r}");
@@ -102,7 +102,7 @@ pub async fn run_wizard(url: &str) -> Result<bool> {
         eprintln!("    {d}... +{} more{r}", models.len() - 5);
     }
     eprintln!();
-    eprintln!("  {g}✓{r} run {a}iris{r} to chat or {a}iris 'your prompt'{r}");
+    eprintln!("  {g}✓{r} run {a}hip{r} to chat or {a}hip 'your prompt'{r}");
     eprintln!();
     mark_welcomed();
     Ok(true)
@@ -119,7 +119,7 @@ async fn offer_install_mtplx() -> Result<()> {
 
     eprintln!("  {w}MTPLX server isn't running.{r}");
     eprintln!();
-    eprintln!("  {a}iris{r} talks to a local MTPLX server. We can install our fork");
+    eprintln!("  {a}hippo-code{r} talks to a local MTPLX server. We can install our fork");
     eprintln!(
         "  ({a}{}{r}, branch {a}{}{r})",
         MTPLX_REPO_URL, MTPLX_BRANCH
@@ -233,7 +233,7 @@ async fn offer_install_mtplx() -> Result<()> {
             eprintln!("    {a}cd {}{r}", install_dir.display());
             eprintln!("    {a}.venv/bin/python -m mtplx.server{r}");
             eprintln!();
-            eprintln!("  Then re-run {a}iris{r}.");
+            eprintln!("  Then re-run {a}hip{r}.");
         }
         _ => {
             eprintln!();
@@ -313,9 +313,7 @@ fn start_mtplx_background(install_dir: &Path) {
             eprintln!("    {d}logs:{r} {a}tail -f {}{r}", log_path.display());
             eprintln!("    {d}stop:{r} {a}kill {pid}{r}");
             eprintln!();
-            eprintln!(
-                "  Give it ~10s to load the model, then re-run {a}iris --setup{r} to verify.",
-            );
+            eprintln!("  Give it ~10s to load the model, then re-run {a}hip --setup{r} to verify.",);
         }
         Err(e) => {
             eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
@@ -563,7 +561,7 @@ fn print_manual_setup() {
     eprintln!("    {a}cd ~/code/MTPLX && pip install -e .{r}");
     eprintln!("    {a}python -m mtplx.server{r}");
     eprintln!();
-    eprintln!("  Then re-run {a}iris{r}.");
+    eprintln!("  Then re-run {a}hip{r}.");
 }
 
 fn ask_yes_no(question: &str, default_yes: bool) -> bool {

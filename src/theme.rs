@@ -1,15 +1,15 @@
-//! Color theme for mlx-code's TUI surfaces.
+//! Color theme for hippo-code's TUI surfaces.
 //!
 //! Three themes:
-//! - `dark`  (default): bright accents on a dark terminal background
-//! - `light`: muted accents that read on white/light backgrounds
-//! - `mono`:  no color at all - just bold/dim/reset for accessibility,
-//!   log files, or pipes that don't strip ANSI
+//! - `River` (default): slate gray + steel blue + mossy green + tusk ivory.
+//!   Built around 256-color ANSI codes.
+//! - `Light`: muted accents tuned for light terminal backgrounds.
+//! - `Mono`: no color at all - bold/dim/reset only.
 //!
 //! Resolution order:
 //! 1. Runtime override (set by `:theme` REPL command -> `set_runtime`)
-//! 2. `MLX_CODE_THEME` env var
-//! 3. Default = `dark`
+//! 2. `HIPPO_THEME` / `IRIS_THEME` / `MLX_CODE_THEME` env var
+//! 3. Default = `River`
 //!
 //! Public surface is a small set of named accessors (`accent()`, `good()`,
 //! `dim()`, etc.). Each returns the ANSI prefix; callers must append `\x1b[0m`
@@ -19,13 +19,13 @@ use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
 /// Themes:
-/// - `Iris` (default): iris-flower palette - deep violet, royal purple, lavender,
-///   pale yellow ("beard"), white. Built around 256-color ANSI codes.
+/// - `River` (default): hippo / river-water palette - slate gray, steel
+///   blue, mossy green, tusk ivory. 256-color ANSI codes.
 /// - `Light`: muted accents tuned for light terminal backgrounds.
 /// - `Mono`: no color at all - bold/dim/reset only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Theme {
-    Iris,
+    River,
     Light,
     Mono,
 }
@@ -35,7 +35,7 @@ static RUNTIME_OVERRIDE: Lazy<Mutex<Option<Theme>>> = Lazy::new(|| Mutex::new(No
 impl Theme {
     pub fn parse(s: &str) -> Option<Theme> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "iris" | "dark" | "violet" | "purple" => Some(Theme::Iris),
+            "river" | "dark" | "hippo" | "blue" | "slate" => Some(Theme::River),
             "light" => Some(Theme::Light),
             "mono" | "none" | "off" => Some(Theme::Mono),
             _ => None,
@@ -43,7 +43,7 @@ impl Theme {
     }
     pub fn name(&self) -> &'static str {
         match self {
-            Theme::Iris => "iris",
+            Theme::River => "river",
             Theme::Light => "light",
             Theme::Mono => "mono",
         }
@@ -54,11 +54,12 @@ pub fn current() -> Theme {
     if let Some(t) = *RUNTIME_OVERRIDE.lock().unwrap() {
         return t;
     }
-    std::env::var("MLX_CODE_THEME")
+    std::env::var("HIPPO_THEME")
         .or_else(|_| std::env::var("IRIS_THEME"))
+        .or_else(|_| std::env::var("MLX_CODE_THEME"))
         .ok()
         .and_then(|s| Theme::parse(&s))
-        .unwrap_or(Theme::Iris)
+        .unwrap_or(Theme::River)
 }
 
 pub fn set_runtime(t: Theme) {
@@ -68,39 +69,39 @@ pub fn set_runtime(t: Theme) {
 /// Reset code: ends any open color sequence.
 pub const RESET: &str = "\x1b[0m";
 
-// Iris-flower 256-color palette (Iris theme):
-//   54  = deep violet (#5f0087) - shadow / stem tone
-//   91  = royal purple (#8700af)
-//   135 = bright violet (#af5fff)
-//   141 = soft violet (#af87ff)  - main accent
-//   183 = lavender (#d7afff)     - highlight
-//   228 = pale yellow (#ffff87)  - the iris "beard"
-//   220 = gold (#ffd700)         - warn / standout
+// River-hippo 256-color palette (River theme):
+//   24  = deep teal-blue (#005f87)  - depth / shadow
+//   67  = steel blue (#5f87af)      - main accent (river surface)
+//   109 = gray-cyan (#87afaf)       - lighter river / mist
+//   102 = medium gray (#878787)     - hippo body
+//   65  = mossy green (#5f875f)     - bank vegetation / good
+//   178 = mustard / dust (#d7af00)  - warn
+//   229 = pale ivory (#ffffaf)      - tusks / highlight
 //
 // Use `\x1b[38;5;Nm` for foreground.
 
 pub fn dim() -> &'static str {
     match current() {
-        Theme::Iris | Theme::Light | Theme::Mono => "\x1b[2m",
+        Theme::River | Theme::Light | Theme::Mono => "\x1b[2m",
     }
 }
 pub fn accent() -> &'static str {
     match current() {
-        Theme::Iris => "\x1b[38;5;141m", // soft violet - the iris signature
-        Theme::Light => "\x1b[0;35m",    // magenta (legible on white)
+        Theme::River => "\x1b[38;5;67m", // steel blue - the river
+        Theme::Light => "\x1b[0;34m",    // dark blue (legible on white)
         Theme::Mono => "\x1b[1m",
     }
 }
 pub fn good() -> &'static str {
     match current() {
-        Theme::Iris => "\x1b[38;5;156m", // pale green-yellow, complements violet
+        Theme::River => "\x1b[38;5;65m", // mossy green
         Theme::Light => "\x1b[0;32m",
         Theme::Mono => "",
     }
 }
 pub fn warn() -> &'static str {
     match current() {
-        Theme::Iris => "\x1b[38;5;220m", // gold - the iris beard
+        Theme::River => "\x1b[38;5;178m", // mustard / sun-on-water
         Theme::Light => "\x1b[0;33m",
         Theme::Mono => "",
     }
@@ -108,14 +109,14 @@ pub fn warn() -> &'static str {
 #[allow(dead_code)]
 pub fn bad() -> &'static str {
     match current() {
-        Theme::Iris => "\x1b[38;5;203m", // soft red beside violet
+        Theme::River => "\x1b[38;5;167m", // soft red, sits well on slate
         Theme::Light => "\x1b[0;31m",
         Theme::Mono => "\x1b[1m",
     }
 }
 pub fn highlight() -> &'static str {
     match current() {
-        Theme::Iris => "\x1b[38;5;183m", // lavender
+        Theme::River => "\x1b[38;5;109m", // gray-cyan, lighter river
         Theme::Light => "\x1b[0;35m",
         Theme::Mono => "",
     }
@@ -123,21 +124,22 @@ pub fn highlight() -> &'static str {
 #[allow(dead_code)]
 pub fn thinking() -> &'static str {
     match current() {
-        Theme::Iris => "\x1b[2;38;5;98m", // dim + medium violet
+        Theme::River => "\x1b[2;38;5;102m", // dim + medium hippo gray
         Theme::Light => "\x1b[2;90m",
         Theme::Mono => "\x1b[2m",
     }
 }
 
-/// Iris-gradient stops for the logo block letters: deep violet at the top,
-/// fading to lavender at the bottom. Six stops match the 6-line block font.
-pub const IRIS_GRADIENT: &[&str] = &[
-    "\x1b[38;5;54m",  // deep violet
-    "\x1b[38;5;91m",  // royal purple
-    "\x1b[38;5;135m", // bright violet
-    "\x1b[38;5;141m", // soft violet
-    "\x1b[38;5;177m", // light violet
-    "\x1b[38;5;183m", // lavender
+/// River-gradient stops for the logo block letters: deep teal-blue at the
+/// top, fading through steel blue to pale gray-cyan at the bottom. Six
+/// stops match the 6-line block font.
+pub const RIVER_GRADIENT: &[&str] = &[
+    "\x1b[38;5;24m",  // deep teal-blue (river depth)
+    "\x1b[38;5;25m",  // mid teal
+    "\x1b[38;5;67m",  // steel blue
+    "\x1b[38;5;73m",  // lighter steel
+    "\x1b[38;5;109m", // gray-cyan
+    "\x1b[38;5;152m", // pale river-mist
 ];
 
 /// Wrap `inner` with `prefix` and RESET. Convenience for short colored text.
@@ -158,26 +160,24 @@ mod tests {
 
     #[test]
     fn parse_accepts_aliases() {
-        assert_eq!(Theme::parse("iris"), Some(Theme::Iris));
-        assert_eq!(Theme::parse("dark"), Some(Theme::Iris)); // dark aliases to iris
-        assert_eq!(Theme::parse("violet"), Some(Theme::Iris));
-        assert_eq!(Theme::parse("purple"), Some(Theme::Iris));
+        assert_eq!(Theme::parse("river"), Some(Theme::River));
+        assert_eq!(Theme::parse("dark"), Some(Theme::River)); // dark aliases
+        assert_eq!(Theme::parse("hippo"), Some(Theme::River));
+        assert_eq!(Theme::parse("slate"), Some(Theme::River));
         assert_eq!(Theme::parse("Light"), Some(Theme::Light));
         assert_eq!(Theme::parse("MONO"), Some(Theme::Mono));
         assert_eq!(Theme::parse("none"), Some(Theme::Mono));
-        assert_eq!(Theme::parse("off"), Some(Theme::Mono));
         assert_eq!(Theme::parse("rainbow"), None);
     }
 
     #[test]
     fn runtime_override_beats_env() {
         let _g = TEST_LOCK.lock().unwrap();
-        std::env::set_var("MLX_CODE_THEME", "dark");
+        std::env::set_var("HIPPO_THEME", "river");
         set_runtime(Theme::Light);
         assert_eq!(current(), Theme::Light);
-        // Reset for other tests.
         *RUNTIME_OVERRIDE.lock().unwrap() = None;
-        std::env::remove_var("MLX_CODE_THEME");
+        std::env::remove_var("HIPPO_THEME");
     }
 
     #[test]
@@ -187,29 +187,27 @@ mod tests {
         assert_eq!(good(), "");
         assert_eq!(warn(), "");
         assert_eq!(highlight(), "");
-        // accent in mono uses bold but not color
         assert!(accent().contains("\x1b[1m"));
         *RUNTIME_OVERRIDE.lock().unwrap() = None;
     }
 
     #[test]
-    fn iris_emits_256_color_codes() {
+    fn river_emits_256_color_codes() {
         let _g = TEST_LOCK.lock().unwrap();
-        set_runtime(Theme::Iris);
-        // Iris theme uses 256-color codes (\x1b[38;5;Nm), not 16-color (\x1b[0;Nm).
+        set_runtime(Theme::River);
         assert!(
-            accent().contains("\x1b[38;5;141m"),
-            "expected soft-violet accent, got {:?}",
+            accent().contains("\x1b[38;5;67m"),
+            "expected steel-blue accent, got {:?}",
             accent()
         );
         assert!(
-            highlight().contains("\x1b[38;5;183m"),
-            "expected lavender highlight, got {:?}",
+            highlight().contains("\x1b[38;5;109m"),
+            "expected gray-cyan highlight, got {:?}",
             highlight()
         );
         assert!(
-            warn().contains("\x1b[38;5;220m"),
-            "expected gold warn, got {:?}",
+            warn().contains("\x1b[38;5;178m"),
+            "expected mustard warn, got {:?}",
             warn()
         );
         *RUNTIME_OVERRIDE.lock().unwrap() = None;

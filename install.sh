@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
-# iris-code installer
-# Usage: curl -sSL https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh | sh
+# hippo-code installer
+# Usage: curl -sSL https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh | sh
 # Env:
-#   IRIS_INSTALL_DIR  Override install directory (default: ~/.local/bin)
-#   IRIS_VERSION      Pin a specific version like "v0.1.0" (default: latest)
+#   HIPPO_INSTALL_DIR  Override install directory (default: ~/.local/bin)
+#   HIPPO_VERSION      Pin a specific version like "v0.1.0" (default: latest)
 #   NO_COLOR          Disable colored output if set to any value
 #
 # Native dependencies: a downloader (curl OR wget), tar, mkdir, chmod, uname,
@@ -12,9 +12,9 @@
 
 set -eu
 
-REPO="daniel-farina/iris-code"
-BIN_NAME="iris"
-INSTALL_DIR="${IRIS_INSTALL_DIR:-$HOME/.local/bin}"
+REPO="daniel-farina/hippo-code"
+BIN_NAME="hip"
+INSTALL_DIR="${HIPPO_INSTALL_DIR:-$HOME/.local/bin}"
 
 # --- Colors (respect NO_COLOR) ---
 if [ -z "${NO_COLOR:-}" ] && [ -t 1 ]; then
@@ -80,9 +80,9 @@ info "Detected platform: ${C_BOLD}${OS}-${ARCH}${C_RESET} (using ${DOWNLOADER})"
 # --- Required tools ---
 command -v tar  >/dev/null 2>&1 || die "tar is required but not found"
 
-# --- Resolve version: IRIS_VERSION pin, or latest from the GitHub REST API ---
-if [ -n "${IRIS_VERSION:-}" ]; then
-    VERSION="$IRIS_VERSION"
+# --- Resolve version: HIPPO_VERSION pin, or latest from the GitHub REST API ---
+if [ -n "${HIPPO_VERSION:-}" ]; then
+    VERSION="$HIPPO_VERSION"
     info "Pinned version: ${C_BOLD}${VERSION}${C_RESET}"
 else
     info "Fetching latest release metadata for ${REPO}"
@@ -102,7 +102,7 @@ BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
 info "Installing ${C_BOLD}${BIN_NAME} ${VERSION}${C_RESET} from ${ARTIFACT}"
 
 # --- Stage in a temp dir, clean up on exit ---
-TMPDIR_X="$(mktemp -d 2>/dev/null || mktemp -d -t iris-code)"
+TMPDIR_X="$(mktemp -d 2>/dev/null || mktemp -d -t hippo-code)"
 trap 'rm -rf "$TMPDIR_X"' EXIT INT TERM
 
 # --- Download artifact ---
@@ -139,10 +139,10 @@ SRC_BIN="$(find "${TMPDIR_X}" -type f -name "${BIN_NAME}" -perm -u+x 2>/dev/null
 
 # --- Install (no auto-sudo) ---
 if ! mkdir -p "$INSTALL_DIR" 2>/dev/null; then
-    die "cannot create ${INSTALL_DIR} - re-run with a writable IRIS_INSTALL_DIR or as the appropriate user"
+    die "cannot create ${INSTALL_DIR} - re-run with a writable HIPPO_INSTALL_DIR or as the appropriate user"
 fi
 if [ ! -w "$INSTALL_DIR" ]; then
-    die "${INSTALL_DIR} is not writable - re-run with a writable IRIS_INSTALL_DIR or as the appropriate user"
+    die "${INSTALL_DIR} is not writable - re-run with a writable HIPPO_INSTALL_DIR or as the appropriate user"
 fi
 
 DEST="${INSTALL_DIR}/${BIN_NAME}"

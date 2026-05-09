@@ -1,4 +1,4 @@
-# iris
+# hippo-code
 
 A lean Rust CLI coding agent for a local MTPLX server (Qwen3.6-27B with native MTP).
 Replicates the useful subset of opencode's agent loop without the heavy parent-agent
@@ -7,7 +7,7 @@ what it expects.
 
 > **Status:** ~5K LoC across 24 modules · 10 tools · ~1.35K token prompt overhead
 > (9.6× lighter than opencode) · 66 tests passing · 943 cumulative smoke passes / 0 failures
-> · iris-flower theme · sticky bottom status bar · runs entirely against your local
+> · river theme · sticky bottom status bar · runs entirely against your local
 > MTPLX server.
 
 ## Install
@@ -15,54 +15,54 @@ what it expects.
 One-line installer (Linux x86_64, macOS x86_64, macOS arm64):
 
 ```
-curl -sSL https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh | sh
+curl -sSL https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh | sh
 ```
 
 Override the install location:
 
 ```
-IRIS_INSTALL_DIR=/usr/local/bin curl -sSL https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh | sh
+HIPPO_INSTALL_DIR=/usr/local/bin curl -sSL https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh | sh
 ```
 
 Or build from source:
 
 ```
-git clone https://github.com/daniel-farina/iris-code
-cd iris-code  # repo name unchanged
+git clone https://github.com/daniel-farina/hippo-code
+cd hippo-code  # repo name unchanged
 cargo build --release
-./target/release/iris --help
+./target/release/hip --help
 ```
 
-On first run, iris probes your local MTPLX server, lists available
+On first run, hip probes your local MTPLX server, lists available
 models, and prints any setup hints needed. Re-run the wizard with
-`iris --setup`.
+`hip --setup`.
 
 ## Usage
 
 ```
 # One-shot ("print mode") — stream a single response, no tools.
-iris --one-shot --save-html ~/airplane.html "make a 3D airplane game; output just <html>...</html>."
-iris --print "..."   # alias for --one-shot
+hip --one-shot --save-html ~/airplane.html "make a 3D airplane game; output just <html>...</html>."
+hip --print "..."   # alias for --one-shot
 
 # Agent loop (default) — full tools.
-iris "in /tmp/foo, create hello.py and run it"
+hip "in /tmp/foo, create hello.py and run it"
 
 # Interactive chat — REPL with arrow-key history (rustyline).
-iris            # empty prompt enters chat
-iris --chat     # explicit
+hip            # empty prompt enters chat
+hip --chat     # explicit
 # REPL commands: :help :reset :quit :stats :cwd <path> :show-thinking on|off :full-output on|off
 #                :history :smoke [path] :tools :overhead :diff <a> <b> :peek [N] [failed]
 #                :dry-run [on|off] :cache [clear] :tps [N]
 
 # Recent-runs summary table.
-iris --summary --summary-n 10
+hip --summary --summary-n 10
 
 # Verbose / quiet shortcuts.
-iris -v "explain recursion"   # show thinking + full tool output + stats
-iris -q "..." > out.txt       # suppress live bar / panels for piping
+hip -v "explain recursion"   # show thinking + full tool output + stats
+hip -q "..." > out.txt       # suppress live bar / panels for piping
 
 # Persistent session id keeps the prefix-cache slot warm across calls.
-iris --session my-project "find where SamplingOpts defaults are defined"
+hip --session my-project "find where SamplingOpts defaults are defined"
 ```
 
 ## Live status bar (sticky bottom)
@@ -72,7 +72,7 @@ terminal via ANSI scroll regions (DECSTBM). Streamed output flows in the
 region above; the bar stays put even when you scroll the scrollback:
 
 ```
-─[iris]─ 247 tok ─ 18 lines ─ 102.9 tok/s ─ ttft 0.6s ─ stream 2.4s ─ total 3.0s
+─[hip]─ 247 tok ─ 18 lines ─ 102.9 tok/s ─ ttft 0.6s ─ stream 2.4s ─ total 3.0s
 ```
 
 After the run finishes the scroll region is released and a final summary
@@ -120,7 +120,7 @@ The bundled `tools/smoke/run_all.sh` validates HTML/JS artifacts:
 - JS/MJS: `node --check` syntax validation
 - Append-only JSONL log at `~/.mlx-code/logs/smoke.jsonl`
 
-Invoke via `iris --smoke` or pair with `--auto-smoke` for post-run verify.
+Invoke via `hip --smoke` or pair with `--auto-smoke` for post-run verify.
 
 ## Test-suite stability
 
@@ -146,7 +146,7 @@ Measured on Apple Silicon M5 Max 128GB against local MTPLX serving Qwen3.6-27B:
 | Sustained decode rate | 35-50 tok/s |
 | Agent-loop tool calls per refactor | 7-21 (depends on file count) |
 | Prefill rate at 80K context | 565 tok/s |
-| Prompt overhead (system + 10 tool specs) | ~1.35K tokens (vs opencode's ~13K) - run `iris --inspect-prompt` for live breakdown |
+| Prompt overhead (system + 10 tool specs) | ~1.35K tokens (vs opencode's ~13K) - run `hip --inspect-prompt` for live breakdown |
 
 ## Tested project shapes
 
