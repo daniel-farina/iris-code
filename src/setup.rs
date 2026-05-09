@@ -302,22 +302,38 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
             start_mtplx_background_and_wait(&install_dir, url).await
         }
         'n' => {
+            let port = port_from_url(url).unwrap_or(8088);
             eprintln!();
             eprintln!("  Open a new terminal and run:");
             eprintln!("    {a}cd {}{r}", install_dir.display());
-            eprintln!("    {a}.venv/bin/python -m mtplx.server{r}");
+            eprintln!(
+                "    {a}.venv/bin/mtplx quickstart --port {} --model {}{r}",
+                port, DEFAULT_MODEL_HF_ID
+            );
             eprintln!();
             eprintln!("  Then re-run {a}hip{r}.");
             Ok(false)
         }
         _ => {
+            let port = port_from_url(url).unwrap_or(8088);
             eprintln!();
             eprintln!("  Skipping start. When you're ready:");
             eprintln!("    {a}cd {}{r}", install_dir.display());
-            eprintln!("    {a}.venv/bin/python -m mtplx.server{r}");
+            eprintln!(
+                "    {a}.venv/bin/mtplx quickstart --port {} --model {}{r}",
+                port, DEFAULT_MODEL_HF_ID
+            );
             Ok(false)
         }
     }
+}
+
+/// Parse the port number out of a URL like `http://127.0.0.1:8088/v1`.
+/// Returns None if the URL doesn't have an explicit port.
+fn port_from_url(url: &str) -> Option<u16> {
+    let after_scheme = url.split("://").nth(1)?;
+    let host_port = after_scheme.split('/').next()?;
+    host_port.split(':').nth(1)?.parse().ok()
 }
 
 /// Spawn MTPLX in the background, then poll the configured URL until the
@@ -355,30 +371,62 @@ async fn start_mtplx_background_and_wait(install_dir: &Path, url: &str) -> Resul
         }
     };
 
-    // Prefer the venv's python if present.
-    let venv_python = install_dir.join(".venv").join("bin").join("python");
-    let python_bin: std::path::PathBuf = if venv_python.exists() {
-        venv_python
-    } else {
-        python_cmd().into()
-    };
+    // Prefer the venv's `mtplx` console script (installed by `pip install -e .`).
+    // Fall back to running the openai server module directly via the venv
+    // python if the console script isn't on disk for some reason.
+    let venv_bin = install_dir.join(".venv").join("bin");
+    let mtplx_bin = venv_bin.join("mtplx");
+    let venv_python = venv_bin.join("python");
+
+    let port = port_from_url(url).unwrap_or(8088);
+    let port_str = port.to_string();
 
     use std::os::unix::process::CommandExt;
+    let mut cmd = if mtplx_bin.exists() {
+        let mut c = std::process::Command::new(&mtplx_bin);
+        c.args([
+            "quickstart",
+            "--port",
+            &port_str,
+            "--model",
+            DEFAULT_MODEL_HF_ID,
+            "--yes",
+        ]);
+        c
+    } else if venv_python.exists() {
+        // Last-resort path: invoke the server module directly. Note: this is
+        // `mtplx.server.openai` (the actual module with main()); plain
+        // `mtplx.server` is a package without __main__.py and won't run.
+        let mut c = std::process::Command::new(&venv_python);
+        c.args([
+            "-m",
+            "mtplx.server.openai",
+            "--port",
+            &port_str,
+            "--model",
+            DEFAULT_MODEL_HF_ID,
+        ]);
+        c
+    } else {
+        eprintln!(
+            "  {w}!{r} no venv at {}; cannot start MTPLX",
+            venv_bin.display()
+        );
+        return Ok(false);
+    };
+    cmd.current_dir(install_dir)
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(log_err))
+        .stdin(std::process::Stdio::null());
     let child = unsafe {
-        std::process::Command::new(&python_bin)
-            .args(["-m", "mtplx.server"])
-            .current_dir(install_dir)
-            .stdout(std::process::Stdio::from(log_file))
-            .stderr(std::process::Stdio::from(log_err))
-            .stdin(std::process::Stdio::null())
-            .pre_exec(|| {
-                // Become a new session leader so this child survives our exit.
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            })
-            .spawn()
+        cmd.pre_exec(|| {
+            // Become a new session leader so this child survives our exit.
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        })
+        .spawn()
     };
     let pid = match child {
         Ok(c) => {
@@ -1142,8 +1190,11 @@ fn print_manual_setup() {
         "    {a}git clone -b {} {} ~/code/MTPLX{r}",
         MTPLX_BRANCH, MTPLX_REPO_URL
     );
-    eprintln!("    {a}cd ~/code/MTPLX && pip install -e .{r}");
-    eprintln!("    {a}python -m mtplx.server{r}");
+    eprintln!("    {a}cd ~/code/MTPLX && python -m venv .venv && .venv/bin/pip install -e .{r}");
+    eprintln!(
+        "    {a}.venv/bin/mtplx quickstart --port 8088 --model {}{r}",
+        DEFAULT_MODEL_HF_ID
+    );
     eprintln!();
     eprintln!("  Then re-run {a}hip{r}.");
 }
