@@ -256,7 +256,12 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
         Ok(s) if s.success() => eprintln!("  {g}✓{r} installed"),
         Ok(s) => {
             eprintln!("  {w}!{r} pip install (in venv) exited {}", s);
-            eprintln!("    Install log: {a}{}{r}", install_log.display());
+            // Surface the actual pip error inline so the user doesn't have
+            // to `cat` the log file to see why it failed (e.g. Python
+            // version mismatch, missing system header, network error).
+            print_log_tail(&install_log, 30);
+            eprintln!();
+            eprintln!("    Full log: {a}{}{r}", install_log.display());
             eprintln!("    To retry manually:");
             eprintln!(
                 "      {a}cd {} && .venv/bin/python -m pip install -e .{r}",
@@ -487,6 +492,34 @@ async fn start_mtplx_background_and_wait(install_dir: &Path, url: &str) -> Resul
         tick += 1;
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+/// Print the last `n` lines of a captured log file inline, prefixed with
+/// a dim "│" so the user sees the real pip / hf-cli / mtplx error without
+/// having to `cat` the log themselves. Silent on read failure.
+fn print_log_tail(path: &Path, n: usize) {
+    let d = theme::dim();
+    let r = RESET;
+    let body = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    let lines: Vec<&str> = body.lines().collect();
+    if lines.is_empty() {
+        return;
+    }
+    let start = lines.len().saturating_sub(n);
+    let shown = &lines[start..];
+    eprintln!();
+    eprintln!(
+        "    {d}─── last {} line(s) of {} ───{r}",
+        shown.len(),
+        path.display()
+    );
+    for line in shown {
+        eprintln!("    {d}│{r} {}", line);
+    }
+    eprintln!("    {d}─────────────────────────────────{r}");
 }
 
 /// Read the last non-empty line of a file. Used by the wait spinner to
