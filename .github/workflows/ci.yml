@@ -58,9 +58,6 @@ jobs:
     name: clippy
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # Allowed to fail initially: project has 1 known warning
-    # (dead_code on schema.rs:111 ToolCallDelta.kind).
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,3 +72,22 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --release -- -D warnings
+
+  install-tests:
+    name: install.sh tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get install -y shellcheck
+
+      - name: Run install-test suite
+        run: bash tools/install-tests/run.sh
