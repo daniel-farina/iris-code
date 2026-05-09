@@ -132,6 +132,13 @@ async fn offer_install_mtplx() -> Result<()> {
         return Ok(());
     }
 
+    // Verify build/runtime prerequisites BEFORE we start cloning multi-MB
+    // repos. Auto-install what we safely can (pip via ensurepip); for
+    // heavier tools (git/python3) print platform-specific install commands.
+    if !ensure_prerequisites() {
+        return Ok(());
+    }
+
     let install_dir = expand(MTPLX_DEFAULT_INSTALL_DIR);
     eprintln!();
     eprintln!("  {a}install dir{r}: {}", install_dir.display());
@@ -176,9 +183,12 @@ async fn offer_install_mtplx() -> Result<()> {
     }
 
     eprintln!();
-    eprintln!("  {d}installing python dependencies (pip install -e .)...{r}");
-    let status = std::process::Command::new("pip")
-        .args(["install", "-e", "."])
+    eprintln!(
+        "  {d}installing python dependencies ({} -m pip install -e .)...{r}",
+        python_cmd()
+    );
+    let status = std::process::Command::new(python_cmd())
+        .args(["-m", "pip", "install", "-e", "."])
         .current_dir(&install_dir)
         .status();
     match status {
@@ -294,6 +304,169 @@ fn start_mtplx_background(install_dir: &Path) {
         }
         Err(e) => {
             eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
+        }
+    }
+}
+
+/// Check git, python3, and pip. Auto-install pip via `python3 -m ensurepip`
+/// when missing (low-risk built-in path). For git / python3, print
+/// platform-specific install commands and return false so the caller can
+/// abort cleanly. Returns true when all three are available (or were just
+/// successfully installed).
+fn ensure_prerequisites() -> bool {
+    let d = theme::dim();
+    let a = theme::accent();
+    let g = theme::good();
+    let w = theme::warn();
+    let r = RESET;
+
+    eprintln!();
+    eprintln!("  {d}checking prerequisites:{r}");
+
+    let mut missing: Vec<&'static str> = Vec::new();
+
+    // git
+    eprint!("    {d}git    {r}");
+    let _ = std::io::stderr().flush();
+    if which_exists("git") {
+        eprintln!("{g}OK{r}");
+    } else {
+        eprintln!("{w}MISSING{r}");
+        missing.push("git");
+    }
+
+    // python3
+    eprint!("    {d}python3{r}");
+    let _ = std::io::stderr().flush();
+    if which_exists("python3") || which_exists("python") {
+        eprintln!(" {g}OK{r}");
+    } else {
+        eprintln!(" {w}MISSING{r}");
+        missing.push("python3");
+    }
+
+    // pip - check via `python3 -m pip --version` since `pip` may not be on PATH
+    // even when it's installed as a python module
+    eprint!("    {d}pip    {r}");
+    let _ = std::io::stderr().flush();
+    let pip_ok = std::process::Command::new(python_cmd())
+        .args(["-m", "pip", "--version"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if pip_ok {
+        eprintln!("{g}OK{r}");
+    } else if which_exists("python3") || which_exists("python") {
+        // python is present but pip isn't; offer to bootstrap via ensurepip
+        eprintln!("{w}MISSING{r}");
+        eprintln!();
+        eprintln!("    {d}python is installed but pip isn't.{r}");
+        if !ask_yes_no("install pip now via `python -m ensurepip --upgrade`?", true) {
+            eprintln!();
+            eprintln!("  {w}!{r} pip is required to install MTPLX. Aborting.");
+            return false;
+        }
+        eprintln!("    {d}running ensurepip...{r}");
+        let status = std::process::Command::new(python_cmd())
+            .args(["-m", "ensurepip", "--upgrade"])
+            .status();
+        let installed = match status {
+            Ok(s) if s.success() => true,
+            Ok(s) => {
+                eprintln!("    {w}!{r} ensurepip exited {}", s);
+                false
+            }
+            Err(e) => {
+                eprintln!("    {w}!{r} ensurepip failed: {}", e);
+                false
+            }
+        };
+        if !installed {
+            // Fall back: get-pip.py from the official source
+            eprintln!();
+            eprintln!("    Try the bootstrap installer:");
+            eprintln!(
+                "      {a}curl -sSL https://bootstrap.pypa.io/get-pip.py | {} -{r}",
+                python_cmd()
+            );
+            return false;
+        }
+        eprintln!("    {g}✓{r} pip installed");
+    } else {
+        eprintln!("{w}MISSING (python missing too){r}");
+        missing.push("pip");
+    }
+
+    if !missing.is_empty() {
+        eprintln!();
+        eprintln!("  {w}!{r} cannot proceed - missing: {}", missing.join(", "));
+        eprintln!();
+        print_install_hints(&missing);
+        return false;
+    }
+
+    true
+}
+
+fn which_exists(cmd: &str) -> bool {
+    std::process::Command::new("sh")
+        .args(["-c", &format!("command -v {} >/dev/null 2>&1", cmd)])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn python_cmd() -> &'static str {
+    if which_exists("python3") {
+        "python3"
+    } else {
+        "python"
+    }
+}
+
+fn print_install_hints(missing: &[&str]) {
+    let a = theme::accent();
+    let r = RESET;
+    let os = if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "other"
+    };
+    for m in missing {
+        match (*m, os) {
+            ("git", "macos") => {
+                eprintln!("  install git:");
+                eprintln!("    {a}xcode-select --install{r}            # built-in");
+                eprintln!("    {a}brew install git{r}                  # if you have Homebrew");
+            }
+            ("git", "linux") => {
+                eprintln!("  install git:");
+                eprintln!("    {a}sudo apt-get install -y git{r}       # debian/ubuntu");
+                eprintln!("    {a}sudo dnf install -y git{r}           # fedora/rhel");
+                eprintln!("    {a}sudo pacman -S git{r}                # arch");
+            }
+            ("python3", "macos") => {
+                eprintln!("  install python3:");
+                eprintln!(
+                    "    {a}brew install python@3.12{r}          # via Homebrew (recommended)"
+                );
+                eprintln!("    {a}xcode-select --install{r}            # ships an older python3");
+            }
+            ("python3", "linux") => {
+                eprintln!("  install python3:");
+                eprintln!("    {a}sudo apt-get install -y python3 python3-pip python3-venv{r}");
+                eprintln!("    {a}sudo dnf install -y python3 python3-pip{r}");
+            }
+            ("pip", _) => {
+                eprintln!("  install pip:");
+                eprintln!("    {a}python3 -m ensurepip --upgrade{r}");
+                eprintln!("    {a}curl -sSL https://bootstrap.pypa.io/get-pip.py | python3 -{r}");
+            }
+            _ => {
+                eprintln!("  install {m}: see your system's package manager");
+            }
         }
     }
 }
