@@ -15,8 +15,13 @@ use super::Tool;
 const DEFAULT_DEPTH: usize = 2;
 const MAX_ENTRIES: usize = 500;
 const SKIP_SEGMENTS: &[&str] = &[
-    "/target/", "/node_modules/", "/dist/", "/.next/",
-    "/.cache/", "/build/", "/.git/",
+    "/target/",
+    "/node_modules/",
+    "/dist/",
+    "/.next/",
+    "/.cache/",
+    "/build/",
+    "/.git/",
 ];
 
 pub fn tool() -> Tool {
@@ -42,11 +47,22 @@ pub fn tool() -> Tool {
 }
 
 async fn run(args: Value) -> Result<String> {
-    let root = args.get("path").and_then(|v| v.as_str())
+    let root = args
+        .get("path")
+        .and_then(|v| v.as_str())
         .map(|s| PathBuf::from(shellexpand::tilde(s).into_owned()))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
-    let depth = args.get("depth").and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(DEFAULT_DEPTH).min(6).max(1);
-    let show_hidden = args.get("show_hidden").and_then(|v| v.as_bool()).unwrap_or(false);
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_DEPTH)
+        .min(6)
+        .max(1);
+    let show_hidden = args
+        .get("show_hidden")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let meta = std::fs::metadata(&root).with_context(|| format!("stat {}", root.display()))?;
     if !meta.is_dir() {
@@ -54,7 +70,10 @@ async fn run(args: Value) -> Result<String> {
     }
 
     let mut walker = WalkBuilder::new(&root);
-    walker.hidden(!show_hidden).git_ignore(true).max_depth(Some(depth + 1));
+    walker
+        .hidden(!show_hidden)
+        .git_ignore(true)
+        .max_depth(Some(depth + 1));
     let mut entries: Vec<(usize, String, &'static str, u64)> = Vec::new();
     let mut total_files = 0usize;
     let mut total_dirs = 0usize;
@@ -65,17 +84,29 @@ async fn run(args: Value) -> Result<String> {
         let Ok(e) = e else { continue };
         let path = e.path();
         if let Some(s) = path.to_str() {
-            if SKIP_SEGMENTS.iter().any(|seg| s.contains(seg)) { continue; }
+            if SKIP_SEGMENTS.iter().any(|seg| s.contains(seg)) {
+                continue;
+            }
         }
-        if path == root { continue; } // don't print the root itself in the tree body
+        if path == root {
+            continue;
+        } // don't print the root itself in the tree body
 
         // depth = path components past root.
-        let depth_here = path.components().count().saturating_sub(root.components().count());
-        if depth_here == 0 || depth_here > depth { continue; }
+        let depth_here = path
+            .components()
+            .count()
+            .saturating_sub(root.components().count());
+        if depth_here == 0 || depth_here > depth {
+            continue;
+        }
 
         let ft = e.file_type();
         let (kind, size): (&'static str, u64) = match ft {
-            Some(ft) if ft.is_dir() => { total_dirs += 1; ("dir", 0) }
+            Some(ft) if ft.is_dir() => {
+                total_dirs += 1;
+                ("dir", 0)
+            }
             Some(ft) if ft.is_symlink() => ("link", 0),
             Some(_) => {
                 let sz = e.metadata().map(|m| m.len()).unwrap_or(0);
@@ -85,7 +116,11 @@ async fn run(args: Value) -> Result<String> {
             }
             None => continue,
         };
-        let name = path.strip_prefix(&root).unwrap_or(path).to_string_lossy().to_string();
+        let name = path
+            .strip_prefix(&root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
         if entries.len() >= MAX_ENTRIES {
             truncated = true;
             break;
@@ -96,13 +131,31 @@ async fn run(args: Value) -> Result<String> {
     entries.sort_by(|a, b| a.1.cmp(&b.1));
 
     let mut out = String::new();
-    out.push_str(&format!("{} (depth={}, hidden={})\n", root.display(), depth, show_hidden));
+    out.push_str(&format!(
+        "{} (depth={}, hidden={})\n",
+        root.display(),
+        depth,
+        show_hidden
+    ));
     for (lvl, name, kind, size) in &entries {
         let indent = "  ".repeat(*lvl);
         match *kind {
-            "dir"  => out.push_str(&format!("{}{}/\n", indent, name.split('/').next_back().unwrap_or(name))),
-            "link" => out.push_str(&format!("{}{} -> link\n", indent, name.split('/').next_back().unwrap_or(name))),
-            _      => out.push_str(&format!("{}{}  ({} b)\n", indent, name.split('/').next_back().unwrap_or(name), size)),
+            "dir" => out.push_str(&format!(
+                "{}{}/\n",
+                indent,
+                name.split('/').next_back().unwrap_or(name)
+            )),
+            "link" => out.push_str(&format!(
+                "{}{} -> link\n",
+                indent,
+                name.split('/').next_back().unwrap_or(name)
+            )),
+            _ => out.push_str(&format!(
+                "{}{}  ({} b)\n",
+                indent,
+                name.split('/').next_back().unwrap_or(name),
+                size
+            )),
         }
     }
     out.push_str(&format!(
@@ -110,7 +163,11 @@ async fn run(args: Value) -> Result<String> {
         total_files,
         total_dirs,
         total_bytes,
-        if truncated { format!("; truncated at {}", MAX_ENTRIES) } else { String::new() },
+        if truncated {
+            format!("; truncated at {}", MAX_ENTRIES)
+        } else {
+            String::new()
+        },
     ));
     Ok(out)
 }
@@ -143,13 +200,21 @@ mod tests {
         let out = rt.block_on(run(args)).unwrap();
         assert!(out.contains("a.txt"), "depth=1 missing a.txt:\n{}", out);
         assert!(out.contains("sub/"), "depth=1 missing sub/:\n{}", out);
-        assert!(!out.contains("b.txt"), "depth=1 should NOT list b.txt:\n{}", out);
+        assert!(
+            !out.contains("b.txt"),
+            "depth=1 should NOT list b.txt:\n{}",
+            out
+        );
 
         // depth=2 -> b.txt visible, c.txt still hidden
         let args = json!({"path": dir.to_string_lossy(), "depth": 2});
         let out = rt.block_on(run(args)).unwrap();
         assert!(out.contains("b.txt"), "depth=2 missing b.txt:\n{}", out);
-        assert!(!out.contains("c.txt"), "depth=2 should NOT list c.txt:\n{}", out);
+        assert!(
+            !out.contains("c.txt"),
+            "depth=2 should NOT list c.txt:\n{}",
+            out
+        );
 
         // depth=3 -> c.txt visible
         let args = json!({"path": dir.to_string_lossy(), "depth": 3});

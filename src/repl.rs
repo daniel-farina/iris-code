@@ -11,10 +11,25 @@ use rustyline::{Context, Helper};
 
 /// Built-in REPL commands. Update this list when adding a new `:command`.
 const COMMANDS: &[&str] = &[
-    ":help", ":reset", ":quit", ":exit", ":q", ":stats", ":history",
-    ":cwd", ":show-thinking", ":full-output",
-    ":smoke", ":tools", ":overhead", ":diff", ":peek", ":dry-run",
-    ":cache", ":tps", ":theme",
+    ":help",
+    ":reset",
+    ":quit",
+    ":exit",
+    ":q",
+    ":stats",
+    ":history",
+    ":cwd",
+    ":show-thinking",
+    ":full-output",
+    ":smoke",
+    ":tools",
+    ":overhead",
+    ":diff",
+    ":peek",
+    ":dry-run",
+    ":cache",
+    ":tps",
+    ":theme",
 ];
 
 pub struct MlxHelper {
@@ -23,7 +38,9 @@ pub struct MlxHelper {
 
 impl MlxHelper {
     pub fn new() -> Self {
-        Self { files: FilenameCompleter::new() }
+        Self {
+            files: FilenameCompleter::new(),
+        }
     }
 }
 
@@ -55,9 +72,13 @@ impl Completer for MlxHelper {
         let prefix = &line[..pos];
         let on_first_token = !prefix.contains(' ');
         if on_first_token && prefix.starts_with(':') {
-            let matches: Vec<Pair> = COMMANDS.iter()
+            let matches: Vec<Pair> = COMMANDS
+                .iter()
                 .filter(|c| c.starts_with(prefix))
-                .map(|c| Pair { display: c.to_string(), replacement: c.to_string() })
+                .map(|c| Pair {
+                    display: c.to_string(),
+                    replacement: c.to_string(),
+                })
                 .collect();
             return Ok((0, matches));
         }

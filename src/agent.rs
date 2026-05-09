@@ -30,7 +30,11 @@ pub struct LoopStats {
     pub total_completion_tokens: u32,
 }
 
-pub async fn run_loop(client: &MtplxClient, conv: &mut Vec<ChatMessage>, max_rounds: u32) -> Result<LoopStats> {
+pub async fn run_loop(
+    client: &MtplxClient,
+    conv: &mut Vec<ChatMessage>,
+    max_rounds: u32,
+) -> Result<LoopStats> {
     let tools = tools::registry();
     let specs = tools::tool_specs(&tools);
     let opts = SamplingOpts::default();
@@ -42,12 +46,16 @@ pub async fn run_loop(client: &MtplxClient, conv: &mut Vec<ChatMessage>, max_rou
         stats.rounds = round + 1;
         let res = client.stream(conv, Some(&specs), opts, &mut out).await?;
 
-        if stats.first_ttft.is_none() { stats.first_ttft = res.ttft; }
+        if stats.first_ttft.is_none() {
+            stats.first_ttft = res.ttft;
+        }
         if let Some(usage) = &res.usage {
             if stats.first_prompt_tokens.is_none() {
                 stats.first_prompt_tokens = usage.prompt_tokens;
             }
-            if let Some(c) = usage.completion_tokens { stats.total_completion_tokens += c; }
+            if let Some(c) = usage.completion_tokens {
+                stats.total_completion_tokens += c;
+            }
         }
 
         if !res.content.is_empty() {
@@ -64,8 +72,15 @@ pub async fn run_loop(client: &MtplxClient, conv: &mut Vec<ChatMessage>, max_rou
         }
 
         // Append assistant message carrying the tool_calls and then run each one.
-        let assistant_text = if res.content.trim().is_empty() { None } else { Some(res.content.clone()) };
-        conv.push(ChatMessage::assistant_tool_calls(assistant_text, res.tool_calls.clone()));
+        let assistant_text = if res.content.trim().is_empty() {
+            None
+        } else {
+            Some(res.content.clone())
+        };
+        conv.push(ChatMessage::assistant_tool_calls(
+            assistant_text,
+            res.tool_calls.clone(),
+        ));
 
         for call in &res.tool_calls {
             stats.total_tool_calls += 1;
@@ -89,8 +104,14 @@ async fn run_tool(tools: &[Tool], name: &str, raw_args: &str) -> (String, bool) 
         Ok(v) => v,
         Err(_) => {
             // Some servers send empty or whitespace arguments for no-arg calls.
-            if raw_args.trim().is_empty() { Value::Object(Default::default()) }
-            else { return (format!("error: tool arguments are not valid JSON: {}", raw_args), false); }
+            if raw_args.trim().is_empty() {
+                Value::Object(Default::default())
+            } else {
+                return (
+                    format!("error: tool arguments are not valid JSON: {}", raw_args),
+                    false,
+                );
+            }
         }
     };
     let Some(tool) = tools::lookup(tools, name) else {

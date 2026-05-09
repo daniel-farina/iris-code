@@ -52,11 +52,15 @@ impl RunLog {
 
     pub fn write(&self) {
         // Best effort: don't fail the run if logging fails.
-        let Ok(home) = std::env::var("HOME") else { return };
+        let Ok(home) = std::env::var("HOME") else {
+            return;
+        };
         let dir = format!("{}/.mlx-code/logs", home);
         let _ = std::fs::create_dir_all(&dir);
         let path = format!("{}/runs.jsonl", dir);
-        let Ok(mut line) = serde_json::to_string(self) else { return };
+        let Ok(mut line) = serde_json::to_string(self) else {
+            return;
+        };
         line.push('\n');
         let _ = std::fs::OpenOptions::new()
             .create(true)

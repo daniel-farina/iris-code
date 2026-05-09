@@ -38,15 +38,33 @@ pub fn tool() -> Tool {
 }
 
 async fn run(args: Value) -> Result<String> {
-    let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("edit: missing path"))?.to_string();
-    let old = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
-    let new = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
-    let replace_all = args.get("replace_all").and_then(|v| v.as_bool()).unwrap_or(false);
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("edit: missing path"))?
+        .to_string();
+    let old = args
+        .get("old_string")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let new = args
+        .get("new_string")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let replace_all = args
+        .get("replace_all")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     // Either the per-call dry_run param OR the agent-loop-wide MLX_CODE_DRY_RUN env var
     // sets dry-run mode. The env-var path lets `--dry-run` at the CLI level cascade
     // through every edit call without the model having to know about it.
-    let dry_run = args.get("dry_run").and_then(|v| v.as_bool()).unwrap_or(false)
-        || std::env::var("MLX_CODE_DRY_RUN").map(|v| v == "1").unwrap_or(false);
+    let dry_run = args
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || std::env::var("MLX_CODE_DRY_RUN")
+            .map(|v| v == "1")
+            .unwrap_or(false);
 
     let p = PathBuf::from(shellexpand::tilde(&path).into_owned());
 
@@ -65,7 +83,8 @@ async fn run(args: Value) -> Result<String> {
         }
         if let Some(parent) = p.parent() {
             if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
+                std::fs::create_dir_all(parent)
+                    .with_context(|| format!("mkdir -p {}", parent.display()))?;
             }
         }
         std::fs::write(&p, new).with_context(|| format!("write {}", p.display()))?;
@@ -77,7 +96,11 @@ async fn run(args: Value) -> Result<String> {
     if !original.contains(old) {
         // Helpful diagnostics: hint at near-misses (whitespace? line endings? case?)
         let hint = diagnose_missing(&original, old);
-        return Err(anyhow!("edit: old_string not found in {}{}", p.display(), hint));
+        return Err(anyhow!(
+            "edit: old_string not found in {}{}",
+            p.display(),
+            hint
+        ));
     }
     let count = original.matches(old).count();
     if count > 1 && !replace_all {
@@ -98,13 +121,21 @@ async fn run(args: Value) -> Result<String> {
     let lines_added = new.bytes().filter(|&b| b == b'\n').count() as i64;
     let lines_removed = old.bytes().filter(|&b| b == b'\n').count() as i64;
     let net = lines_added - lines_removed;
-    let net_disp = if net > 0 { format!("+{}", net) } else { net.to_string() };
+    let net_disp = if net > 0 {
+        format!("+{}", net)
+    } else {
+        net.to_string()
+    };
     let n_replacements = if replace_all { count } else { 1 };
     let plural = if replace_all && count != 1 { "s" } else { "" };
 
     if dry_run {
         // Record post-replacement byte count - this is what would land on disk.
-        crate::dry_run_log::record_with_bytes("replace", p.display().to_string(), updated.len() as u64);
+        crate::dry_run_log::record_with_bytes(
+            "replace",
+            p.display().to_string(),
+            updated.len() as u64,
+        );
         let preview = preview_diff(&original, &updated);
         return Ok(format!(
             "(dry_run) would edit {} ({} replacement{}, net {} line(s)){}",
@@ -144,19 +175,27 @@ fn preview_diff(before: &str, after: &str) -> String {
         suffix += 1;
     }
     let removed = &b[prefix..b.len() - suffix];
-    let added   = &a[prefix..a.len() - suffix];
+    let added = &a[prefix..a.len() - suffix];
     if removed.is_empty() && added.is_empty() {
         return String::from("\n  (no line-level changes)\n");
     }
     let mut out = String::from("\n");
     let cap_each = 4usize;
-    out.push_str(&format!("  @L{} (-{} +{})\n", prefix + 1, removed.len(), added.len()));
+    out.push_str(&format!(
+        "  @L{} (-{} +{})\n",
+        prefix + 1,
+        removed.len(),
+        added.len()
+    ));
     for (i, line) in removed.iter().take(cap_each).enumerate() {
         let trimmed: String = line.chars().take(110).collect();
         out.push_str(&format!("  - {:>4}  {}\n", prefix + 1 + i, trimmed));
     }
     if removed.len() > cap_each {
-        out.push_str(&format!("    ... +{} more removed\n", removed.len() - cap_each));
+        out.push_str(&format!(
+            "    ... +{} more removed\n",
+            removed.len() - cap_each
+        ));
     }
     for (i, line) in added.iter().take(cap_each).enumerate() {
         let trimmed: String = line.chars().take(110).collect();
@@ -172,7 +211,9 @@ fn preview_diff(before: &str, after: &str) -> String {
 /// causes (CRLF, trailing whitespace, case difference) so the model knows
 /// what to fix without a follow-up read round-trip.
 fn diagnose_missing(haystack: &str, needle: &str) -> String {
-    if needle.is_empty() { return String::new(); }
+    if needle.is_empty() {
+        return String::new();
+    }
     // Try CRLF normalised - only fire when at least one side actually has
     // CRLF, otherwise this hint mis-fires for whitespace-only differences.
     if haystack.contains("\r\n") || needle.contains("\r\n") {
@@ -211,7 +252,10 @@ fn diagnose_missing(haystack: &str, needle: &str) -> String {
             let needle_grams = trigram_count(needle);
             if needle_grams > 0 && score * 100 / needle_grams >= 40 {
                 let preview: String = best_text.chars().take(60).collect();
-                return format!(" (hint: closest line in file is L{}: '{}'; check for whitespace/typo)", best_line_no, preview);
+                return format!(
+                    " (hint: closest line in file is L{}: '{}'; check for whitespace/typo)",
+                    best_line_no, preview
+                );
             }
         }
     } else if needle_line_count >= 2 && needle.len() <= 4000 {
@@ -219,7 +263,13 @@ fn diagnose_missing(haystack: &str, needle: &str) -> String {
             let needle_grams = trigram_count(needle);
             if needle_grams > 0 && score * 100 / needle_grams >= 40 {
                 // Show the first line of the matched block as a preview anchor.
-                let preview_line = haystack.lines().nth(start_line - 1).unwrap_or("").chars().take(60).collect::<String>();
+                let preview_line = haystack
+                    .lines()
+                    .nth(start_line - 1)
+                    .unwrap_or("")
+                    .chars()
+                    .take(60)
+                    .collect::<String>();
                 return format!(" (hint: closest {}-line block is L{}-L{} starting '{}'; re-read that range and retry)",
                     needle_line_count, start_line, end_line, preview_line);
             }
@@ -230,7 +280,9 @@ fn diagnose_missing(haystack: &str, needle: &str) -> String {
 
 /// Count distinct 3-character shingles in s.
 fn trigram_count(s: &str) -> usize {
-    if s.chars().count() < 3 { return 0; }
+    if s.chars().count() < 3 {
+        return 0;
+    }
     let chars: Vec<char> = s.chars().collect();
     let mut set = std::collections::HashSet::new();
     for w in chars.windows(3) {
@@ -245,7 +297,9 @@ fn trigram_count(s: &str) -> usize {
 /// Window indices are 1-based and INCLUSIVE on both sides.
 fn closest_block_by_trigram(haystack: &str, needle: &str) -> Option<(usize, usize, usize)> {
     let needle_chars: Vec<char> = needle.chars().collect();
-    if needle_chars.len() < 3 { return None; }
+    if needle_chars.len() < 3 {
+        return None;
+    }
     let mut needle_grams: std::collections::HashSet<(char, char, char)> =
         std::collections::HashSet::new();
     for w in needle_chars.windows(3) {
@@ -253,18 +307,24 @@ fn closest_block_by_trigram(haystack: &str, needle: &str) -> Option<(usize, usiz
     }
     let lines: Vec<&str> = haystack.lines().collect();
     let k = needle.lines().count();
-    if lines.len() < k { return None; }
+    if lines.len() < k {
+        return None;
+    }
 
     let mut best: Option<(usize, usize, usize)> = None;
     for start in 0..=lines.len().saturating_sub(k) {
         // Concatenate window with newline separator; cheap clone for short windows.
         let mut buf = String::with_capacity(needle.len() + 16);
         for (i, l) in lines[start..start + k].iter().enumerate() {
-            if i > 0 { buf.push('\n'); }
+            if i > 0 {
+                buf.push('\n');
+            }
             buf.push_str(l);
         }
         let buf_chars: Vec<char> = buf.chars().collect();
-        if buf_chars.len() < 3 { continue; }
+        if buf_chars.len() < 3 {
+            continue;
+        }
         let mut overlap = 0usize;
         let mut seen: std::collections::HashSet<(char, char, char)> =
             std::collections::HashSet::new();
@@ -284,7 +344,9 @@ fn closest_block_by_trigram(haystack: &str, needle: &str) -> Option<(usize, usiz
 /// For each line in `haystack`, count overlap of trigrams against `needle`.
 /// Returns (line_number, line_text, overlap_count) of the best match.
 fn closest_line_by_trigram(haystack: &str, needle: &str) -> Option<(usize, String, usize)> {
-    if needle.chars().count() < 3 { return None; }
+    if needle.chars().count() < 3 {
+        return None;
+    }
     let needle_chars: Vec<char> = needle.chars().collect();
     let mut needle_grams: std::collections::HashSet<(char, char, char)> =
         std::collections::HashSet::new();
@@ -293,7 +355,9 @@ fn closest_line_by_trigram(haystack: &str, needle: &str) -> Option<(usize, Strin
     }
     let mut best: Option<(usize, String, usize)> = None;
     for (i, line) in haystack.lines().enumerate() {
-        if line.chars().count() < 3 { continue; }
+        if line.chars().count() < 3 {
+            continue;
+        }
         let line_chars: Vec<char> = line.chars().collect();
         let mut overlap = 0usize;
         let mut seen: std::collections::HashSet<(char, char, char)> =
@@ -319,7 +383,9 @@ fn locate_match_lines(text: &str, needle: &str, cap: usize) -> Vec<usize> {
         // Translate byte position to 1-indexed line number.
         let line = text[..abs].bytes().filter(|&b| b == b'\n').count() + 1;
         out.push(line);
-        if out.len() >= cap { break; }
+        if out.len() >= cap {
+            break;
+        }
         byte_pos = abs + needle.len();
     }
     out
@@ -343,7 +409,11 @@ mod tests {
         let n = "let x = 1;";
         let hint = diagnose_missing(h, n);
         // Should fire whitespace-trim hint.
-        assert!(hint.contains("whitespace"), "expected whitespace hint, got: {}", hint);
+        assert!(
+            hint.contains("whitespace"),
+            "expected whitespace hint, got: {}",
+            hint
+        );
     }
 
     #[test]
@@ -362,8 +432,16 @@ mod tests {
         let h = "fn main() {\n    let count = 0;\n    println!(\"hi\");\n}\n";
         let n = "let counter = 0;";
         let hint = diagnose_missing(h, n);
-        assert!(hint.contains("closest line in file is L"), "expected fuzzy hint, got: {}", hint);
-        assert!(hint.contains("let count = 0"), "should reference the actual line, got: {}", hint);
+        assert!(
+            hint.contains("closest line in file is L"),
+            "expected fuzzy hint, got: {}",
+            hint
+        );
+        assert!(
+            hint.contains("let count = 0"),
+            "should reference the actual line, got: {}",
+            hint
+        );
     }
 
     #[test]
@@ -372,7 +450,11 @@ mod tests {
         let n = "fn very_specific_function() { return 42; }";
         let hint = diagnose_missing(h, n);
         // Should NOT incorrectly suggest a random line.
-        assert!(hint.is_empty(), "expected empty hint for unrelated needle, got: {}", hint);
+        assert!(
+            hint.is_empty(),
+            "expected empty hint for unrelated needle, got: {}",
+            hint
+        );
     }
 
     #[test]
@@ -382,8 +464,16 @@ mod tests {
         let h = "fn main() {\n    let count = 0;\n    println!(\"hi\");\n    count + 1\n}\n";
         let n = "    let counter = 0;\n    println!(\"hi\");\n    counter + 1";
         let hint = diagnose_missing(h, n);
-        assert!(hint.contains("closest 3-line block"), "expected multi-line hint, got: {}", hint);
-        assert!(hint.contains("L2-L4"), "expected L2-L4 range, got: {}", hint);
+        assert!(
+            hint.contains("closest 3-line block"),
+            "expected multi-line hint, got: {}",
+            hint
+        );
+        assert!(
+            hint.contains("L2-L4"),
+            "expected L2-L4 range, got: {}",
+            hint
+        );
     }
 
     #[test]
@@ -392,7 +482,11 @@ mod tests {
         let n = "fn very_specific(a, b) {\n    return a + b;\n}";
         let hint = diagnose_missing(h, n);
         // Should NOT incorrectly suggest a random 3-line window.
-        assert!(hint.is_empty(), "expected empty hint for unrelated multi-line needle, got: {}", hint);
+        assert!(
+            hint.is_empty(),
+            "expected empty hint for unrelated multi-line needle, got: {}",
+            hint
+        );
     }
 
     #[test]
@@ -431,11 +525,20 @@ mod tests {
             "path": p.to_string_lossy(),
             "old_string": "before",
             "new_string": "after"
-        })).unwrap();
+        }))
+        .unwrap();
         std::env::remove_var("MLX_CODE_DRY_RUN");
 
-        assert!(out.starts_with("(dry_run)"), "expected dry_run prefix from env var:\n{}", out);
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), "before\n", "file was modified");
+        assert!(
+            out.starts_with("(dry_run)"),
+            "expected dry_run prefix from env var:\n{}",
+            out
+        );
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "before\n",
+            "file was modified"
+        );
         let _ = std::fs::remove_file(&p);
     }
 
@@ -453,11 +556,20 @@ mod tests {
             "old_string": "println!(\"hi\");",
             "new_string": "println!(\"hello\");",
             "dry_run": true
-        })).unwrap();
+        }))
+        .unwrap();
 
         // Output should announce dry_run, count, and show diff preview lines.
-        assert!(out.starts_with("(dry_run)"), "expected dry_run prefix:\n{}", out);
-        assert!(out.contains("would edit"), "expected 'would edit' phrase:\n{}", out);
+        assert!(
+            out.starts_with("(dry_run)"),
+            "expected dry_run prefix:\n{}",
+            out
+        );
+        assert!(
+            out.contains("would edit"),
+            "expected 'would edit' phrase:\n{}",
+            out
+        );
         assert!(out.contains("@L"), "expected diff anchor line:\n{}", out);
         assert!(out.contains("- "), "expected removed-line marker:\n{}", out);
         assert!(out.contains("+ "), "expected added-line marker:\n{}", out);
@@ -481,7 +593,10 @@ mod tests {
             "new_string": "let x = 0;",
             "dry_run": true
         }));
-        assert!(res.is_err(), "dry_run should still surface missing-old_string errors");
+        assert!(
+            res.is_err(),
+            "dry_run should still surface missing-old_string errors"
+        );
         let _ = std::fs::remove_file(&p);
     }
 
@@ -496,8 +611,13 @@ mod tests {
             "old_string": "",
             "new_string": "hello\n",
             "dry_run": true
-        })).unwrap();
-        assert!(out.contains("would create"), "expected 'would create':\n{}", out);
+        }))
+        .unwrap();
+        assert!(
+            out.contains("would create"),
+            "expected 'would create':\n{}",
+            out
+        );
         // File must NOT have been created.
         assert!(!p.exists(), "dry_run should not create the file");
 
@@ -509,8 +629,13 @@ mod tests {
             "old_string": "",
             "new_string": "new\n",
             "dry_run": true
-        })).unwrap();
-        assert!(out.contains("would overwrite"), "expected 'would overwrite':\n{}", out);
+        }))
+        .unwrap();
+        assert!(
+            out.contains("would overwrite"),
+            "expected 'would overwrite':\n{}",
+            out
+        );
         // File still has old content.
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "old\n");
 

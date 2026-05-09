@@ -4,20 +4,20 @@
 //! Phase 2: tool-using agent loop (read/grep/edit/bash/list/glob).
 //! Phase 3: ripgrep-backed search tool.
 
-mod schema;
-mod client;
 mod agent;
-mod pretty;
-mod runlog;
-mod tools;
+mod client;
 mod dry_run_log;
+mod logo;
+mod pretty;
 mod read_cache;
+mod repl;
+mod runlog;
+mod schema;
+mod setup;
 mod sparkline;
 mod sticky_bar;
 mod theme;
-mod repl;
-mod logo;
-mod setup;
+mod tools;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -29,7 +29,11 @@ use crate::client::{MtplxClient, SamplingOpts};
 use crate::schema::ChatMessage;
 
 #[derive(Parser, Debug)]
-#[command(name = "iris-code", version, about = "iris-code · lean coding agent for the local MTPLX model")]
+#[command(
+    name = "iris-code",
+    version,
+    about = "iris-code · lean coding agent for the local MTPLX model"
+)]
 struct Cli {
     /// User prompt. Positional, joined with spaces.
     #[arg(trailing_var_arg = true)]
@@ -75,7 +79,11 @@ struct Cli {
     url: String,
 
     /// Model id.
-    #[arg(long, env = "MLX_CODE_MODEL", default_value = "mtplx-qwen36-27b-optimized-speed")]
+    #[arg(
+        long,
+        env = "MLX_CODE_MODEL",
+        default_value = "mtplx-qwen36-27b-optimized-speed"
+    )]
     model: String,
 
     /// Print timing/usage info on stderr after generation.
@@ -246,7 +254,8 @@ async fn main() -> Result<()> {
     // --setup OR first run: probe MTPLX and walk the user through any
     // missing pieces. The wizard returns false if it printed setup hints
     // and the user should restart; in that case we exit cleanly.
-    if cli.setup || (setup::is_first_run() && std::io::IsTerminal::is_terminal(&std::io::stderr())) {
+    if cli.setup || (setup::is_first_run() && std::io::IsTerminal::is_terminal(&std::io::stderr()))
+    {
         let proceed = setup::run_wizard(&cli.url).await?;
         if cli.setup || !proceed {
             return Ok(());
@@ -272,7 +281,9 @@ async fn main() -> Result<()> {
                 cli.session = sid;
             }
             None => {
-                eprintln!("[iris-code] --continue: no prior runs found in ~/.mlx-code/logs/runs.jsonl");
+                eprintln!(
+                    "[iris-code] --continue: no prior runs found in ~/.mlx-code/logs/runs.jsonl"
+                );
             }
         }
     }
@@ -282,7 +293,11 @@ async fn main() -> Result<()> {
         match std::fs::read_to_string(expand(p)?) {
             Ok(s) => cli.system = Some(s.trim().to_string()),
             Err(e) => {
-                eprintln!("[iris-code] failed to read --system-file {}: {}", p.display(), e);
+                eprintln!(
+                    "[iris-code] failed to read --system-file {}: {}",
+                    p.display(),
+                    e
+                );
                 std::process::exit(2);
             }
         }
@@ -313,8 +328,18 @@ async fn main() -> Result<()> {
     let client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
 
     // Interactive chat: explicit --chat flag, or no prompt and stdin is a TTY.
-    if cli.chat || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin())) {
-        return run_chat(&cli, &client, if prompt.trim().is_empty() { None } else { Some(prompt) }).await;
+    if cli.chat || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin()))
+    {
+        return run_chat(
+            &cli,
+            &client,
+            if prompt.trim().is_empty() {
+                None
+            } else {
+                Some(prompt)
+            },
+        )
+        .await;
     }
 
     if prompt.trim().is_empty() {
@@ -339,12 +364,19 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
     use rustyline::history::DefaultHistory;
     use rustyline::{Cmd, Editor, Event, KeyEvent, Modifiers, Result as RLResult};
 
-    let system = cli.system.clone().unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
+    let system = cli
+        .system
+        .clone()
+        .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
     let mut conv: Vec<ChatMessage> = vec![ChatMessage::system(system)];
 
     print_chat_banner(client, cli);
     if cli.one_shot {
-        eprintln!("{}─ one-shot mode • tools disabled • each turn independent{}", theme::dim(), theme::RESET);
+        eprintln!(
+            "{}─ one-shot mode • tools disabled • each turn independent{}",
+            theme::dim(),
+            theme::RESET
+        );
     }
 
     // Settings that the user can toggle at runtime via :commands.
@@ -357,7 +389,10 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
     let mut rl: Editor<repl::MlxHelper, DefaultHistory> = match Editor::new() {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[iris-code] rustyline init failed: {} - falling back to raw stdin", e);
+            eprintln!(
+                "[iris-code] rustyline init failed: {} - falling back to raw stdin",
+                e
+            );
             return run_chat_fallback(cli, client, first, conv, show_thinking, full_output).await;
         }
     };
@@ -369,7 +404,9 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
     );
     let history_path = expand(&PathBuf::from("~/.mlx-code/history.txt")).ok();
     if let Some(h) = &history_path {
-        if let Some(parent) = h.parent() { let _ = std::fs::create_dir_all(parent); }
+        if let Some(parent) = h.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let _ = rl.load_history(h);
     }
 
@@ -390,8 +427,11 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     l_trim
                 }
                 Err(ReadlineError::Interrupted) => continue, // Ctrl-C: drop line, keep going
-                Err(ReadlineError::Eof) => { // Ctrl-D: exit
-                    if let Some(h) = &history_path { let _ = rl.save_history(h); }
+                Err(ReadlineError::Eof) => {
+                    // Ctrl-D: exit
+                    if let Some(h) = &history_path {
+                        let _ = rl.save_history(h);
+                    }
                     eprintln!("\n[iris-code] bye");
                     return Ok(());
                 }
@@ -410,7 +450,9 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
         // meta-commands
         match trimmed {
             ":quit" | ":exit" | ":q" => {
-                if let Some(h) = &history_path { let _ = rl.save_history(h); }
+                if let Some(h) = &history_path {
+                    let _ = rl.save_history(h);
+                }
                 eprintln!("[iris-code] bye");
                 return Ok(());
             }
@@ -419,7 +461,9 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     ChatMessage::system(agent::DEFAULT_SYSTEM_PROMPT.to_string())
                 });
                 conv = vec![sys];
-                eprintln!("[iris-code] conversation cleared (session_id unchanged so cache stays warm)");
+                eprintln!(
+                    "[iris-code] conversation cleared (session_id unchanged so cache stays warm)"
+                );
                 continue;
             }
             ":stats" => {
@@ -433,7 +477,13 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 continue;
             }
             ":history" => {
-                eprintln!("[iris-code] history file: {}", history_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "(unset)".into()));
+                eprintln!(
+                    "[iris-code] history file: {}",
+                    history_path
+                        .as_ref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "(unset)".into())
+                );
                 continue;
             }
             cmd if cmd.starts_with(":cwd ") => {
@@ -441,7 +491,10 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 if let Err(e) = std::env::set_current_dir(path) {
                     eprintln!("[iris-code] cd failed: {}", e);
                 } else {
-                    eprintln!("[iris-code] cwd={}", std::env::current_dir().unwrap_or_default().display());
+                    eprintln!(
+                        "[iris-code] cwd={}",
+                        std::env::current_dir().unwrap_or_default().display()
+                    );
                 }
                 continue;
             }
@@ -470,7 +523,8 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 let registry = tools::registry();
                 eprintln!("─ tools ({}) ─", registry.len());
                 for t in &registry {
-                    let desc = t.schema
+                    let desc = t
+                        .schema
                         .get("function")
                         .and_then(|f| f.get("description"))
                         .and_then(|d| d.as_str())
@@ -480,20 +534,32 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 continue;
             }
             ":overhead" => {
-                let system = cli.system.clone().unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
+                let system = cli
+                    .system
+                    .clone()
+                    .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
                 let registry = tools::registry();
                 let specs = tools::tool_specs(&registry);
                 let tools_json = serde_json::to_string(&specs).unwrap_or_default();
                 let total_chars = system.chars().count() + tools_json.chars().count();
                 let approx = (total_chars as f64 / 4.0).round() as usize;
-                eprintln!("─ overhead ─ system+tools = {} chars / ~{} tokens / {} tools",
-                    total_chars, approx, registry.len());
+                eprintln!(
+                    "─ overhead ─ system+tools = {} chars / ~{} tokens / {} tools",
+                    total_chars,
+                    approx,
+                    registry.len()
+                );
                 let cs = read_cache::stats();
                 let lookups = cs.hits + cs.misses;
                 if lookups > 0 {
                     let rate = 100.0 * cs.hits as f64 / lookups as f64;
-                    eprintln!("─ read cache ─ {} entries / hits={}/{} ({:.0}% hit-rate)",
-                        read_cache::len(), cs.hits, lookups, rate);
+                    eprintln!(
+                        "─ read cache ─ {} entries / hits={}/{} ({:.0}% hit-rate)",
+                        read_cache::len(),
+                        cs.hits,
+                        lookups,
+                        rate
+                    );
                 }
                 continue;
             }
@@ -513,11 +579,17 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 continue;
             }
             cmd if cmd == ":tps" || cmd.starts_with(":tps ") => {
-                let n: usize = cmd.trim_start_matches(":tps").trim()
-                    .parse().unwrap_or(20).min(50).max(1);
+                let n: usize = cmd
+                    .trim_start_matches(":tps")
+                    .trim()
+                    .parse()
+                    .unwrap_or(20)
+                    .min(50)
+                    .max(1);
                 let path = shellexpand::tilde("~/.mlx-code/logs/runs.jsonl").into_owned();
                 let body = std::fs::read_to_string(&path).unwrap_or_default();
-                let rates: Vec<f64> = body.lines()
+                let rates: Vec<f64> = body
+                    .lines()
                     .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
                     .filter_map(|r| r.get("decode_tok_per_s").and_then(|v| v.as_f64()))
                     .filter(|v| *v > 0.0 && *v < 200.0)
@@ -529,17 +601,31 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     let lo = tail.iter().cloned().fold(f64::INFINITY, f64::min);
                     let hi = tail.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
                     let line = sparkline::render(&tail);
-                    eprintln!("─ tps last {} ─ {}  range={:.0}-{:.0} t/s", tail.len(), line, lo, hi);
+                    eprintln!(
+                        "─ tps last {} ─ {}  range={:.0}-{:.0} t/s",
+                        tail.len(),
+                        line,
+                        lo,
+                        hi
+                    );
                 }
                 continue;
             }
             cmd if cmd.starts_with(":theme") => {
                 let arg = cmd.trim_start_matches(":theme").trim();
                 if arg.is_empty() {
-                    eprintln!("─ theme = {} (use: :theme dark|light|mono)", theme::current().name());
+                    eprintln!(
+                        "─ theme = {} (use: :theme dark|light|mono)",
+                        theme::current().name()
+                    );
                 } else if let Some(t) = theme::Theme::parse(arg) {
                     theme::set_runtime(t);
-                    eprintln!("{}─ theme set to {}{}", theme::dim(), t.name(), theme::RESET);
+                    eprintln!(
+                        "{}─ theme set to {}{}",
+                        theme::dim(),
+                        t.name(),
+                        theme::RESET
+                    );
                 } else {
                     eprintln!("[iris-code] unknown theme: {} (try dark/light/mono)", arg);
                 }
@@ -568,9 +654,11 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
             }
             cmd if cmd.starts_with(":dry-run") => {
                 let arg = cmd.trim_start_matches(":dry-run").trim();
-                let now_active = std::env::var("MLX_CODE_DRY_RUN").map(|v| v == "1").unwrap_or(false);
+                let now_active = std::env::var("MLX_CODE_DRY_RUN")
+                    .map(|v| v == "1")
+                    .unwrap_or(false);
                 let next_active = match arg {
-                    "" => !now_active,           // bare `:dry-run` toggles
+                    "" => !now_active, // bare `:dry-run` toggles
                     "on" | "1" | "true" => true,
                     "off" | "0" | "false" => false,
                     _ => {
@@ -636,7 +724,11 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
         conv.push(ChatMessage::user(trimmed));
 
         let mut log = runlog::RunLog::new(
-            if cli.one_shot { "chat-one-shot" } else { "chat-agent" },
+            if cli.one_shot {
+                "chat-one-shot"
+            } else {
+                "chat-agent"
+            },
             client.session_id(),
             client.model(),
             trimmed,
@@ -657,7 +749,9 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     if let Some(c) = log.completion_tokens {
                         log.decode_tok_per_s = Some(c as f64 / res.total.as_secs_f64().max(0.001));
                     }
-                    if cli.stats { print_stats(&res, "chat-one-shot"); }
+                    if cli.stats {
+                        print_stats(&res, "chat-one-shot");
+                    }
                 }
                 Err(e) => {
                     log.success = false;
@@ -674,7 +768,9 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     log.completion_tokens = Some(stats.total_completion_tokens);
                     log.ttft_ms = stats.first_ttft.map(|d| d.as_millis());
                     log.total_ms = Some(stats.total.as_millis());
-                    log.decode_tok_per_s = Some(stats.total_completion_tokens as f64 / stats.total.as_secs_f64().max(0.001));
+                    log.decode_tok_per_s = Some(
+                        stats.total_completion_tokens as f64 / stats.total.as_secs_f64().max(0.001),
+                    );
                     if cli.stats {
                         eprintln!(
                             "[iris-code] rounds={} ttft={:?} total={:?} tool_calls={} completion_tok={}",
@@ -690,8 +786,12 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 }
             }
         }
-        if cli.log_runs { log.write(); }
-        if let Some(h) = &history_path { let _ = rl.save_history(h); }
+        if cli.log_runs {
+            log.write();
+        }
+        if let Some(h) = &history_path {
+            let _ = rl.save_history(h);
+        }
     }
 }
 
@@ -722,17 +822,26 @@ async fn run_chat_fallback(
     use std::io::{BufRead, Write};
     let mut pending = first;
     loop {
-        let user_msg = if let Some(p) = pending.take() { p } else {
-            eprint!("\n> "); let _ = std::io::stderr().flush();
+        let user_msg = if let Some(p) = pending.take() {
+            p
+        } else {
+            eprint!("\n> ");
+            let _ = std::io::stderr().flush();
             let mut line = String::new();
             let n = std::io::stdin().lock().read_line(&mut line).unwrap_or(0);
-            if n == 0 { eprintln!("\n[iris-code] bye"); return Ok(()); }
-            line.trim_end_matches(['\n','\r']).to_string()
+            if n == 0 {
+                eprintln!("\n[iris-code] bye");
+                return Ok(());
+            }
+            line.trim_end_matches(['\n', '\r']).to_string()
         };
         let trimmed = user_msg.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         if trimmed == ":quit" || trimmed == ":exit" || trimmed == ":q" {
-            eprintln!("[iris-code] bye"); return Ok(());
+            eprintln!("[iris-code] bye");
+            return Ok(());
         }
         conv.push(ChatMessage::user(trimmed));
         if cli.one_shot {
@@ -764,7 +873,9 @@ async fn run_one_shot(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<(
         Err(e) => {
             log.success = false;
             log.error = Some(format!("{}", e));
-            if cli.log_runs { log.write(); }
+            if cli.log_runs {
+                log.write();
+            }
             return Err(e);
         }
     };
@@ -800,7 +911,9 @@ async fn run_one_shot(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<(
     if cli.stats {
         print_stats(&res, "one-shot");
     }
-    if cli.log_runs { log.write(); }
+    if cli.log_runs {
+        log.write();
+    }
     if cli.auto_smoke {
         let _ = run_smoke_inplace(".");
     }
@@ -812,7 +925,10 @@ async fn run_one_shot(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<(
 }
 
 async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> {
-    let system = cli.system.clone().unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
+    let system = cli
+        .system
+        .clone()
+        .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
     let mut conv = vec![ChatMessage::system(system), ChatMessage::user(prompt)];
     let mut log = runlog::RunLog::new("agent", client.session_id(), client.model(), prompt);
     let pre_snap = if cli.diff { Some(snap_cwd()) } else { None };
@@ -821,7 +937,9 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
         Err(e) => {
             log.success = false;
             log.error = Some(format!("{}", e));
-            if cli.log_runs { log.write(); }
+            if cli.log_runs {
+                log.write();
+            }
             return Err(e);
         }
     };
@@ -848,7 +966,9 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
             stats.total_completion_tokens,
         );
     }
-    if cli.log_runs { log.write(); }
+    if cli.log_runs {
+        log.write();
+    }
     if cli.auto_smoke {
         let _ = run_smoke_inplace(".");
     }
@@ -877,23 +997,39 @@ type FileSnaps = std::collections::HashMap<std::path::PathBuf, FileSnap>;
 const DIFF_CONTENT_CAP: u64 = 256 * 1024; // read full content up to 256KB
 
 fn diff_extensions() -> &'static [&'static str] {
-    &["py", "js", "mjs", "ts", "tsx", "rs", "html", "css", "json", "md", "txt", "go", "java"]
+    &[
+        "py", "js", "mjs", "ts", "tsx", "rs", "html", "css", "json", "md", "txt", "go", "java",
+    ]
 }
 
 fn snap_cwd() -> FileSnaps {
     use std::io::Read;
     let mut out = FileSnaps::new();
-    let cwd = match std::env::current_dir() { Ok(c) => c, Err(_) => return out };
-    if let Ok(walker) = walkdir::WalkDir::new(&cwd).max_depth(4).into_iter().collect::<std::result::Result<Vec<_>,_>>() {
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(_) => return out,
+    };
+    if let Ok(walker) = walkdir::WalkDir::new(&cwd)
+        .max_depth(4)
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()
+    {
         for entry in walker {
             let p = entry.path();
-            if !entry.file_type().is_file() { continue; }
+            if !entry.file_type().is_file() {
+                continue;
+            }
             let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !diff_extensions().contains(&ext) { continue; }
+            if !diff_extensions().contains(&ext) {
+                continue;
+            }
             let Ok(meta) = entry.metadata() else { continue };
-            let mtime = meta.modified().ok()
+            let mtime = meta
+                .modified()
+                .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs()).unwrap_or(0);
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             let mut head = [0u8; 8];
             let mut content: Option<String> = None;
             if let Ok(mut f) = std::fs::File::open(p) {
@@ -904,7 +1040,15 @@ fn snap_cwd() -> FileSnaps {
                     }
                 }
             }
-            out.insert(p.to_path_buf(), FileSnap { size: meta.len(), mtime, head, content });
+            out.insert(
+                p.to_path_buf(),
+                FileSnap {
+                    size: meta.len(),
+                    mtime,
+                    head,
+                    content,
+                },
+            );
         }
     }
     out
@@ -928,28 +1072,42 @@ fn line_diff(before: &str, after: &str) -> (Vec<String>, Vec<String>, usize) {
     {
         suffix += 1;
     }
-    let removed: Vec<String> = b[prefix..b.len() - suffix].iter().map(|s| s.to_string()).collect();
-    let added:   Vec<String> = a[prefix..a.len() - suffix].iter().map(|s| s.to_string()).collect();
+    let removed: Vec<String> = b[prefix..b.len() - suffix]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    let added: Vec<String> = a[prefix..a.len() - suffix]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     (removed, added, prefix)
 }
 
 fn print_diff(before: &FileSnaps, after: &FileSnaps) {
-    let mut added_paths: Vec<&std::path::PathBuf> = after.keys().filter(|k| !before.contains_key(*k)).collect();
-    let mut removed_paths: Vec<&std::path::PathBuf> = before.keys().filter(|k| !after.contains_key(*k)).collect();
-    let mut modified_paths: Vec<&std::path::PathBuf> = before.iter()
+    let mut added_paths: Vec<&std::path::PathBuf> =
+        after.keys().filter(|k| !before.contains_key(*k)).collect();
+    let mut removed_paths: Vec<&std::path::PathBuf> =
+        before.keys().filter(|k| !after.contains_key(*k)).collect();
+    let mut modified_paths: Vec<&std::path::PathBuf> = before
+        .iter()
         .filter_map(|(k, v)| after.get(k).filter(|nv| *nv != v).map(|_| k))
         .collect();
-    added_paths.sort(); removed_paths.sort(); modified_paths.sort();
+    added_paths.sort();
+    removed_paths.sort();
+    modified_paths.sort();
     if added_paths.is_empty() && removed_paths.is_empty() && modified_paths.is_empty() {
         eprintln!("\n\x1b[2m─ diff ─ no file changes\x1b[0m");
         return;
     }
-    eprintln!("\n\x1b[2m─ diff ─ {} added, {} modified, {} removed\x1b[0m",
-        added_paths.len(), modified_paths.len(), removed_paths.len());
+    eprintln!(
+        "\n\x1b[2m─ diff ─ {} added, {} modified, {} removed\x1b[0m",
+        added_paths.len(),
+        modified_paths.len(),
+        removed_paths.len()
+    );
     let cwd = std::env::current_dir().unwrap_or_default();
-    let rel = |p: &std::path::Path| -> String {
-        p.strip_prefix(&cwd).unwrap_or(p).display().to_string()
-    };
+    let rel =
+        |p: &std::path::Path| -> String { p.strip_prefix(&cwd).unwrap_or(p).display().to_string() };
 
     // Cap: at most this many files get expanded line-diffs; the rest get the
     // one-line size-delta summary so the output stays readable.
@@ -968,7 +1126,11 @@ fn print_diff(before: &FileSnaps, after: &FileSnaps) {
         let bsz = bsnap.map(|v| v.size).unwrap_or(0);
         let asz = asnap.map(|v| v.size).unwrap_or(0);
         let delta = asz as i64 - bsz as i64;
-        let delta_disp = if delta >= 0 { format!("+{}", delta) } else { delta.to_string() };
+        let delta_disp = if delta >= 0 {
+            format!("+{}", delta)
+        } else {
+            delta.to_string()
+        };
 
         // Decide whether to show line-level diff for this file.
         let want_expand = idx < EXPAND_FILE_CAP;
@@ -980,9 +1142,19 @@ fn print_diff(before: &FileSnaps, after: &FileSnaps) {
             let ac = asnap.unwrap().content.as_ref().unwrap();
             let (removed, added, anchor) = line_diff(bc, ac);
             let net_delta_lines: i64 = added.len() as i64 - removed.len() as i64;
-            let nd_disp = if net_delta_lines >= 0 { format!("+{}", net_delta_lines) } else { net_delta_lines.to_string() };
-            eprintln!("  \x1b[0;33mM\x1b[0m  {:>7} b  {:>+5} b  net {} lines  @L{}  {}",
-                asz, delta_disp, nd_disp, anchor + 1, rel(p));
+            let nd_disp = if net_delta_lines >= 0 {
+                format!("+{}", net_delta_lines)
+            } else {
+                net_delta_lines.to_string()
+            };
+            eprintln!(
+                "  \x1b[0;33mM\x1b[0m  {:>7} b  {:>+5} b  net {} lines  @L{}  {}",
+                asz,
+                delta_disp,
+                nd_disp,
+                anchor + 1,
+                rel(p)
+            );
 
             let total_changes = removed.len() + added.len();
             let shown_cap = LINES_PER_FILE.min(total_changes);
@@ -991,28 +1163,54 @@ fn print_diff(before: &FileSnaps, after: &FileSnaps) {
             }
             // Allocate the cap proportionally so a 200-line removal doesn't
             // starve the additions.
-            let rem_share = if total_changes == 0 { 0 } else {
+            let rem_share = if total_changes == 0 {
+                0
+            } else {
                 (shown_cap * removed.len() + total_changes / 2) / total_changes
             };
             let add_share = shown_cap.saturating_sub(rem_share);
 
             for (i, line) in removed.iter().take(rem_share).enumerate() {
                 let ln = anchor + 1 + i;
-                eprintln!("    \x1b[0;31m- {:>4}\x1b[0m  {}", ln, truncate_line(line, 110));
+                eprintln!(
+                    "    \x1b[0;31m- {:>4}\x1b[0m  {}",
+                    ln,
+                    truncate_line(line, 110)
+                );
             }
             if removed.len() > rem_share {
-                eprintln!("    \x1b[2m       ... +{} more removed\x1b[0m", removed.len() - rem_share);
+                eprintln!(
+                    "    \x1b[2m       ... +{} more removed\x1b[0m",
+                    removed.len() - rem_share
+                );
             }
             for (i, line) in added.iter().take(add_share).enumerate() {
                 let ln = anchor + 1 + i;
-                eprintln!("    \x1b[0;32m+ {:>4}\x1b[0m  {}", ln, truncate_line(line, 110));
+                eprintln!(
+                    "    \x1b[0;32m+ {:>4}\x1b[0m  {}",
+                    ln,
+                    truncate_line(line, 110)
+                );
             }
             if added.len() > add_share {
-                eprintln!("    \x1b[2m       ... +{} more added\x1b[0m", added.len() - add_share);
+                eprintln!(
+                    "    \x1b[2m       ... +{} more added\x1b[0m",
+                    added.len() - add_share
+                );
             }
         } else {
-            let suffix = if idx >= EXPAND_FILE_CAP { "  (collapsed)" } else { "  (no content snapshot)" };
-            eprintln!("  \x1b[0;33mM\x1b[0m  {:>7} b  {:>+5} b  {}{}", asz, delta_disp, rel(p), suffix);
+            let suffix = if idx >= EXPAND_FILE_CAP {
+                "  (collapsed)"
+            } else {
+                "  (no content snapshot)"
+            };
+            eprintln!(
+                "  \x1b[0;33mM\x1b[0m  {:>7} b  {:>+5} b  {}{}",
+                asz,
+                delta_disp,
+                rel(p),
+                suffix
+            );
         }
     }
     for p in &removed_paths {
@@ -1033,7 +1231,12 @@ fn truncate_line(s: &str, max: usize) -> String {
 /// In-place smoke runner — prints PASS/FAIL summary to stderr but does NOT
 /// exit the process (unlike the dedicated --smoke subcommand). Used as the
 /// post-run verifier when `--auto-smoke` is set.
-async fn run_watch_loop(cli: &Cli, client: &MtplxClient, prompt: &str, path: &std::path::Path) -> Result<()> {
+async fn run_watch_loop(
+    cli: &Cli,
+    client: &MtplxClient,
+    prompt: &str,
+    path: &std::path::Path,
+) -> Result<()> {
     let expanded = PathBuf::from(shellexpand::tilde(&path.to_string_lossy()).into_owned());
     // Build the optional glob matcher up front; bad patterns surface immediately.
     let matcher = match cli.watch_pattern.as_deref() {
@@ -1050,7 +1253,11 @@ async fn run_watch_loop(cli: &Cli, client: &MtplxClient, prompt: &str, path: &st
         Some(p) => format!(" pattern={}", p),
         None => String::new(),
     };
-    eprintln!("\x1b[2m─ watch ─ {}{} ─ Ctrl-C to exit\x1b[0m", expanded.display(), pattern_note);
+    eprintln!(
+        "\x1b[2m─ watch ─ {}{} ─ Ctrl-C to exit\x1b[0m",
+        expanded.display(),
+        pattern_note
+    );
     let mut last_state = scan_mtimes(&expanded, matcher.as_ref());
     // Run once immediately.
     let _ = run_once(cli, client, prompt).await;
@@ -1069,22 +1276,38 @@ fn scan_mtimes(root: &std::path::Path, matcher: Option<&globset::GlobMatcher>) -
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
-    if !root.exists() { return 0; }
-    if let Ok(walker) = walkdir::WalkDir::new(root).max_depth(4).into_iter().collect::<std::result::Result<Vec<_>, _>>() {
+    if !root.exists() {
+        return 0;
+    }
+    if let Ok(walker) = walkdir::WalkDir::new(root)
+        .max_depth(4)
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()
+    {
         for entry in walker {
-            if !entry.file_type().is_file() { continue; }
+            if !entry.file_type().is_file() {
+                continue;
+            }
             // If a pattern is set, check the path relative to root against it.
             // Match both the relative form ("src/foo.rs") and the bare file
             // name ("foo.rs") so users can pass either "*.rs" or "src/**/*.rs".
             if let Some(m) = matcher {
                 let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
-                let name = rel.file_name().map(|n| std::path::Path::new(n)).unwrap_or(rel);
-                if !m.is_match(rel) && !m.is_match(name) { continue; }
+                let name = rel
+                    .file_name()
+                    .map(|n| std::path::Path::new(n))
+                    .unwrap_or(rel);
+                if !m.is_match(rel) && !m.is_match(name) {
+                    continue;
+                }
             }
             if let Ok(meta) = entry.metadata() {
-                let mtime = meta.modified().ok()
+                let mtime = meta
+                    .modified()
+                    .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs()).unwrap_or(0);
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
                 entry.path().to_string_lossy().hash(&mut h);
                 mtime.hash(&mut h);
                 meta.len().hash(&mut h);
@@ -1104,10 +1327,18 @@ async fn run_once(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> {
 
 fn sampler_opts(cli: &Cli) -> SamplingOpts {
     let mut o = SamplingOpts::default();
-    if let Some(t) = cli.temperature { o.temperature = t; }
-    if let Some(p) = cli.top_p { o.top_p = p; }
-    if let Some(k) = cli.top_k { o.top_k = k; }
-    if let Some(m) = cli.max_tokens { o.max_tokens = m; }
+    if let Some(t) = cli.temperature {
+        o.temperature = t;
+    }
+    if let Some(p) = cli.top_p {
+        o.top_p = p;
+    }
+    if let Some(k) = cli.top_k {
+        o.top_k = k;
+    }
+    if let Some(m) = cli.max_tokens {
+        o.max_tokens = m;
+    }
     o
 }
 
@@ -1117,7 +1348,9 @@ fn find_last_session_id() -> Option<String> {
     let content = std::fs::read_to_string(&path).ok()?;
     let last = content.lines().rev().find(|l| !l.trim().is_empty())?;
     let v: serde_json::Value = serde_json::from_str(last).ok()?;
-    v.get("session_id").and_then(|s| s.as_str()).map(|s| s.to_string())
+    v.get("session_id")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string())
 }
 
 fn run_smoke_inplace(path: &str) -> Result<()> {
@@ -1178,7 +1411,8 @@ fn dedupe_html_shell(s: &str) -> String {
 fn save_file(path: &PathBuf, content: &str) -> Result<()> {
     let path = expand(path)?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("mkdir -p {}", parent.display()))?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("mkdir -p {}", parent.display()))?;
     }
     std::fs::write(&path, content).with_context(|| format!("write {}", path.display()))?;
     Ok(())
@@ -1221,41 +1455,92 @@ fn print_run_summary(n: usize) -> Result<()> {
     let path = format!("{}/.mlx-code/logs/runs.jsonl", home);
     let file = match std::fs::read_to_string(&path) {
         Ok(s) => s,
-        Err(_) => { eprintln!("[iris-code] no runs yet at {}", path); return Ok(()); }
+        Err(_) => {
+            eprintln!("[iris-code] no runs yet at {}", path);
+            return Ok(());
+        }
     };
     let lines: Vec<&str> = file.lines().filter(|l| !l.trim().is_empty()).collect();
     let take = lines.len().saturating_sub(n.min(lines.len()));
     eprintln!("\x1b[1mLast {} runs ({}):\x1b[0m", lines.len() - take, path);
-    eprintln!("\x1b[2m  {:>16}  {:>14}  {:>5}  {:>6}  {:>5}  {:>6}  {:>5}  prompt\x1b[0m",
-        "ts", "mode", "round", "ttft", "tot",  "compl", "tok/s");
+    eprintln!(
+        "\x1b[2m  {:>16}  {:>14}  {:>5}  {:>6}  {:>5}  {:>6}  {:>5}  prompt\x1b[0m",
+        "ts", "mode", "round", "ttft", "tot", "compl", "tok/s"
+    );
     let mut total_ttft = 0.0f64;
     let mut total_decode = 0.0f64;
     let mut count = 0u32;
     for line in &lines[take..] {
-        let v: serde_json::Value = match serde_json::from_str(line) { Ok(v) => v, Err(_) => continue };
+        let v: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
         let ts = v.get("ts_unix").and_then(|x| x.as_u64()).unwrap_or(0);
         let mode = v.get("mode").and_then(|x| x.as_str()).unwrap_or("?");
-        let rounds = v.get("rounds").and_then(|x| x.as_u64()).map(|n| n.to_string()).unwrap_or_else(|| "-".into());
-        let ttft = v.get("ttft_ms").and_then(|x| x.as_u64()).map(|n| n as f64 / 1000.0);
-        let total = v.get("total_ms").and_then(|x| x.as_u64()).map(|n| n as f64 / 1000.0);
-        let compl = v.get("completion_tokens").and_then(|x| x.as_u64()).unwrap_or(0);
-        let tps_raw = v.get("decode_tok_per_s").and_then(|x| x.as_f64()).unwrap_or(0.0);
+        let rounds = v
+            .get("rounds")
+            .and_then(|x| x.as_u64())
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "-".into());
+        let ttft = v
+            .get("ttft_ms")
+            .and_then(|x| x.as_u64())
+            .map(|n| n as f64 / 1000.0);
+        let total = v
+            .get("total_ms")
+            .and_then(|x| x.as_u64())
+            .map(|n| n as f64 / 1000.0);
+        let compl = v
+            .get("completion_tokens")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        let tps_raw = v
+            .get("decode_tok_per_s")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.0);
         // Outlier filter: cap implausible decode rates (>1000 t/s likely from
         // an early run with broken total/ttft math). Display as N/A; exclude
         // from the avg.
         let tps_plausible = tps_raw.is_finite() && tps_raw > 0.0 && tps_raw < 200.0;
-        let tps_disp: String = if tps_plausible { format!("{:>5.1}", tps_raw) } else { "  N/A".into() };
-        let prompt: String = v.get("prompt_first_120_chars").and_then(|x| x.as_str()).unwrap_or("").chars().take(50).collect();
+        let tps_disp: String = if tps_plausible {
+            format!("{:>5.1}", tps_raw)
+        } else {
+            "  N/A".into()
+        };
+        let prompt: String = v
+            .get("prompt_first_120_chars")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .chars()
+            .take(50)
+            .collect();
         let ts_str = format_ts(ts);
-        eprintln!("  {:>16}  {:>14}  {:>5}  {:>5.1}s  {:>4.1}s  {:>6}  {}  {}",
-            ts_str, mode, rounds,
-            ttft.unwrap_or(0.0), total.unwrap_or(0.0), compl, tps_disp, prompt);
-        if let Some(t) = ttft { total_ttft += t; }
-        if tps_plausible { total_decode += tps_raw; count += 1; }
+        eprintln!(
+            "  {:>16}  {:>14}  {:>5}  {:>5.1}s  {:>4.1}s  {:>6}  {}  {}",
+            ts_str,
+            mode,
+            rounds,
+            ttft.unwrap_or(0.0),
+            total.unwrap_or(0.0),
+            compl,
+            tps_disp,
+            prompt
+        );
+        if let Some(t) = ttft {
+            total_ttft += t;
+        }
+        if tps_plausible {
+            total_decode += tps_raw;
+            count += 1;
+        }
     }
     if count > 0 {
-        eprintln!("\x1b[2m  ─ avg over {} run(s): ttft={:.1}s  tok/s={:.1}\x1b[0m",
-            count, total_ttft / count as f64, total_decode / count as f64);
+        eprintln!(
+            "\x1b[2m  ─ avg over {} run(s): ttft={:.1}s  tok/s={:.1}\x1b[0m",
+            count,
+            total_ttft / count as f64,
+            total_decode / count as f64
+        );
     }
     Ok(())
 }
@@ -1267,10 +1552,15 @@ fn format_ts(ts: u64) -> String {
     let now = std::time::SystemTime::now();
     let dur = now.duration_since(t).unwrap_or(Duration::ZERO);
     let secs = dur.as_secs();
-    if secs < 60 { format!("{}s ago", secs) }
-    else if secs < 3600 { format!("{}m ago", secs / 60) }
-    else if secs < 86400 { format!("{}h ago", secs / 3600) }
-    else { format!("{}d ago", secs / 86400) }
+    if secs < 60 {
+        format!("{}s ago", secs)
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
 }
 
 /// Print the system prompt + tool spec sizes without sending anything.
@@ -1278,7 +1568,10 @@ fn format_ts(ts: u64) -> String {
 /// English-heavy text). The MTPLX server returns exact prompt_tokens for
 /// any actual request; this is a fast offline check.
 fn print_inspect_prompt(cli: &Cli) {
-    let system = cli.system.clone().unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
+    let system = cli
+        .system
+        .clone()
+        .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
     let registry = tools::registry();
     let specs = tools::tool_specs(&registry);
     let tools_json = serde_json::to_string(&specs).unwrap_or_default();
@@ -1293,22 +1586,40 @@ fn print_inspect_prompt(cli: &Cli) {
     let approx = |chars: usize| (chars as f64 / 4.0).round() as usize;
 
     println!("─ mlx-code prompt inspection ─");
-    println!("  system prompt:       {:>6} chars   {:>4} lines   ~{} tokens",
-        sys_chars, sys_lines, approx(sys_chars));
-    println!("  tool specs (compact):{:>6} chars   {:>4} tools   ~{} tokens",
-        tools_chars, registry.len(), approx(tools_chars));
+    println!(
+        "  system prompt:       {:>6} chars   {:>4} lines   ~{} tokens",
+        sys_chars,
+        sys_lines,
+        approx(sys_chars)
+    );
+    println!(
+        "  tool specs (compact):{:>6} chars   {:>4} tools   ~{} tokens",
+        tools_chars,
+        registry.len(),
+        approx(tools_chars)
+    );
     println!("  ----------------------------------------------------------");
-    println!("  TOTAL fixed overhead:{:>6} chars                ~{} tokens",
-        total_chars, approx(total_chars));
+    println!(
+        "  TOTAL fixed overhead:{:>6} chars                ~{} tokens",
+        total_chars,
+        approx(total_chars)
+    );
     println!();
     println!("  tools registered ({}):", registry.len());
     for t in &registry {
         let schema_str = serde_json::to_string(&t.schema).unwrap_or_default();
-        println!("    - {:<10} {:>5} chars  ~{} tokens",
-            t.name, schema_str.chars().count(), approx(schema_str.chars().count()));
+        println!(
+            "    - {:<10} {:>5} chars  ~{} tokens",
+            t.name,
+            schema_str.chars().count(),
+            approx(schema_str.chars().count())
+        );
     }
     println!();
-    println!("  (pretty-printed tool specs would be {} lines)", tools_pretty_lines);
+    println!(
+        "  (pretty-printed tool specs would be {} lines)",
+        tools_pretty_lines
+    );
     println!();
     println!("  reference: opencode parent-agent prompt is ~13K tokens");
 }
@@ -1318,13 +1629,22 @@ fn print_inspect_prompt(cli: &Cli) {
 /// model / session / cwd / hint. Uses the active theme.
 fn print_chat_banner(client: &MtplxClient, cli: &Cli) {
     logo::print();
-    let cwd = std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_else(|_| "?".into());
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "?".into());
     let d = theme::dim();
     let a = theme::accent();
     let r = theme::RESET;
-    let dry = if cli.dry_run { format!(" {}[DRY-RUN]{}", theme::warn(), theme::RESET) } else { String::new() };
-    eprintln!("{d}╭─ {a}iris-code{d} ─ {a}{model}{d} ─ session {a}{sess}{d}{dry}{r}",
-        d = d, a = a, r = r,
+    let dry = if cli.dry_run {
+        format!(" {}[DRY-RUN]{}", theme::warn(), theme::RESET)
+    } else {
+        String::new()
+    };
+    eprintln!(
+        "{d}╭─ {a}iris-code{d} ─ {a}{model}{d} ─ session {a}{sess}{d}{dry}{r}",
+        d = d,
+        a = a,
+        r = r,
         model = client.model(),
         sess = client.session_id(),
         dry = dry,
@@ -1351,21 +1671,41 @@ fn print_dry_run_summary() {
     for e in entries {
         total_bytes += e.bytes;
         match e.kind {
-            "create"    => create.push((e.target, e.bytes)),
+            "create" => create.push((e.target, e.bytes)),
             "overwrite" => overwrite.push((e.target, e.bytes)),
-            "replace"   => replace.push((e.target, e.bytes)),
-            "bash"      => bash_cmds.push(e.target),
+            "replace" => replace.push((e.target, e.bytes)),
+            "bash" => bash_cmds.push(e.target),
             _ => {}
         }
     }
     let mut_count = create.len() + overwrite.len() + replace.len() + bash_cmds.len();
-    eprintln!("\n\x1b[2m─ dry-run summary ─ {} mutation(s); {} would touch ~{}\x1b[0m",
+    eprintln!(
+        "\n\x1b[2m─ dry-run summary ─ {} mutation(s); {} would touch ~{}\x1b[0m",
         mut_count,
         create.len() + overwrite.len() + replace.len(),
-        format_bytes(total_bytes));
-    for (p, b) in &create    { eprintln!("  \x1b[0;32mCREATE\x1b[0m    {:>9}  {}", format_bytes(*b), p); }
-    for (p, b) in &overwrite { eprintln!("  \x1b[0;33mOVERWRITE\x1b[0m {:>9}  {}", format_bytes(*b), p); }
-    for (p, b) in &replace   { eprintln!("  \x1b[0;33mREPLACE\x1b[0m   {:>9}  {}", format_bytes(*b), p); }
+        format_bytes(total_bytes)
+    );
+    for (p, b) in &create {
+        eprintln!(
+            "  \x1b[0;32mCREATE\x1b[0m    {:>9}  {}",
+            format_bytes(*b),
+            p
+        );
+    }
+    for (p, b) in &overwrite {
+        eprintln!(
+            "  \x1b[0;33mOVERWRITE\x1b[0m {:>9}  {}",
+            format_bytes(*b),
+            p
+        );
+    }
+    for (p, b) in &replace {
+        eprintln!(
+            "  \x1b[0;33mREPLACE\x1b[0m   {:>9}  {}",
+            format_bytes(*b),
+            p
+        );
+    }
     for c in &bash_cmds {
         let preview: String = c.chars().take(80).collect();
         eprintln!("  \x1b[0;36mBASH\x1b[0m                {}", preview);
@@ -1373,9 +1713,13 @@ fn print_dry_run_summary() {
 }
 
 fn format_bytes(n: u64) -> String {
-    if n < 1024 { return format!("{}B", n); }
+    if n < 1024 {
+        return format!("{}B", n);
+    }
     let kb = (n as f64) / 1024.0;
-    if kb < 1024.0 { return format!("{:.1}KB", kb); }
+    if kb < 1024.0 {
+        return format!("{:.1}KB", kb);
+    }
     let mb = kb / 1024.0;
     format!("{:.2}MB", mb)
 }
@@ -1385,7 +1729,10 @@ fn format_bytes(n: u64) -> String {
 /// tools structure that would be POSTed to the chat-completions endpoint.
 /// Output is JSON for easy diffing and grepping.
 fn print_show_prompt(cli: &Cli) {
-    let system = cli.system.clone().unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
+    let system = cli
+        .system
+        .clone()
+        .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
     let registry = tools::registry();
     let specs = tools::tool_specs(&registry);
 
@@ -1402,7 +1749,8 @@ fn print_show_prompt(cli: &Cli) {
         "messages": messages,
         "tools": specs,
     });
-    let pretty = serde_json::to_string_pretty(&body).unwrap_or_else(|_| "<serialization failed>".into());
+    let pretty =
+        serde_json::to_string_pretty(&body).unwrap_or_else(|_| "<serialization failed>".into());
     println!("{}", pretty);
 }
 
@@ -1415,8 +1763,14 @@ fn print_stats(res: &client::StreamResult, label: &str) {
         label,
         ttft.as_millis(),
         total.as_millis(),
-        usage.and_then(|u| u.prompt_tokens).map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
-        usage.and_then(|u| u.completion_tokens).map(|n| n.to_string()).unwrap_or_else(|| "?".into()),
+        usage
+            .and_then(|u| u.prompt_tokens)
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into()),
+        usage
+            .and_then(|u| u.completion_tokens)
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into()),
         res.finish_reason.as_deref().unwrap_or("?"),
     );
 }
@@ -1466,7 +1820,8 @@ mod tests {
     }
 
     fn mk_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("mlx-watch-test-{}-{}", std::process::id(), name));
+        let dir =
+            std::env::temp_dir().join(format!("mlx-watch-test-{}-{}", std::process::id(), name));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -1525,10 +1880,20 @@ mod tests {
         let specs = crate::tools::tool_specs(&registry);
         let tools_json = serde_json::to_string(&specs).unwrap();
         assert!(tools_json.len() > 100, "tool specs JSON suspiciously small");
-        assert!(registry.len() >= 7, "expected at least 7 registered tools, got {}", registry.len());
+        assert!(
+            registry.len() >= 7,
+            "expected at least 7 registered tools, got {}",
+            registry.len()
+        );
         let names: std::collections::HashSet<&str> = registry.iter().map(|t| t.name).collect();
-        for required in &["read", "grep", "edit", "bash", "list", "glob", "search", "diff", "tree"] {
-            assert!(names.contains(required), "missing required tool: {}", required);
+        for required in &[
+            "read", "grep", "edit", "bash", "list", "glob", "search", "diff", "tree",
+        ] {
+            assert!(
+                names.contains(required),
+                "missing required tool: {}",
+                required
+            );
         }
         // System prompt is non-empty.
         assert!(!crate::agent::DEFAULT_SYSTEM_PROMPT.is_empty());

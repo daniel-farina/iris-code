@@ -38,15 +38,32 @@ pub fn tool() -> Tool {
 }
 
 async fn run(args: Value) -> Result<String> {
-    let path_a = args.get("path_a").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("diff: missing path_a"))?.to_string();
-    let path_b = args.get("path_b").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("diff: missing path_b"))?.to_string();
-    let ctx = args.get("context").and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(DEFAULT_CONTEXT);
+    let path_a = args
+        .get("path_a")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("diff: missing path_a"))?
+        .to_string();
+    let path_b = args
+        .get("path_b")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("diff: missing path_b"))?
+        .to_string();
+    let ctx = args
+        .get("context")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_CONTEXT);
 
     let a_lines = load_lines(&path_a)?;
     let b_lines = load_lines(&path_b)?;
 
     if a_lines == b_lines {
-        return Ok(format!("(identical: {} and {} both {} lines)\n", path_a, path_b, a_lines.len()));
+        return Ok(format!(
+            "(identical: {} and {} both {} lines)\n",
+            path_a,
+            path_b,
+            a_lines.len()
+        ));
     }
 
     let ops = lcs_diff(&a_lines, &b_lines);
@@ -58,29 +75,45 @@ async fn run(args: Value) -> Result<String> {
     let mut total_added = 0usize;
     let mut total_removed = 0usize;
     for r in &ranges {
-        let mut a_start = 0usize; let mut a_count = 0usize;
-        let mut b_start = 0usize; let mut b_count = 0usize;
+        let mut a_start = 0usize;
+        let mut a_count = 0usize;
+        let mut b_start = 0usize;
+        let mut b_count = 0usize;
         let mut anchored = false;
         // First pass: compute hunk header counts.
         for k in r.from..r.to {
             match &ops[k] {
                 Op::Eq(ai, bi) => {
-                    if !anchored { a_start = *ai; b_start = *bi; anchored = true; }
-                    a_count += 1; b_count += 1;
+                    if !anchored {
+                        a_start = *ai;
+                        b_start = *bi;
+                        anchored = true;
+                    }
+                    a_count += 1;
+                    b_count += 1;
                 }
                 Op::Del(ai) => {
-                    if !anchored { a_start = *ai; anchored = true; }
+                    if !anchored {
+                        a_start = *ai;
+                        anchored = true;
+                    }
                     a_count += 1;
                 }
                 Op::Ins(bi) => {
-                    if !anchored { b_start = *bi; anchored = true; }
+                    if !anchored {
+                        b_start = *bi;
+                        anchored = true;
+                    }
                     b_count += 1;
                 }
             }
         }
         out.push_str(&format!(
             "@@ -{},{} +{},{} @@\n",
-            a_start + 1, a_count, b_start + 1, b_count
+            a_start + 1,
+            a_count,
+            b_start + 1,
+            b_count
         ));
         // Second pass: emit lines.
         for k in r.from..r.to {
@@ -111,9 +144,16 @@ async fn run(args: Value) -> Result<String> {
         }
     }
     if ranges.is_empty() {
-        out.push_str("(files differ but no hunk changes detected - check trailing newline or whitespace)\n");
+        out.push_str(
+            "(files differ but no hunk changes detected - check trailing newline or whitespace)\n",
+        );
     } else {
-        out.push_str(&format!("\n(summary: -{} +{} across {} hunk(s))\n", total_removed, total_added, ranges.len()));
+        out.push_str(&format!(
+            "\n(summary: -{} +{} across {} hunk(s))\n",
+            total_removed,
+            total_added,
+            ranges.len()
+        ));
     }
     Ok(out)
 }
@@ -125,7 +165,11 @@ fn load_lines(path: &str) -> Result<Vec<String>> {
         return Err(anyhow!("diff: not a regular file: {}", p.display()));
     }
     if meta.len() > MAX_BYTES {
-        return Err(anyhow!("diff: {} is {} bytes (>1MB), refusing", p.display(), meta.len()));
+        return Err(anyhow!(
+            "diff: {} is {} bytes (>1MB), refusing",
+            p.display(),
+            meta.len()
+        ));
     }
     let s = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
     Ok(s.split('\n').map(|s| s.to_string()).collect())
@@ -133,9 +177,9 @@ fn load_lines(path: &str) -> Result<Vec<String>> {
 
 #[derive(Debug, Clone)]
 enum Op {
-    Eq(usize, usize),  // (a_idx, b_idx)
-    Del(usize),        // (a_idx)
-    Ins(usize),        // (b_idx)
+    Eq(usize, usize), // (a_idx, b_idx)
+    Del(usize),       // (a_idx)
+    Ins(usize),       // (b_idx)
 }
 
 /// Standard LCS-based diff. O(n*m) memory for the DP table, fine for files
@@ -146,9 +190,13 @@ fn lcs_diff(a: &[String], b: &[String]) -> Vec<Op> {
     let m = b.len();
     // Trim common prefix/suffix to shrink the DP table.
     let mut prefix = 0usize;
-    while prefix < n && prefix < m && a[prefix] == b[prefix] { prefix += 1; }
+    while prefix < n && prefix < m && a[prefix] == b[prefix] {
+        prefix += 1;
+    }
     let mut suffix = 0usize;
-    while suffix < n - prefix && suffix < m - prefix && a[n - 1 - suffix] == b[m - 1 - suffix] { suffix += 1; }
+    while suffix < n - prefix && suffix < m - prefix && a[n - 1 - suffix] == b[m - 1 - suffix] {
+        suffix += 1;
+    }
     let n2 = n - prefix - suffix;
     let m2 = m - prefix - suffix;
 
@@ -176,7 +224,8 @@ fn lcs_diff(a: &[String], b: &[String]) -> Vec<Op> {
         while i > 0 && j > 0 {
             if a[prefix + i - 1] == b[prefix + j - 1] {
                 middle.push(Op::Eq(prefix + i - 1, prefix + j - 1));
-                i -= 1; j -= 1;
+                i -= 1;
+                j -= 1;
             } else if dp[(i - 1) * stride + j] >= dp[i * stride + j - 1] {
                 middle.push(Op::Del(prefix + i - 1));
                 i -= 1;
@@ -185,8 +234,14 @@ fn lcs_diff(a: &[String], b: &[String]) -> Vec<Op> {
                 j -= 1;
             }
         }
-        while i > 0 { middle.push(Op::Del(prefix + i - 1)); i -= 1; }
-        while j > 0 { middle.push(Op::Ins(prefix + j - 1)); j -= 1; }
+        while i > 0 {
+            middle.push(Op::Del(prefix + i - 1));
+            i -= 1;
+        }
+        while j > 0 {
+            middle.push(Op::Ins(prefix + j - 1));
+            j -= 1;
+        }
         middle.reverse();
         ops.extend(middle);
     }
@@ -199,19 +254,25 @@ fn lcs_diff(a: &[String], b: &[String]) -> Vec<Op> {
 
 #[derive(Debug)]
 struct HunkRange {
-    from: usize,  // inclusive index into ops
-    to: usize,    // exclusive index into ops
+    from: usize, // inclusive index into ops
+    to: usize,   // exclusive index into ops
 }
 
 /// Group ops into hunks separated by stretches of equality larger than
 /// `2*context`. Each hunk gets `context` lines of leading/trailing context.
 fn group_into_hunks(ops: &[Op], context: usize) -> Vec<HunkRange> {
-    if ops.is_empty() { return Vec::new(); }
+    if ops.is_empty() {
+        return Vec::new();
+    }
 
-    let changed: Vec<usize> = ops.iter().enumerate()
+    let changed: Vec<usize> = ops
+        .iter()
+        .enumerate()
         .filter_map(|(i, o)| matches!(o, Op::Del(_) | Op::Ins(_)).then_some(i))
         .collect();
-    if changed.is_empty() { return Vec::new(); }
+    if changed.is_empty() {
+        return Vec::new();
+    }
 
     let mut hunks: Vec<HunkRange> = Vec::new();
     let mut i = 0usize;
@@ -235,7 +296,9 @@ fn group_into_hunks(ops: &[Op], context: usize) -> Vec<HunkRange> {
 mod tests {
     use super::*;
 
-    fn v(s: &[&str]) -> Vec<String> { s.iter().map(|x| x.to_string()).collect() }
+    fn v(s: &[&str]) -> Vec<String> {
+        s.iter().map(|x| x.to_string()).collect()
+    }
 
     #[test]
     fn lcs_identical_returns_only_eq() {
@@ -301,7 +364,11 @@ mod tests {
         assert!(out.contains("-bravo"), "missing -bravo line:\n{}", out);
         assert!(out.contains("+BRAVO"), "missing +BRAVO line:\n{}", out);
         assert!(out.contains("+foxtrot"), "missing +foxtrot line:\n{}", out);
-        assert!(out.starts_with("--- "), "missing unified diff header:\n{}", out);
+        assert!(
+            out.starts_with("--- "),
+            "missing unified diff header:\n{}",
+            out
+        );
         assert!(out.contains("@@ -"), "missing hunk header:\n{}", out);
         assert!(out.contains("summary: -1 +2"), "wrong summary:\n{}", out);
     }
@@ -322,6 +389,10 @@ mod tests {
         let _ = std::fs::remove_file(&pa);
         let _ = std::fs::remove_file(&pb);
 
-        assert!(out.starts_with("(identical:"), "expected identical short-circuit, got:\n{}", out);
+        assert!(
+            out.starts_with("(identical:"),
+            "expected identical short-circuit, got:\n{}",
+            out
+        );
     }
 }

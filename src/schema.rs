@@ -21,19 +21,44 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn system(s: impl Into<String>) -> Self {
-        Self { role: "system".into(), content: Some(s.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "system".into(),
+            content: Some(s.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn user(s: impl Into<String>) -> Self {
-        Self { role: "user".into(), content: Some(s.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "user".into(),
+            content: Some(s.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant_text(s: impl Into<String>) -> Self {
-        Self { role: "assistant".into(), content: Some(s.into()), tool_calls: None, tool_call_id: None }
+        Self {
+            role: "assistant".into(),
+            content: Some(s.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant_tool_calls(content: Option<String>, calls: Vec<ToolCall>) -> Self {
-        Self { role: "assistant".into(), content, tool_calls: Some(calls), tool_call_id: None }
+        Self {
+            role: "assistant".into(),
+            content,
+            tool_calls: Some(calls),
+            tool_call_id: None,
+        }
     }
     pub fn tool_result(id: impl Into<String>, body: impl Into<String>) -> Self {
-        Self { role: "tool".into(), content: Some(body.into()), tool_calls: None, tool_call_id: Some(id.into()) }
+        Self {
+            role: "tool".into(),
+            content: Some(body.into()),
+            tool_calls: None,
+            tool_call_id: Some(id.into()),
+        }
     }
 }
 
@@ -46,7 +71,9 @@ pub struct ToolCall {
     pub function: FunctionCall,
 }
 
-fn default_type() -> String { "function".to_string() }
+fn default_type() -> String {
+    "function".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FunctionCall {

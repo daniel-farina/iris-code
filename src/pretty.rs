@@ -76,7 +76,11 @@ impl PrettyOut {
                 self.emit_in_section(&pre);
             }
             // Consume the marker itself.
-            let marker_len = if is_open { THINK_OPEN.len() } else { THINK_CLOSE.len() };
+            let marker_len = if is_open {
+                THINK_OPEN.len()
+            } else {
+                THINK_CLOSE.len()
+            };
             self.pending.drain(..marker_len);
             // Switch section.
             if is_open {
@@ -180,10 +184,14 @@ impl PrettyOut {
 /// (e.g. em-dash `—` is 3 bytes).
 fn safe_emit_len(s: &str) -> usize {
     let max = s.len();
-    if max == 0 { return 0; }
+    if max == 0 {
+        return 0;
+    }
     let look = max.saturating_sub(8);
     for i in look..max {
-        if !s.is_char_boundary(i) { continue; }
+        if !s.is_char_boundary(i) {
+            continue;
+        }
         let tail = &s[i..];
         for marker in &[THINK_OPEN, THINK_CLOSE] {
             if marker.starts_with(tail) {
@@ -195,9 +203,14 @@ fn safe_emit_len(s: &str) -> usize {
 }
 
 pub fn tool_call_header(name: &str) {
-    if !is_pretty() { return; }
+    if !is_pretty() {
+        return;
+    }
     eprintln!();
-    eprintln!("\x1b[2m╭─ \x1b[0;36m🔧 tool: \x1b[1;36m{}\x1b[0;2m ─────────────────────\x1b[0m", name);
+    eprintln!(
+        "\x1b[2m╭─ \x1b[0;36m🔧 tool: \x1b[1;36m{}\x1b[0;2m ─────────────────────\x1b[0m",
+        name
+    );
 }
 
 pub fn tool_call_args(args_pretty: &str) {
@@ -216,7 +229,9 @@ pub fn tool_result(name: &str, ok: bool, body: &str, default_max_lines: usize) {
         eprintln!("[{}] {}", if ok { "ok" } else { "err" }, body);
         return;
     }
-    let full = std::env::var("MLX_CODE_FULL_OUTPUT").ok().as_deref()
+    let full = std::env::var("MLX_CODE_FULL_OUTPUT")
+        .ok()
+        .as_deref()
         .map(|v| matches!(v, "1" | "true" | "on"))
         .unwrap_or(false);
     let max_lines = if full { usize::MAX } else { default_max_lines };
@@ -230,7 +245,10 @@ pub fn tool_result(name: &str, ok: bool, body: &str, default_max_lines: usize) {
     let total = body.lines().count();
     for line in body.lines() {
         if shown == max_lines && total > max_lines + 2 {
-            eprintln!("\x1b[2m│ ... ({} more lines, truncated; --full-output to see all)\x1b[0m", total - shown);
+            eprintln!(
+                "\x1b[2m│ ... ({} more lines, truncated; --full-output to see all)\x1b[0m",
+                total - shown
+            );
             break;
         }
         eprintln!("\x1b[2m│\x1b[0m {}", line);
@@ -284,7 +302,9 @@ pub fn pretty_args(args_json: &str) -> String {
                     }
                     for line in lines {
                         acc.push('\n');
-                        for _ in 0..(key_w + 2) { acc.push(' '); }
+                        for _ in 0..(key_w + 2) {
+                            acc.push(' ');
+                        }
                         acc.push_str(line);
                     }
                     acc
@@ -294,7 +314,12 @@ pub fn pretty_args(args_json: &str) -> String {
             }
             other => other.to_string(),
         };
-        out.push_str(&format!("{:<width$}  {}\n", format!("\x1b[0;33m{k}\x1b[0m:"), display, width = key_w + "\x1b[0;33m\x1b[0m:".len()));
+        out.push_str(&format!(
+            "{:<width$}  {}\n",
+            format!("\x1b[0;33m{k}\x1b[0m:"),
+            display,
+            width = key_w + "\x1b[0;33m\x1b[0m:".len()
+        ));
     }
     out.trim_end().to_string()
 }

@@ -112,21 +112,29 @@ impl LiveTps {
     /// Like tick(), but also counts newlines in the delta text so the bar can
     /// display lines-created.
     fn tick_text(&mut self, text: &str) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         if self.streaming_started.is_none() {
             self.streaming_started = Some(Instant::now());
         }
         self.token_chunks += 1;
         self.content_lines += text.bytes().filter(|&b| b == b'\n').count() as u32;
-        if self.last_render.elapsed() < self.refresh { return; }
+        if self.last_render.elapsed() < self.refresh {
+            return;
+        }
         self.last_render = Instant::now();
         self.render();
     }
 
     /// Periodic re-render even when no chunk arrived (so prefill phase ticks).
     fn heartbeat(&mut self) {
-        if !self.enabled { return; }
-        if self.last_render.elapsed() < self.refresh { return; }
+        if !self.enabled {
+            return;
+        }
+        if self.last_render.elapsed() < self.refresh {
+            return;
+        }
         self.last_render = Instant::now();
         self.render();
     }
@@ -135,7 +143,9 @@ impl LiveTps {
     /// re-paints from scratch. Used right before printing tool-call output so
     /// the bar doesn't get mixed into the tool stream.
     fn clear_line(&mut self) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         use std::io::Write;
         // In sticky-bar mode the metrics live at the bottom row; just blank it.
         if crate::sticky_bar::supported() && self.last_line_len > 0 {
@@ -150,9 +160,11 @@ impl LiveTps {
     }
 
     fn render(&mut self) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
+        use crate::theme::{accent, dim, good, highlight, warn, RESET};
         use std::io::Write;
-        use crate::theme::{accent, good, warn, highlight, dim, RESET};
         let total = self.request_started.elapsed().as_secs_f64().max(0.001);
         let line = if let Some(start) = self.streaming_started {
             let stream_elapsed = start.elapsed().as_secs_f64().max(0.001);
@@ -173,8 +185,13 @@ impl LiveTps {
             let dotstr: String = ".".repeat(dots);
             format!(
                 "{d}─[{a}{label}{d}]─ {w}prefill{dots:<4}{d} {tot:.1}s{r}",
-                d = dim(), a = accent(), w = warn(), r = RESET,
-                label = self.label, dots = dotstr, tot = total,
+                d = dim(),
+                a = accent(),
+                w = warn(),
+                r = RESET,
+                label = self.label,
+                dots = dotstr,
+                tot = total,
             )
         };
         let visible_len = strip_ansi_len(&line);
@@ -196,7 +213,9 @@ impl LiveTps {
     }
 
     fn finish(&mut self, usage_completion_tokens: Option<u32>, prompt_tokens: Option<u32>) {
-        if !self.enabled { return; }
+        if !self.enabled {
+            return;
+        }
         use std::io::Write;
         let mut stderr = std::io::stderr();
         // Release sticky region if we were using it; otherwise blank the inline line.
@@ -206,9 +225,15 @@ impl LiveTps {
             let _ = write!(stderr, "\r{:width$}\r", "", width = self.last_line_len);
         }
         let total = self.request_started.elapsed().as_secs_f64().max(0.001);
-        let stream_elapsed = self.streaming_started.map(|s| s.elapsed().as_secs_f64().max(0.001));
+        let stream_elapsed = self
+            .streaming_started
+            .map(|s| s.elapsed().as_secs_f64().max(0.001));
         let count = usage_completion_tokens.unwrap_or(self.token_chunks);
-        let source_tag = if usage_completion_tokens.is_some() { "" } else { " (est)" };
+        let source_tag = if usage_completion_tokens.is_some() {
+            ""
+        } else {
+            " (est)"
+        };
         let stream_rate = stream_elapsed.map(|s| (count as f64) / s);
         let ttft = stream_elapsed.map(|s| total - s).unwrap_or(total);
         let prompt_str = prompt_tokens
@@ -237,12 +262,19 @@ fn build_right_aligned_metrics() -> String {
     use crate::theme::{accent, dim, good, RESET};
     let s = crate::read_cache::stats();
     let total = s.hits + s.misses;
-    if total == 0 { return String::new(); }
+    if total == 0 {
+        return String::new();
+    }
     let pct = (100.0 * s.hits as f64 / total as f64) as u32;
     format!(
         "{d}cache {a}{h}/{t}{d} ({g}{p}%{d}){r}",
-        d = dim(), a = accent(), g = good(), r = RESET,
-        h = s.hits, t = total, p = pct,
+        d = dim(),
+        a = accent(),
+        g = good(),
+        r = RESET,
+        h = s.hits,
+        t = total,
+        p = pct,
     )
 }
 
@@ -258,7 +290,9 @@ fn strip_ansi_len(s: &str) -> usize {
                 chars.next();
                 while let Some(&n) = chars.peek() {
                     chars.next();
-                    if n.is_ascii_alphabetic() { break; }
+                    if n.is_ascii_alphabetic() {
+                        break;
+                    }
                 }
             }
         } else {
@@ -269,7 +303,11 @@ fn strip_ansi_len(s: &str) -> usize {
 }
 
 impl MtplxClient {
-    pub fn new(base_url: impl Into<String>, session_id: impl Into<String>, model: impl Into<String>) -> Result<Self> {
+    pub fn new(
+        base_url: impl Into<String>,
+        session_id: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Result<Self> {
         let http = Client::builder()
             // streaming responses can take a while; don't time out on idle SSE
             .timeout(Duration::from_secs(0).max(Duration::from_secs(900)))
@@ -283,8 +321,12 @@ impl MtplxClient {
         })
     }
 
-    pub fn model(&self) -> &str { &self.model }
-    pub fn session_id(&self) -> &str { &self.session_id }
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
 
     /// Stream a chat-completion. `out` receives content tokens as they arrive
     /// (typically stdout). Tool-call deltas are accumulated silently.
@@ -305,7 +347,9 @@ impl MtplxClient {
             top_p: Some(opts.top_p),
             top_k: Some(opts.top_k),
             max_tokens: Some(opts.max_tokens),
-            chat_template_kwargs: Some(serde_json::json!({ "enable_thinking": opts.enable_thinking })),
+            chat_template_kwargs: Some(
+                serde_json::json!({ "enable_thinking": opts.enable_thinking }),
+            ),
         };
 
         let started = Instant::now();
@@ -343,7 +387,9 @@ impl MtplxClient {
             buf.extend_from_slice(&chunk);
             // Split on \n\n event boundaries
             loop {
-                let Some(pos) = find_double_newline(&buf) else { break };
+                let Some(pos) = find_double_newline(&buf) else {
+                    break;
+                };
                 let event = buf.drain(..pos + 2).collect::<Vec<u8>>();
                 let event_text = match std::str::from_utf8(&event) {
                     Ok(s) => s,
@@ -353,7 +399,9 @@ impl MtplxClient {
                     let line = line.trim_end_matches('\r');
                     if let Some(payload) = line.strip_prefix("data:") {
                         let payload = payload.trim();
-                        if payload.is_empty() { continue; }
+                        if payload.is_empty() {
+                            continue;
+                        }
                         if payload == "[DONE]" {
                             // drain pending bytes after [DONE] (should be none)
                             buf.clear();
@@ -363,11 +411,17 @@ impl MtplxClient {
                             Ok(v) => v,
                             Err(e) => {
                                 // Don't bail on a single malformed line; log to stderr.
-                                eprintln!("\n[iris-code] failed to parse SSE chunk: {} ({})", e, truncate(payload, 200));
+                                eprintln!(
+                                    "\n[iris-code] failed to parse SSE chunk: {} ({})",
+                                    e,
+                                    truncate(payload, 200)
+                                );
                                 continue;
                             }
                         };
-                        if let Some(usage) = parsed.usage { result.usage = Some(usage); }
+                        if let Some(usage) = parsed.usage {
+                            result.usage = Some(usage);
+                        }
                         for choice in parsed.choices {
                             if let Some(reason) = choice.finish_reason {
                                 result.finish_reason = Some(reason);
@@ -405,17 +459,29 @@ impl MtplxClient {
                                             || f.name.as_ref().is_some_and(|n| !n.is_empty())
                                     })
                                 });
-                                if any_tc_content { live.tick(); }
+                                if any_tc_content {
+                                    live.tick();
+                                }
                                 for d in tcs {
                                     let idx = d.index as usize;
                                     while acc.len() <= idx {
                                         acc.push((String::new(), String::new(), String::new()));
                                     }
                                     let slot = &mut acc[idx];
-                                    if let Some(id) = d.id { if !id.is_empty() { slot.0 = id; } }
+                                    if let Some(id) = d.id {
+                                        if !id.is_empty() {
+                                            slot.0 = id;
+                                        }
+                                    }
                                     if let Some(f) = d.function {
-                                        if let Some(name) = f.name { if !name.is_empty() { slot.1 = name; } }
-                                        if let Some(args) = f.arguments { slot.2.push_str(&args); }
+                                        if let Some(name) = f.name {
+                                            if !name.is_empty() {
+                                                slot.1 = name;
+                                            }
+                                        }
+                                        if let Some(args) = f.arguments {
+                                            slot.2.push_str(&args);
+                                        }
                                     }
                                 }
                             }
@@ -438,9 +504,16 @@ impl MtplxClient {
             .enumerate()
             .filter(|(_, (_, name, _))| !name.is_empty())
             .map(|(i, (id, name, args))| ToolCall {
-                id: if id.is_empty() { format!("call_{i}") } else { id },
+                id: if id.is_empty() {
+                    format!("call_{i}")
+                } else {
+                    id
+                },
                 kind: "function".to_string(),
-                function: FunctionCall { name, arguments: args },
+                function: FunctionCall {
+                    name,
+                    arguments: args,
+                },
             })
             .collect();
 
@@ -453,5 +526,9 @@ fn find_double_newline(buf: &[u8]) -> Option<usize> {
 }
 
 fn truncate(s: &str, n: usize) -> String {
-    if s.len() <= n { s.to_string() } else { format!("{}...", &s[..n]) }
+    if s.len() <= n {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..n])
+    }
 }

@@ -24,7 +24,11 @@ use std::sync::Mutex;
 /// - `Light`: muted accents tuned for light terminal backgrounds.
 /// - `Mono`: no color at all - bold/dim/reset only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Theme { Iris, Light, Mono }
+pub enum Theme {
+    Iris,
+    Light,
+    Mono,
+}
 
 static RUNTIME_OVERRIDE: Lazy<Mutex<Option<Theme>>> = Lazy::new(|| Mutex::new(None));
 
@@ -39,9 +43,9 @@ impl Theme {
     }
     pub fn name(&self) -> &'static str {
         match self {
-            Theme::Iris  => "iris",
+            Theme::Iris => "iris",
             Theme::Light => "light",
-            Theme::Mono  => "mono",
+            Theme::Mono => "mono",
         }
     }
 }
@@ -50,7 +54,9 @@ pub fn current() -> Theme {
     if let Some(t) = *RUNTIME_OVERRIDE.lock().unwrap() {
         return t;
     }
-    std::env::var("MLX_CODE_THEME").or_else(|_| std::env::var("IRIS_THEME")).ok()
+    std::env::var("MLX_CODE_THEME")
+        .or_else(|_| std::env::var("IRIS_THEME"))
+        .ok()
         .and_then(|s| Theme::parse(&s))
         .unwrap_or(Theme::Iris)
 }
@@ -80,64 +86,66 @@ pub fn dim() -> &'static str {
 }
 pub fn accent() -> &'static str {
     match current() {
-        Theme::Iris  => "\x1b[38;5;141m",   // soft violet - the iris signature
-        Theme::Light => "\x1b[0;35m",       // magenta (legible on white)
-        Theme::Mono  => "\x1b[1m",
+        Theme::Iris => "\x1b[38;5;141m", // soft violet - the iris signature
+        Theme::Light => "\x1b[0;35m",    // magenta (legible on white)
+        Theme::Mono => "\x1b[1m",
     }
 }
 pub fn good() -> &'static str {
     match current() {
-        Theme::Iris  => "\x1b[38;5;156m",   // pale green-yellow, complements violet
+        Theme::Iris => "\x1b[38;5;156m", // pale green-yellow, complements violet
         Theme::Light => "\x1b[0;32m",
-        Theme::Mono  => "",
+        Theme::Mono => "",
     }
 }
 pub fn warn() -> &'static str {
     match current() {
-        Theme::Iris  => "\x1b[38;5;220m",   // gold - the iris beard
+        Theme::Iris => "\x1b[38;5;220m", // gold - the iris beard
         Theme::Light => "\x1b[0;33m",
-        Theme::Mono  => "",
+        Theme::Mono => "",
     }
 }
 #[allow(dead_code)]
 pub fn bad() -> &'static str {
     match current() {
-        Theme::Iris  => "\x1b[38;5;203m",   // soft red beside violet
+        Theme::Iris => "\x1b[38;5;203m", // soft red beside violet
         Theme::Light => "\x1b[0;31m",
-        Theme::Mono  => "\x1b[1m",
+        Theme::Mono => "\x1b[1m",
     }
 }
 pub fn highlight() -> &'static str {
     match current() {
-        Theme::Iris  => "\x1b[38;5;183m",   // lavender
+        Theme::Iris => "\x1b[38;5;183m", // lavender
         Theme::Light => "\x1b[0;35m",
-        Theme::Mono  => "",
+        Theme::Mono => "",
     }
 }
 #[allow(dead_code)]
 pub fn thinking() -> &'static str {
     match current() {
-        Theme::Iris  => "\x1b[2;38;5;98m",  // dim + medium violet
+        Theme::Iris => "\x1b[2;38;5;98m", // dim + medium violet
         Theme::Light => "\x1b[2;90m",
-        Theme::Mono  => "\x1b[2m",
+        Theme::Mono => "\x1b[2m",
     }
 }
 
 /// Iris-gradient stops for the logo block letters: deep violet at the top,
 /// fading to lavender at the bottom. Six stops match the 6-line block font.
 pub const IRIS_GRADIENT: &[&str] = &[
-    "\x1b[38;5;54m",   // deep violet
-    "\x1b[38;5;91m",   // royal purple
-    "\x1b[38;5;135m",  // bright violet
-    "\x1b[38;5;141m",  // soft violet
-    "\x1b[38;5;177m",  // light violet
-    "\x1b[38;5;183m",  // lavender
+    "\x1b[38;5;54m",  // deep violet
+    "\x1b[38;5;91m",  // royal purple
+    "\x1b[38;5;135m", // bright violet
+    "\x1b[38;5;141m", // soft violet
+    "\x1b[38;5;177m", // light violet
+    "\x1b[38;5;183m", // lavender
 ];
 
 /// Wrap `inner` with `prefix` and RESET. Convenience for short colored text.
 #[allow(dead_code)]
 pub fn paint(prefix: &str, inner: &str) -> String {
-    if prefix.is_empty() { return inner.to_string(); }
+    if prefix.is_empty() {
+        return inner.to_string();
+    }
     format!("{}{}{}", prefix, inner, RESET)
 }
 
@@ -151,7 +159,7 @@ mod tests {
     #[test]
     fn parse_accepts_aliases() {
         assert_eq!(Theme::parse("iris"), Some(Theme::Iris));
-        assert_eq!(Theme::parse("dark"), Some(Theme::Iris));    // dark aliases to iris
+        assert_eq!(Theme::parse("dark"), Some(Theme::Iris)); // dark aliases to iris
         assert_eq!(Theme::parse("violet"), Some(Theme::Iris));
         assert_eq!(Theme::parse("purple"), Some(Theme::Iris));
         assert_eq!(Theme::parse("Light"), Some(Theme::Light));
@@ -189,9 +197,21 @@ mod tests {
         let _g = TEST_LOCK.lock().unwrap();
         set_runtime(Theme::Iris);
         // Iris theme uses 256-color codes (\x1b[38;5;Nm), not 16-color (\x1b[0;Nm).
-        assert!(accent().contains("\x1b[38;5;141m"), "expected soft-violet accent, got {:?}", accent());
-        assert!(highlight().contains("\x1b[38;5;183m"), "expected lavender highlight, got {:?}", highlight());
-        assert!(warn().contains("\x1b[38;5;220m"), "expected gold warn, got {:?}", warn());
+        assert!(
+            accent().contains("\x1b[38;5;141m"),
+            "expected soft-violet accent, got {:?}",
+            accent()
+        );
+        assert!(
+            highlight().contains("\x1b[38;5;183m"),
+            "expected lavender highlight, got {:?}",
+            highlight()
+        );
+        assert!(
+            warn().contains("\x1b[38;5;220m"),
+            "expected gold warn, got {:?}",
+            warn()
+        );
         *RUNTIME_OVERRIDE.lock().unwrap() = None;
     }
 

@@ -16,16 +16,21 @@ const BLOCKS: &[char] = &[' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', 
 /// (within 0.001), returns a row of mid-block characters.
 #[allow(dead_code)]
 pub fn render(values: &[f64]) -> String {
-    if values.is_empty() { return String::new(); }
+    if values.is_empty() {
+        return String::new();
+    }
     let lo = values.iter().cloned().fold(f64::INFINITY, f64::min);
     let hi = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     if (hi - lo).abs() < 0.001 {
         return std::iter::repeat(BLOCKS[4]).take(values.len()).collect();
     }
-    values.iter().map(|v| {
-        let idx = ((v - lo) / (hi - lo) * 8.0).round() as usize;
-        BLOCKS[idx.min(8)]
-    }).collect()
+    values
+        .iter()
+        .map(|v| {
+            let idx = ((v - lo) / (hi - lo) * 8.0).round() as usize;
+            BLOCKS[idx.min(8)]
+        })
+        .collect()
 }
 
 /// Format a duration in seconds as "Ns ago" / "Nm ago" / "Nh ago" / "Nd ago".
@@ -34,9 +39,15 @@ pub fn render(values: &[f64]) -> String {
 /// for placeholder cases.
 #[allow(dead_code)]
 pub fn format_age(seconds: u64) -> String {
-    if seconds < 60 { return format!("{}s ago", seconds); }
-    if seconds < 3600 { return format!("{}m ago", seconds / 60); }
-    if seconds < 86400 { return format!("{}h ago", seconds / 3600); }
+    if seconds < 60 {
+        return format!("{}s ago", seconds);
+    }
+    if seconds < 3600 {
+        return format!("{}m ago", seconds / 60);
+    }
+    if seconds < 86400 {
+        return format!("{}h ago", seconds / 3600);
+    }
     format!("{}d ago", seconds / 86400)
 }
 
@@ -53,7 +64,11 @@ mod tests {
     fn render_constant_returns_mid_block_row() {
         let s = render(&[5.0, 5.0, 5.0]);
         assert_eq!(s.chars().count(), 3);
-        assert!(s.chars().all(|c| c == '▄'), "expected all mid-block, got: {:?}", s);
+        assert!(
+            s.chars().all(|c| c == '▄'),
+            "expected all mid-block, got: {:?}",
+            s
+        );
     }
 
     #[test]
@@ -75,8 +90,8 @@ mod tests {
     fn render_min_max_endpoints_are_low_and_high() {
         // Even with noise, the extremes should map to lowest/highest blocks.
         let s: Vec<char> = render(&[0.0, 0.5, 1.0, 0.25, 0.75]).chars().collect();
-        assert_eq!(s[0], ' ');  // 0.0 -> lowest
-        assert_eq!(s[2], '█');  // 1.0 -> highest
+        assert_eq!(s[0], ' '); // 0.0 -> lowest
+        assert_eq!(s[2], '█'); // 1.0 -> highest
     }
 
     #[test]

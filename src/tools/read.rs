@@ -36,9 +36,20 @@ pub fn tool() -> Tool {
 }
 
 async fn run(args: Value) -> Result<String> {
-    let path = args.get("path").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("read: missing path"))?.to_string();
-    let around = args.get("around").and_then(|v| v.as_u64()).map(|n| n as usize);
-    let context = args.get("context").and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(20);
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("read: missing path"))?
+        .to_string();
+    let around = args
+        .get("around")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+    let context = args
+        .get("context")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(20);
 
     // If `around` is set it takes precedence over offset/limit and we compute
     // [around - context, around + context] (clamped to >= 1).
@@ -47,8 +58,17 @@ async fn run(args: Value) -> Result<String> {
         let lim = (target - off) + context + 1; // inclusive of target line
         (off, lim)
     } else {
-        let off = args.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(1).max(1);
-        let lim = args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize).unwrap_or(DEFAULT_LIMIT);
+        let off = args
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(1)
+            .max(1);
+        let lim = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as usize)
+            .unwrap_or(DEFAULT_LIMIT);
         (off, lim)
     };
 
@@ -58,9 +78,14 @@ async fn run(args: Value) -> Result<String> {
         return Err(anyhow!("read: not a regular file: {}", p.display()));
     }
     if meta.len() > MAX_BYTES {
-        return Err(anyhow!("read: file is {} bytes (>1MB), refuse to read whole. Use offset/limit.", meta.len()));
+        return Err(anyhow!(
+            "read: file is {} bytes (>1MB), refuse to read whole. Use offset/limit.",
+            meta.len()
+        ));
     }
-    let mtime = meta.modified().ok()
+    let mtime = meta
+        .modified()
+        .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_secs())
         .unwrap_or(0);
@@ -83,9 +108,17 @@ async fn run(args: Value) -> Result<String> {
     for (idx, line) in content.lines().enumerate() {
         let lineno = idx + 1;
         total_lines = lineno;
-        if lineno < offset { continue; }
-        if emitted >= limit { break; }
-        let marker = if target_line == Some(lineno) { ">" } else { " " };
+        if lineno < offset {
+            continue;
+        }
+        if emitted >= limit {
+            break;
+        }
+        let marker = if target_line == Some(lineno) {
+            ">"
+        } else {
+            " "
+        };
         out.push_str(&format!("{}{:>5}\t{}\n", marker, lineno, line));
         emitted += 1;
     }
@@ -122,9 +155,17 @@ mod tests {
         let out = rt_run(json!({"path": p.to_string_lossy()})).unwrap();
         // Expected layout: leading marker char, 5-char right-just lineno, tab, content.
         assert!(out.contains("    1\tline1"), "missing line1 row:\n{}", out);
-        assert!(out.contains("   10\tline10"), "missing line10 row:\n{}", out);
+        assert!(
+            out.contains("   10\tline10"),
+            "missing line10 row:\n{}",
+            out
+        );
         // No `>` markers should appear when `around` is unset.
-        assert!(!out.contains(">"), "unexpected target marker without `around`:\n{}", out);
+        assert!(
+            !out.contains(">"),
+            "unexpected target marker without `around`:\n{}",
+            out
+        );
         let _ = std::fs::remove_file(&p);
     }
 
@@ -136,15 +177,36 @@ mod tests {
             "path": p.to_string_lossy(),
             "around": 25,
             "context": 3
-        })).unwrap();
+        }))
+        .unwrap();
         // Should include lines 22..=28 only.
-        assert!(out.contains("line22"), "missing leading context line22:\n{}", out);
+        assert!(
+            out.contains("line22"),
+            "missing leading context line22:\n{}",
+            out
+        );
         assert!(out.contains("line25"), "missing target line25:\n{}", out);
-        assert!(out.contains("line28"), "missing trailing context line28:\n{}", out);
-        assert!(!out.contains("line21"), "should NOT include line21:\n{}", out);
-        assert!(!out.contains("line29"), "should NOT include line29:\n{}", out);
+        assert!(
+            out.contains("line28"),
+            "missing trailing context line28:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("line21"),
+            "should NOT include line21:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("line29"),
+            "should NOT include line29:\n{}",
+            out
+        );
         // The target line should be marked with `>`.
-        assert!(out.contains(">   25\tline25"), "target marker missing:\n{}", out);
+        assert!(
+            out.contains(">   25\tline25"),
+            "target marker missing:\n{}",
+            out
+        );
         let _ = std::fs::remove_file(&p);
     }
 
@@ -157,9 +219,14 @@ mod tests {
             "path": p.to_string_lossy(),
             "around": 2,
             "context": 5
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(out.contains("line1"), "should include line1:\n{}", out);
-        assert!(out.contains("line2"), "should include target line2:\n{}", out);
+        assert!(
+            out.contains("line2"),
+            "should include target line2:\n{}",
+            out
+        );
         assert!(out.contains("line7"), "should include line7:\n{}", out);
         let _ = std::fs::remove_file(&p);
     }

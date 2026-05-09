@@ -3,7 +3,12 @@
 # Usage: curl -sSL https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh | sh
 # Env:
 #   IRIS_INSTALL_DIR  Override install directory (default: ~/.local/bin)
+#   IRIS_VERSION      Pin a specific version like "v0.1.0" (default: latest)
 #   NO_COLOR          Disable colored output if set to any value
+#
+# Native dependencies: a downloader (curl OR wget), tar, mkdir, chmod, uname,
+# sed, grep, awk, mktemp, find, head. All POSIX-standard on macOS and Linux.
+# Does NOT depend on `gh`, `jq`, or `python`.
 
 set -eu
 
@@ -28,6 +33,33 @@ ok()    { printf '%s OK%s %s\n' "$C_GREEN"  "$C_RESET" "$1"; }
 warn()  { printf '%swarn%s %s\n' "$C_YELLOW" "$C_RESET" "$1" >&2; }
 die()   { printf '%serror%s %s\n' "$C_RED"  "$C_RESET" "$1" >&2; exit 1; }
 
+# --- Pick a downloader: prefer curl, fall back to wget ---
+if command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+elif command -v wget >/dev/null 2>&1; then
+    DOWNLOADER="wget"
+else
+    die "neither curl nor wget is installed. Install one and retry."
+fi
+
+# fetch_to <url> <dest>: download into a file, exit non-zero on HTTP error
+fetch_to() {
+    if [ "$DOWNLOADER" = "curl" ]; then
+        curl -fsSL -o "$2" "$1"
+    else
+        wget -q -O "$2" "$1"
+    fi
+}
+
+# fetch_stdout <url>: print to stdout, exit non-zero on HTTP error
+fetch_stdout() {
+    if [ "$DOWNLOADER" = "curl" ]; then
+        curl -fsSL "$1"
+    else
+        wget -q -O - "$1"
+    fi
+}
+
 # --- Detect platform ---
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$OS" in
@@ -43,27 +75,25 @@ case "$ARCH" in
     *) die "unsupported arch: $ARCH (only arm64 and x86_64 are supported)" ;;
 esac
 
-info "Detected platform: ${C_BOLD}${OS}-${ARCH}${C_RESET}"
+info "Detected platform: ${C_BOLD}${OS}-${ARCH}${C_RESET} (using ${DOWNLOADER})"
 
 # --- Required tools ---
-command -v curl >/dev/null 2>&1 || die "curl is required but not found"
 command -v tar  >/dev/null 2>&1 || die "tar is required but not found"
 
-# --- Resolve latest release tag ---
-info "Fetching latest release metadata for ${REPO}"
-if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    RELEASE_JSON="$(gh api "repos/${REPO}/releases/latest" 2>/dev/null)" \
-        || die "failed to fetch latest release via gh"
+# --- Resolve version: IRIS_VERSION pin, or latest from the GitHub REST API ---
+if [ -n "${IRIS_VERSION:-}" ]; then
+    VERSION="$IRIS_VERSION"
+    info "Pinned version: ${C_BOLD}${VERSION}${C_RESET}"
 else
-    RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")" \
+    info "Fetching latest release metadata for ${REPO}"
+    RELEASE_JSON="$(fetch_stdout "https://api.github.com/repos/${REPO}/releases/latest")" \
         || die "failed to fetch latest release from GitHub API"
+    # Extract tag_name (e.g. "v0.1.0") - portable grep/sed, no jq dependency
+    VERSION="$(printf '%s' "$RELEASE_JSON" \
+        | grep -m1 '"tag_name"' \
+        | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+    [ -n "$VERSION" ] || die "could not parse release tag from API response"
 fi
-
-# Extract tag_name (e.g. "v0.1.0") - portable grep/sed, no jq dependency
-VERSION="$(printf '%s' "$RELEASE_JSON" \
-    | grep -m1 '"tag_name"' \
-    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
-[ -n "$VERSION" ] || die "could not parse release tag from API response"
 
 ARTIFACT="${BIN_NAME}-${VERSION}-${OS}-${ARCH}.tar.gz"
 CHECKSUM="${ARTIFACT}.sha256"
@@ -77,11 +107,11 @@ trap 'rm -rf "$TMPDIR_X"' EXIT INT TERM
 
 # --- Download artifact ---
 info "Downloading ${BASE_URL}/${ARTIFACT}"
-curl -fsSL -o "${TMPDIR_X}/${ARTIFACT}" "${BASE_URL}/${ARTIFACT}" \
+fetch_to "${BASE_URL}/${ARTIFACT}" "${TMPDIR_X}/${ARTIFACT}" \
     || die "failed to download ${ARTIFACT}"
 
 # --- Verify SHA256 if sibling .sha256 exists ---
-if curl -fsSL -o "${TMPDIR_X}/${CHECKSUM}" "${BASE_URL}/${CHECKSUM}" 2>/dev/null; then
+if fetch_to "${BASE_URL}/${CHECKSUM}" "${TMPDIR_X}/${CHECKSUM}" 2>/dev/null; then
     info "Verifying SHA256 checksum"
     EXPECTED="$(awk '{print $1}' "${TMPDIR_X}/${CHECKSUM}")"
     if command -v shasum >/dev/null 2>&1; then
@@ -133,5 +163,7 @@ case ":${PATH}:" in
 esac
 
 # --- Done ---
-printf '\n%s%s installed%s %s\n' "$C_GREEN$C_BOLD" "$BIN_NAME $VERSION" "$C_RESET" ""
-printf 'Run %s%s --help%s to get started.\n' "$C_BOLD" "$BIN_NAME" "$C_RESET"
+printf '\n%s%s installed%s\n' "$C_GREEN$C_BOLD" "$BIN_NAME $VERSION" "$C_RESET"
+printf 'Run %s%s --help%s to get started, or %s%s%s for the chat REPL.\n' \
+    "$C_BOLD" "$BIN_NAME" "$C_RESET" \
+    "$C_BOLD" "$BIN_NAME" "$C_RESET"

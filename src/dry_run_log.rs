@@ -23,7 +23,11 @@ pub fn record(kind: &'static str, target: impl Into<String>) {
 
 pub fn record_with_bytes(kind: &'static str, target: impl Into<String>, bytes: u64) {
     if let Ok(mut g) = LOG.lock() {
-        g.push(WouldChange { kind, target: target.into(), bytes });
+        g.push(WouldChange {
+            kind,
+            target: target.into(),
+            bytes,
+        });
     }
 }
 
@@ -36,7 +40,9 @@ pub fn drain() -> Vec<WouldChange> {
 
 #[allow(dead_code)]
 pub fn is_active() -> bool {
-    std::env::var("MLX_CODE_DRY_RUN").map(|v| v == "1").unwrap_or(false)
+    std::env::var("MLX_CODE_DRY_RUN")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 /// Test-only serialization guard for the `MLX_CODE_DRY_RUN` env var. Tests

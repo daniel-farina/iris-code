@@ -27,22 +27,22 @@ const BLOCK: &[&str] = &[
 /// per-row coloring: standards/falls in lavender-purple, beard in gold,
 /// stem in green, base in dim.
 const FLOWER: &[(&str, &str)] = &[
-    (" ╲▎│▎╱ ",  "lavender"),
-    (" ▎▎│▎▎ ",  "violet_top"),
+    (" ╲▎│▎╱ ", "lavender"),
+    (" ▎▎│▎▎ ", "violet_top"),
     ("─◆─◆─◆─", "gold"),
-    (" ╱▎│▎╲ ",  "violet_bot"),
-    ("   │   ",  "stem"),
-    ("  ─┴─  ",  "stem_dim"),
+    (" ╱▎│▎╲ ", "violet_bot"),
+    ("   │   ", "stem"),
+    ("  ─┴─  ", "stem_dim"),
 ];
 
 fn role_to_ansi(role: &str) -> &'static str {
     match role {
-        "lavender"   => "\x1b[38;5;183m",
+        "lavender" => "\x1b[38;5;183m",
         "violet_top" => "\x1b[38;5;141m",
         "violet_bot" => "\x1b[38;5;91m",
-        "gold"       => "\x1b[38;5;220m",
-        "stem"       => "\x1b[38;5;108m",  // soft sage green
-        "stem_dim"   => "\x1b[2;38;5;108m",
+        "gold" => "\x1b[38;5;220m",
+        "stem" => "\x1b[38;5;108m", // soft sage green
+        "stem_dim" => "\x1b[2;38;5;108m",
         _ => "",
     }
 }
@@ -51,9 +51,21 @@ fn role_to_ansi(role: &str) -> &'static str {
 /// `--quiet` / `MLX_CODE_NO_PRETTY=1`, or explicit `IRIS_NO_LOGO=1`.
 pub fn enabled() -> bool {
     use std::io::IsTerminal;
-    if !std::io::stderr().is_terminal() { return false; }
-    if std::env::var("IRIS_NO_LOGO").map(|v| v == "1").unwrap_or(false) { return false; }
-    if std::env::var("MLX_CODE_NO_PRETTY").map(|v| v == "1").unwrap_or(false) { return false; }
+    if !std::io::stderr().is_terminal() {
+        return false;
+    }
+    if std::env::var("IRIS_NO_LOGO")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    if std::env::var("MLX_CODE_NO_PRETTY")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
+        return false;
+    }
     true
 }
 
@@ -61,7 +73,9 @@ pub fn enabled() -> bool {
 /// every time it's called - the caller decides when (typically once at
 /// chat-mode start).
 pub fn print() {
-    if !enabled() { return; }
+    if !enabled() {
+        return;
+    }
     let dim = theme::dim();
     let acc = theme::accent();
     let r = RESET;
@@ -82,7 +96,9 @@ pub fn print() {
     eprintln!();
     eprintln!(
         "                  {dim}─ a lean coding agent · {a}MTPLX{dim} · qwen3.6-27b ─{r}",
-        dim = dim, a = acc, r = r,
+        dim = dim,
+        a = acc,
+        r = r,
     );
     eprintln!();
 }
@@ -98,7 +114,11 @@ mod tests {
 
     #[test]
     fn flower_has_6_rows_matching_block() {
-        assert_eq!(FLOWER.len(), BLOCK.len(), "flower must align with block letters");
+        assert_eq!(
+            FLOWER.len(),
+            BLOCK.len(),
+            "flower must align with block letters"
+        );
     }
 
     #[test]
@@ -112,8 +132,19 @@ mod tests {
 
     #[test]
     fn role_to_ansi_known_roles_return_nonempty() {
-        for role in &["lavender", "violet_top", "violet_bot", "gold", "stem", "stem_dim"] {
-            assert!(!role_to_ansi(role).is_empty(), "expected ANSI for role {}", role);
+        for role in &[
+            "lavender",
+            "violet_top",
+            "violet_bot",
+            "gold",
+            "stem",
+            "stem_dim",
+        ] {
+            assert!(
+                !role_to_ansi(role).is_empty(),
+                "expected ANSI for role {}",
+                role
+            );
         }
         // Unknown role -> empty.
         assert_eq!(role_to_ansi("unknown_role"), "");

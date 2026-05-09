@@ -6,16 +6,16 @@
 use anyhow::Result;
 use serde_json::Value;
 
-pub mod read;
-pub mod grep;
-pub mod edit;
 pub mod bash;
-pub mod list;
-pub mod glob;
-pub mod search;
 pub mod diff;
-pub mod tree;
+pub mod edit;
+pub mod glob;
+pub mod grep;
+pub mod list;
 pub mod peek_log;
+pub mod read;
+pub mod search;
+pub mod tree;
 
 pub struct Tool {
     pub name: &'static str,

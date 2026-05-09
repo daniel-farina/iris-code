@@ -9,9 +9,9 @@
 //! On drop / panic / Ctrl-C the scroll region is restored and the cursor
 //! moved past the bar so subsequent shell prompts don't overwrite it.
 
+use once_cell::sync::Lazy;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -25,21 +25,32 @@ static HEIGHT: Lazy<Mutex<u16>> = Lazy::new(|| Mutex::new(0));
 pub fn supported() -> bool {
     use std::io::IsTerminal;
     std::io::stderr().is_terminal()
-        && std::env::var("MLX_CODE_NO_STICKY").map(|v| v != "1").unwrap_or(true)
-        && std::env::var("MLX_CODE_NO_LIVE_TPS").map(|v| v != "1").unwrap_or(true)
+        && std::env::var("MLX_CODE_NO_STICKY")
+            .map(|v| v != "1")
+            .unwrap_or(true)
+        && std::env::var("MLX_CODE_NO_LIVE_TPS")
+            .map(|v| v != "1")
+            .unwrap_or(true)
 }
 
 /// Install the scroll region. Idempotent; safe to call multiple times.
 /// Returns true if the region was activated (i.e. supported and not already on).
 pub fn enter() -> bool {
-    if !supported() { return false; }
-    if ACTIVE.swap(true, Ordering::SeqCst) { return true; }
+    if !supported() {
+        return false;
+    }
+    if ACTIVE.swap(true, Ordering::SeqCst) {
+        return true;
+    }
     install_safety_guard();
     let (cols, rows) = match terminal_size::terminal_size() {
         Some((terminal_size::Width(w), terminal_size::Height(h))) => (w, h),
         None => return false,
     };
-    if rows < 5 { ACTIVE.store(false, Ordering::SeqCst); return false; }
+    if rows < 5 {
+        ACTIVE.store(false, Ordering::SeqCst);
+        return false;
+    }
     *HEIGHT.lock().unwrap() = rows;
     let _ = cols; // not used, but kept for future right-aligned text
     let mut err = std::io::stderr();
@@ -61,15 +72,14 @@ pub fn paint_bottom(raw: &str, visible_len: usize) {
 /// Paint primary text on the left and right-aligned secondary text
 /// (e.g. cache hit rate) at the same row. If they would collide given the
 /// current terminal width, the right chunk is silently dropped.
-pub fn paint_bottom_with_right(
-    left: &str,
-    left_visible: usize,
-    right: &str,
-    right_visible: usize,
-) {
-    if !ACTIVE.load(Ordering::SeqCst) { return; }
+pub fn paint_bottom_with_right(left: &str, left_visible: usize, right: &str, right_visible: usize) {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return;
+    }
     let h = *HEIGHT.lock().unwrap();
-    if h == 0 { return; }
+    if h == 0 {
+        return;
+    }
     let cols = terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
         .unwrap_or(80);
@@ -89,7 +99,9 @@ pub fn paint_bottom_with_right(
 /// Restore the scrolling region to the full screen and move cursor below
 /// the (now-released) reserved row so a subsequent shell prompt lands cleanly.
 pub fn leave() {
-    if !ACTIVE.swap(false, Ordering::SeqCst) { return; }
+    if !ACTIVE.swap(false, Ordering::SeqCst) {
+        return;
+    }
     let h = *HEIGHT.lock().unwrap();
     let mut err = std::io::stderr();
     // Reset scroll region to full screen.
@@ -104,7 +116,9 @@ pub fn leave() {
 /// Install Drop-style safety: panic hook + Ctrl-C handler that resets
 /// the scroll region so the user's terminal isn't left in a weird state.
 fn install_safety_guard() {
-    if GUARD_INSTALLED.swap(true, Ordering::SeqCst) { return; }
+    if GUARD_INSTALLED.swap(true, Ordering::SeqCst) {
+        return;
+    }
     // Panic hook: chain after the existing one, but reset region first.
     let prior = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -112,7 +126,9 @@ fn install_safety_guard() {
         prior(info);
     }));
     // SIGINT/SIGTERM via a tokio task; falls back to no-op if reactor isn't up.
-    if let Ok(mut sigint) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+    if let Ok(mut sigint) =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+    {
         tokio::spawn(async move {
             sigint.recv().await;
             leave();

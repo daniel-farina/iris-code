@@ -102,7 +102,11 @@ pub async fn run_wizard(url: &str) -> Result<bool> {
     eprintln!();
     eprintln!("  models:");
     for (i, m) in models.iter().take(5).enumerate() {
-        let mark = if i == 0 { format!("{g}*{r}") } else { format!(" ") };
+        let mark = if i == 0 {
+            format!("{g}*{r}")
+        } else {
+            format!(" ")
+        };
         eprintln!("    {} {a}{m}{r}", mark, a = a, r = r, m = m);
     }
     if models.len() > 5 {
@@ -145,8 +149,13 @@ async fn list_models(url: &str) -> Result<Vec<String>> {
         .build()?;
     let r = client.get(&endpoint).send().await?;
     let body: serde_json::Value = r.json().await?;
-    let arr = body.get("data").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    Ok(arr.iter()
+    let arr = body
+        .get("data")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(arr
+        .iter()
         .filter_map(|m| m.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()))
         .collect())
 }
@@ -195,13 +204,23 @@ fn render_progress(done: u64, total: Option<u64>) {
         _ => 0.0,
     };
     let filled = (pct * width as f64) as usize;
-    let bar: String = (0..width).map(|i| if i < filled { blocks[0] } else { ' ' }).collect();
+    let bar: String = (0..width)
+        .map(|i| if i < filled { blocks[0] } else { ' ' })
+        .collect();
     let mb = done as f64 / 1024.0 / 1024.0;
-    let total_str = total.map(|t| format!("/{:.1} MB", t as f64 / 1024.0 / 1024.0)).unwrap_or_default();
+    let total_str = total
+        .map(|t| format!("/{:.1} MB", t as f64 / 1024.0 / 1024.0))
+        .unwrap_or_default();
     eprint!(
         "\r  {d}[{a}{bar}{d}]{r} {g}{pct:5.1}%{r} {mb:.1} MB{total_str}",
-        d = dim(), a = accent(), g = good(), r = RESET,
-        bar = bar, pct = pct * 100.0, mb = mb, total_str = total_str,
+        d = dim(),
+        a = accent(),
+        g = good(),
+        r = RESET,
+        bar = bar,
+        pct = pct * 100.0,
+        mb = mb,
+        total_str = total_str,
     );
     let _ = std::io::stderr().flush();
 }

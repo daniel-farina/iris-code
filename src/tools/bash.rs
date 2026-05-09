@@ -32,15 +32,25 @@ pub fn tool() -> Tool {
 }
 
 async fn run(args: Value) -> Result<String> {
-    let command = args.get("command").and_then(|v| v.as_str()).ok_or_else(|| anyhow!("bash: missing command"))?.to_string();
+    let command = args
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("bash: missing command"))?
+        .to_string();
     let secs = args.get("timeout_s").and_then(|v| v.as_u64()).unwrap_or(30);
 
     // Agent-loop dry_run: bash command runs are mutation-shaped from the
     // model's perspective (could touch the filesystem, network, processes).
     // Skip execution and report what would have run.
-    if std::env::var("MLX_CODE_DRY_RUN").map(|v| v == "1").unwrap_or(false) {
+    if std::env::var("MLX_CODE_DRY_RUN")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+    {
         crate::dry_run_log::record("bash", command.clone());
-        return Ok(format!("(dry_run) would run: {}\n[exit dry_run]\n", command));
+        return Ok(format!(
+            "(dry_run) would run: {}\n[exit dry_run]\n",
+            command
+        ));
     }
 
     let mut cmd = Command::new("zsh");
@@ -55,22 +65,35 @@ async fn run(args: Value) -> Result<String> {
     };
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let code = out.status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into());
+    let code = out
+        .status
+        .code()
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "signal".into());
     let mut buf = String::new();
     buf.push_str(&format!("$ {}\n", command));
     buf.push_str(&stdout);
     if !stderr.is_empty() {
-        if !buf.ends_with('\n') { buf.push('\n'); }
+        if !buf.ends_with('\n') {
+            buf.push('\n');
+        }
         buf.push_str("--- stderr ---\n");
         buf.push_str(&stderr);
     }
-    if !buf.ends_with('\n') { buf.push('\n'); }
+    if !buf.ends_with('\n') {
+        buf.push('\n');
+    }
     buf.push_str(&format!("[exit {}]\n", code));
     // Truncate huge outputs to keep context manageable.
     if buf.len() > 16_000 {
         let head = &buf[..8_000];
         let tail = &buf[buf.len() - 4_000..];
-        buf = format!("{}\n... [truncated {} bytes] ...\n{}", head, buf.len() - 12_000, tail);
+        buf = format!(
+            "{}\n... [truncated {} bytes] ...\n{}",
+            head,
+            buf.len() - 12_000,
+            tail
+        );
     }
     Ok(buf)
 }
@@ -92,9 +115,21 @@ mod tests {
         std::env::set_var("MLX_CODE_DRY_RUN", "1");
         let res = rt_run(serde_json::json!({"command": "exit 7"})).unwrap();
         std::env::remove_var("MLX_CODE_DRY_RUN");
-        assert!(res.contains("(dry_run) would run: exit 7"), "unexpected dry_run output:\n{}", res);
+        assert!(
+            res.contains("(dry_run) would run: exit 7"),
+            "unexpected dry_run output:\n{}",
+            res
+        );
         // Crucially: the actual exit-7 marker that bash would emit must NOT be present.
-        assert!(!res.contains("[exit 7]"), "command was actually executed:\n{}", res);
-        assert!(res.contains("[exit dry_run]"), "missing dry_run exit marker:\n{}", res);
+        assert!(
+            !res.contains("[exit 7]"),
+            "command was actually executed:\n{}",
+            res
+        );
+        assert!(
+            res.contains("[exit dry_run]"),
+            "missing dry_run exit marker:\n{}",
+            res
+        );
     }
 }

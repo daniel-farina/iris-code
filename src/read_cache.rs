@@ -25,7 +25,11 @@ static CACHE: Lazy<Mutex<HashMap<PathBuf, Entry>>> = Lazy::new(|| Mutex::new(Has
 
 /// Hits, misses, invalidations. Useful for `--inspect-prompt`-style introspection.
 #[derive(Default, Debug, Clone, Copy)]
-pub struct Stats { pub hits: u64, pub misses: u64, pub invalidations: u64 }
+pub struct Stats {
+    pub hits: u64,
+    pub misses: u64,
+    pub invalidations: u64,
+}
 static STATS: Lazy<Mutex<Stats>> = Lazy::new(|| Mutex::new(Stats::default()));
 
 /// Try the cache. On hit, returns the content; on miss, returns None.
@@ -35,7 +39,9 @@ pub fn get(path: &Path, mtime: u64, size: u64) -> Option<String> {
     let cache = CACHE.lock().ok()?;
     let entry = cache.get(&key)?;
     if entry.mtime == mtime && entry.size == size {
-        if let Ok(mut s) = STATS.lock() { s.hits += 1; }
+        if let Ok(mut s) = STATS.lock() {
+            s.hits += 1;
+        }
         Some(entry.content.clone())
     } else {
         // Stale. Drop the lock so put() can grab it cleanly.
@@ -46,8 +52,17 @@ pub fn get(path: &Path, mtime: u64, size: u64) -> Option<String> {
 pub fn put(path: &Path, mtime: u64, size: u64, content: String) {
     let key = path.to_path_buf();
     if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(key, Entry { mtime, size, content });
-        if let Ok(mut s) = STATS.lock() { s.misses += 1; }
+        cache.insert(
+            key,
+            Entry {
+                mtime,
+                size,
+                content,
+            },
+        );
+        if let Ok(mut s) = STATS.lock() {
+            s.misses += 1;
+        }
     }
 }
 
@@ -57,7 +72,9 @@ pub fn invalidate(path: &Path) {
     let key = path.to_path_buf();
     if let Ok(mut cache) = CACHE.lock() {
         if cache.remove(&key).is_some() {
-            if let Ok(mut s) = STATS.lock() { s.invalidations += 1; }
+            if let Ok(mut s) = STATS.lock() {
+                s.invalidations += 1;
+            }
         }
     }
 }
@@ -65,8 +82,12 @@ pub fn invalidate(path: &Path) {
 /// Clear the entire cache. Used by tests.
 #[allow(dead_code)]
 pub fn clear() {
-    if let Ok(mut cache) = CACHE.lock() { cache.clear(); }
-    if let Ok(mut s) = STATS.lock() { *s = Stats::default(); }
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.clear();
+    }
+    if let Ok(mut s) = STATS.lock() {
+        *s = Stats::default();
+    }
 }
 
 pub fn stats() -> Stats {
@@ -80,7 +101,10 @@ pub fn len() -> usize {
 
 /// Sum of bytes held in cached String content. Approximation of memory cost.
 pub fn bytes_held() -> u64 {
-    CACHE.lock().map(|c| c.values().map(|e| e.content.len() as u64).sum()).unwrap_or(0)
+    CACHE
+        .lock()
+        .map(|c| c.values().map(|e| e.content.len() as u64).sum())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -99,13 +123,21 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mlx-readcache-{}.txt", std::process::id()));
         std::fs::write(&p, "alpha\n").unwrap();
         let meta = std::fs::metadata(&p).unwrap();
-        let mtime = meta.modified().unwrap()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let mtime = meta
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let size = meta.len();
 
         assert!(get(&p, mtime, size).is_none(), "fresh cache should miss");
         put(&p, mtime, size, "alpha\n".into());
-        assert_eq!(get(&p, mtime, size).as_deref(), Some("alpha\n"), "should hit");
+        assert_eq!(
+            get(&p, mtime, size).as_deref(),
+            Some("alpha\n"),
+            "should hit"
+        );
 
         let s = stats();
         assert!(s.hits >= 1);
@@ -122,7 +154,12 @@ mod tests {
         let p = std::env::temp_dir().join(format!("mlx-readcache-mt-{}.txt", std::process::id()));
         std::fs::write(&p, "before\n").unwrap();
         let m1 = std::fs::metadata(&p).unwrap();
-        let mt1 = m1.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let mt1 = m1
+            .modified()
+            .unwrap()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let sz1 = m1.len();
         put(&p, mt1, sz1, "before\n".into());
         assert!(get(&p, mt1, sz1).is_some());

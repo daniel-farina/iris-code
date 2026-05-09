@@ -28,7 +28,10 @@ pub fn tool() -> Tool {
 }
 
 async fn run(args: Value) -> Result<String> {
-    let path = args.get("path").and_then(|v| v.as_str()).map(|s| PathBuf::from(shellexpand::tilde(s).into_owned()))
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .map(|s| PathBuf::from(shellexpand::tilde(s).into_owned()))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     let read = std::fs::read_dir(&path).with_context(|| format!("readdir {}", path.display()))?;
     let mut entries: Vec<(String, String, u64)> = Vec::new();
@@ -36,9 +39,13 @@ async fn run(args: Value) -> Result<String> {
         let Ok(e) = e else { continue };
         let name = e.file_name().to_string_lossy().to_string();
         let ft = e.file_type().ok();
-        let kind = if ft.as_ref().map(|f| f.is_dir()).unwrap_or(false) { "dir" }
-                   else if ft.as_ref().map(|f| f.is_symlink()).unwrap_or(false) { "link" }
-                   else { "file" };
+        let kind = if ft.as_ref().map(|f| f.is_dir()).unwrap_or(false) {
+            "dir"
+        } else if ft.as_ref().map(|f| f.is_symlink()).unwrap_or(false) {
+            "link"
+        } else {
+            "file"
+        };
         let size = e.metadata().map(|m| m.len()).unwrap_or(0);
         entries.push((kind.to_string(), name, size));
     }
