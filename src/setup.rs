@@ -892,21 +892,32 @@ async fn ensure_model_weights(venv_python: &Path) -> bool {
         }
     }
 
-    // huggingface_hub ships a `huggingface-cli` binary in the venv's bin dir
-    // when it's installed (it's a transitive dep of MTPLX). Prefer that over
-    // `python -m huggingface_hub.commands.huggingface_cli` because the
-    // `commands` submodule was restructured in newer huggingface_hub releases
-    // and `python -m huggingface_hub.commands.huggingface_cli` now fails with
-    // ModuleNotFoundError. The binary has a stable entry point.
+    // huggingface_hub's CLI surface has churned across versions:
+    //   - older: `python -m huggingface_hub.commands.huggingface_cli` (gone)
+    //   - middle: `<venv>/bin/huggingface-cli` (deprecated; in newest
+    //     releases this script just prints a banner and exits non-zero)
+    //   - newest: `<venv>/bin/hf` (the new entry point)
     //
-    // If the binary is missing for any reason, fall back to calling
-    // `huggingface_hub.snapshot_download()` directly via `python -c` -
-    // that's the underlying API the CLI wraps and it's been stable since
-    // huggingface_hub 0.10.
+    // We try `hf` first, then `huggingface-cli`, then a `python -c` that
+    // calls `snapshot_download` directly (works on every version of
+    // huggingface_hub since 0.10 - tqdm progress streams by default).
     let venv_bin = venv_python.parent().map(|p| p.to_path_buf());
-    let hf_cli_binary = venv_bin.as_ref().map(|b| b.join("huggingface-cli"));
+    let hf_new = venv_bin.as_ref().map(|b| b.join("hf"));
+    let hf_old = venv_bin.as_ref().map(|b| b.join("huggingface-cli"));
 
-    let status = if let Some(cli) = hf_cli_binary.as_ref().filter(|p| p.exists()) {
+    let status = if let Some(cli) = hf_new.as_ref().filter(|p| p.exists()) {
+        std::process::Command::new(cli)
+            .args([
+                "download",
+                DEFAULT_MODEL_HF_ID,
+                "--local-dir",
+                model_dir.to_string_lossy().as_ref(),
+            ])
+            .status()
+    } else if let Some(cli) = hf_old.as_ref().filter(|p| p.exists()) {
+        // The deprecated wrapper exits non-zero on newest huggingface_hub
+        // releases, so this branch effectively only succeeds on older ones.
+        // It's still worth trying for users who pinned an older version.
         std::process::Command::new(cli)
             .args([
                 "download",
@@ -916,9 +927,7 @@ async fn ensure_model_weights(venv_python: &Path) -> bool {
             ])
             .status()
     } else {
-        // Fallback path: drive snapshot_download from a one-liner. This works
-        // on any huggingface_hub version that exposes snapshot_download (all
-        // currently-supported releases). tqdm progress bars stream by default.
+        // Last resort: drive snapshot_download from a one-liner.
         let py_snippet = format!(
             "from huggingface_hub import snapshot_download; \
              snapshot_download(repo_id={:?}, local_dir={:?})",
@@ -928,6 +937,26 @@ async fn ensure_model_weights(venv_python: &Path) -> bool {
         std::process::Command::new(venv_python)
             .args(["-c", &py_snippet])
             .status()
+    };
+
+    // If the first attempt failed AND we hit the deprecated `huggingface-cli`
+    // wrapper, retry via the snapshot_download fallback. This catches the
+    // exact case the user hit: hf binary not on PATH (older venv) but
+    // `huggingface-cli` exists and only prints a deprecation banner.
+    let status = match status {
+        Ok(s) if !s.success() && hf_new.as_ref().is_none_or(|p| !p.exists()) => {
+            eprintln!("  {d}retrying via snapshot_download (CLI shim was deprecated){r}");
+            let py_snippet = format!(
+                "from huggingface_hub import snapshot_download; \
+                 snapshot_download(repo_id={:?}, local_dir={:?})",
+                DEFAULT_MODEL_HF_ID,
+                model_dir.to_string_lossy().as_ref(),
+            );
+            std::process::Command::new(venv_python)
+                .args(["-c", &py_snippet])
+                .status()
+        }
+        other => other,
     };
 
     match status {
