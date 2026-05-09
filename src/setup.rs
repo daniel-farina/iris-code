@@ -595,14 +595,67 @@ fn ensure_prerequisites() -> bool {
         missing.push("git");
     }
 
-    // python3
+    // python3 - MTPLX requires >=3.11. We don't just check that *some* python
+    // is on PATH; we check that one of them is new enough, otherwise pip
+    // install -e . will fail late with "requires a different Python: 3.10.x".
     eprint!("    {d}python3{r}");
     let _ = std::io::stderr().flush();
-    if which_exists("python3") || which_exists("python") {
-        eprintln!(" {g}OK{r}");
-    } else {
-        eprintln!(" {w}MISSING{r}");
-        missing.push("python3");
+    let mut py311 = find_compatible_python();
+    match &py311 {
+        Some(name) => {
+            if let Some((maj, min)) = python_version_of(name) {
+                eprintln!(" {g}OK{r} {d}({} - {}.{}.x){r}", name, maj, min);
+            } else {
+                eprintln!(" {g}OK{r} {d}({}){r}", name);
+            }
+        }
+        None => {
+            // Python is installed but too old, OR no python at all.
+            let any_python = which_exists("python3") || which_exists("python");
+            if any_python {
+                let cur = python_version_of(python_cmd())
+                    .map(|(a, b)| format!("{}.{}", a, b))
+                    .unwrap_or_else(|| "unknown".into());
+                eprintln!(
+                    " {w}TOO OLD{r} {d}(found {} {}, MTPLX needs >=3.{}){r}",
+                    python_cmd(),
+                    cur,
+                    MTPLX_MIN_PY_MINOR
+                );
+                if cfg!(target_os = "macos") && which_exists("brew") {
+                    eprintln!();
+                    if ask_yes_no(
+                        "install Python 3.12 via Homebrew now? (`brew install python@3.12`)",
+                        true,
+                    ) {
+                        py311 = try_brew_install_python();
+                    }
+                }
+                if py311.is_none() {
+                    eprintln!();
+                    eprintln!(
+                        "    {d}MTPLX needs Python >=3.{}. Options:{r}",
+                        MTPLX_MIN_PY_MINOR
+                    );
+                    if cfg!(target_os = "macos") {
+                        eprintln!("      {a}brew install python@3.12{r}");
+                        eprintln!(
+                            "      {a}curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12{r}"
+                        );
+                    } else {
+                        eprintln!("      {a}sudo apt-get install -y python3.12 python3.12-venv{r}");
+                        eprintln!("      {a}sudo dnf install -y python3.12{r}");
+                        eprintln!(
+                            "      {a}curl -LsSf https://astral.sh/uv/install.sh | sh && uv python install 3.12{r}"
+                        );
+                    }
+                    return false;
+                }
+            } else {
+                eprintln!(" {w}MISSING{r}");
+                missing.push("python3");
+            }
+        }
     }
 
     // pip - check via `python3 -m pip --version` since `pip` may not be on PATH
@@ -681,6 +734,103 @@ fn python_cmd() -> &'static str {
         "python3"
     } else {
         "python"
+    }
+}
+
+/// Minimum Python version MTPLX accepts (matches the `requires-python = ">=3.11"`
+/// in MTPLX's pyproject.toml). When this is bumped upstream, bump it here too
+/// so the wizard's preflight matches what pip will accept.
+const MTPLX_MIN_PY_MINOR: u32 = 11;
+
+/// Run `<binary> --version`, parse output like "Python 3.12.4", return (major, minor).
+/// Returns None on any failure (binary missing, garbled output, parse error).
+fn python_version_of(binary: &str) -> Option<(u32, u32)> {
+    let out = std::process::Command::new(binary)
+        .arg("--version")
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // `python --version` writes to stdout on 3.4+, but older versions wrote to
+    // stderr. Concatenate both to be safe.
+    let mut s = String::from_utf8_lossy(&out.stdout).to_string();
+    s.push_str(&String::from_utf8_lossy(&out.stderr));
+    let s = s.trim();
+    let rest = s.strip_prefix("Python ")?;
+    let mut parts = rest.split('.');
+    let maj: u32 = parts.next()?.parse().ok()?;
+    let min: u32 = parts.next()?.split_whitespace().next()?.parse().ok()?;
+    Some((maj, min))
+}
+
+/// Find a Python ≥ 3.{MTPLX_MIN_PY_MINOR} on PATH. Probes minor-versioned
+/// binaries first (`python3.13`, `python3.12`, `python3.11`) since those are
+/// stable identifiers, then falls back to whatever `python3` / `python` resolve
+/// to and version-checks them.
+///
+/// Returns the binary name (e.g. `"python3.12"`) or None if nothing on PATH
+/// satisfies the minimum.
+fn find_compatible_python() -> Option<String> {
+    // Probe newest-to-oldest so we prefer the freshest interpreter when the
+    // user has multiple installed (common with `brew install python@3.11`
+    // alongside an older system python). Cap at 3.20 so the loop terminates
+    // even if Python 4 ships before someone updates this.
+    for minor in (MTPLX_MIN_PY_MINOR..=20).rev() {
+        let name = format!("python3.{}", minor);
+        if which_exists(&name) {
+            if let Some((3, m)) = python_version_of(&name) {
+                if m >= MTPLX_MIN_PY_MINOR {
+                    return Some(name);
+                }
+            }
+        }
+    }
+    // Fallback: maybe `python3` or `python` is fresh enough but not exposed
+    // under a minor-versioned name (some distros do this).
+    for cand in ["python3", "python"] {
+        if which_exists(cand) {
+            if let Some((3, m)) = python_version_of(cand) {
+                if m >= MTPLX_MIN_PY_MINOR {
+                    return Some(cand.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Try to install Python ≥ 3.11 via `brew install python@3.12`. macOS only.
+/// Returns Some(binary_name) on success, None on failure or non-macos.
+fn try_brew_install_python() -> Option<String> {
+    if !cfg!(target_os = "macos") || !which_exists("brew") {
+        return None;
+    }
+    let d = theme::dim();
+    let g = theme::good();
+    let w = theme::warn();
+    let r = RESET;
+    eprintln!();
+    eprintln!("  {d}running `brew install python@3.12` (this may take a few minutes)...{r}");
+    let status = std::process::Command::new("brew")
+        .args(["install", "python@3.12"])
+        .status();
+    match status {
+        Ok(s) if s.success() => {
+            eprintln!("  {g}✓{r} python@3.12 installed");
+            // brew installs the keg under /opt/homebrew/opt/python@3.12 on
+            // arm64 (or /usr/local on x86_64) and links python3.12 onto PATH.
+            // Re-probe to confirm it's actually visible.
+            find_compatible_python()
+        }
+        Ok(s) => {
+            eprintln!("  {w}!{r} brew install exited {}", s);
+            None
+        }
+        Err(e) => {
+            eprintln!("  {w}!{r} could not invoke brew: {}", e);
+            None
+        }
     }
 }
 
@@ -800,21 +950,57 @@ fn ensure_venv(install_dir: &Path) -> Option<PathBuf> {
     let venv_dir = install_dir.join(".venv");
     let venv_python = venv_dir.join("bin").join("python");
 
+    // The venv interpreter is locked to whatever python created it. If a
+    // previous run on this machine created a 3.10.x venv (e.g. from before
+    // we required 3.11+), reusing it just hits the same `requires-python`
+    // error during pip install. Detect that and offer to rebuild.
     if venv_python.exists() {
-        eprintln!();
-        eprintln!(
-            "  {d}venv exists at {a}{}{d}; reusing{r}",
-            venv_dir.display()
-        );
-        return Some(venv_python);
+        let venv_v = python_version_of(venv_python.to_string_lossy().as_ref());
+        let too_old = matches!(venv_v, Some((3, m)) if m < MTPLX_MIN_PY_MINOR);
+        if too_old {
+            let (vmaj, vmin) = venv_v.unwrap();
+            eprintln!();
+            eprintln!(
+                "  {w}!{r} existing venv at {a}{}{r} uses Python {}.{} (MTPLX needs >=3.{})",
+                venv_dir.display(),
+                vmaj,
+                vmin,
+                MTPLX_MIN_PY_MINOR
+            );
+            if ask_yes_no("recreate the venv with a newer Python?", true) {
+                if let Err(e) = std::fs::remove_dir_all(&venv_dir) {
+                    eprintln!("  {w}!{r} could not remove {}: {}", venv_dir.display(), e);
+                    return None;
+                }
+                eprintln!("  {d}removed stale venv; creating a fresh one...{r}");
+                // Fall through to creation below.
+            } else {
+                eprintln!("  {w}!{r} keeping the old venv; pip install will likely fail.");
+                return Some(venv_python);
+            }
+        } else {
+            eprintln!();
+            eprintln!(
+                "  {d}venv exists at {a}{}{d}; reusing{r}",
+                venv_dir.display()
+            );
+            return Some(venv_python);
+        }
     }
+
+    // Pick the freshest Python ≥ MTPLX_MIN_PY_MINOR for the venv base, falling
+    // back to plain `python_cmd()` only if nothing fresher is on PATH (in
+    // which case the prerequisites check would have already prompted to fix
+    // it; we still try, in case the user said "no" but wants the venv anyway).
+    let py_base = find_compatible_python().unwrap_or_else(|| python_cmd().to_string());
 
     eprintln!();
     eprintln!(
-        "  {d}creating virtualenv at {a}{}{d}...{r}",
-        venv_dir.display()
+        "  {d}creating virtualenv at {a}{}{d} using {a}{}{d}...{r}",
+        venv_dir.display(),
+        py_base
     );
-    let status = std::process::Command::new(python_cmd())
+    let status = std::process::Command::new(&py_base)
         .args(["-m", "venv", ".venv"])
         .current_dir(install_dir)
         .status();
@@ -831,18 +1017,18 @@ fn ensure_venv(install_dir: &Path) -> Option<PathBuf> {
             Some(venv_python)
         }
         Ok(s) => {
-            eprintln!("  {w}!{r} `python -m venv .venv` exited {}", s);
+            eprintln!("  {w}!{r} `{} -m venv .venv` exited {}", py_base, s);
             eprintln!(
                 "    On Debian/Ubuntu you may need: {a}sudo apt-get install -y python3-venv{r}"
             );
             eprintln!(
                 "    On macOS Homebrew Python this is usually pre-installed; check {a}{} -m venv --help{r}",
-                python_cmd()
+                py_base
             );
             None
         }
         Err(e) => {
-            eprintln!("  {w}!{r} could not invoke {} -m venv: {}", python_cmd(), e);
+            eprintln!("  {w}!{r} could not invoke {} -m venv: {}", py_base, e);
             None
         }
     }
