@@ -25,16 +25,21 @@ use std::time::Duration;
 use crate::theme::{self, RESET};
 
 const MARKER_PATH: &str = "~/.mlx-code/.welcomed";
-const MTPLX_REPO_URL: &str = "https://github.com/daniel-farina/MTPLX";
-// Integration branch: fork/main (which already has the merged upstream
-// #35 + #32 work) plus the cherry-picked #37 (postcommit-wait race fix)
-// and #33 (dense/repage chunk-size split + 128k bench). Refresh this when
-// new perf work lands on top of fork/main and we want fresh installs to
-// get it. 569/4 pytest passing on this branch.
-const MTPLX_BRANCH: &str = "share/install-2026-05-09";
+// As of 2026-05-09 evening: PRs #32, #35, #37, #33 are all merged
+// upstream. We can point installs straight at upstream main now.
+// Switch back to the daniel-farina fork only if/when we have unmerged
+// patches that need to ship to fresh installs.
+const MTPLX_REPO_URL: &str = "https://github.com/youssofal/MTPLX";
+const MTPLX_BRANCH: &str = "main";
 const MTPLX_DEFAULT_INSTALL_DIR: &str = "~/code/MTPLX";
 const MTPLX_PID_FILE: &str = "~/.mlx-code/mtplx.pid";
 const MTPLX_LOG_FILE: &str = "~/.mlx-code/mtplx.log";
+
+// Default model the wizard ensures is downloaded before starting MTPLX.
+// HuggingFace repo id; resolves to ~/.mtplx/models/Youssofal--<repo>/ via
+// MTPLX's local cache convention.
+const DEFAULT_MODEL_HF_ID: &str = "Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed";
+const MODEL_CACHE_BASE: &str = "~/.mtplx/models";
 
 /// True if this is the first invocation on this machine.
 pub fn is_first_run() -> bool {
@@ -73,7 +78,13 @@ pub async fn run_wizard(url: &str) -> Result<bool> {
         eprintln!(" {w}NOT REACHABLE{r}");
         eprintln!("    {d}{e}{r}");
         eprintln!();
-        return offer_install_mtplx().await.map(|_| false);
+        let installed_and_running = offer_install_mtplx(url).await?;
+        if installed_and_running {
+            // Background-start succeeded and the server is up; mark welcomed
+            // and let the caller proceed into chat mode.
+            mark_welcomed();
+        }
+        return Ok(installed_and_running);
     }
     eprintln!(" {g}OK{r}");
 
@@ -115,7 +126,13 @@ pub async fn run_wizard(url: &str) -> Result<bool> {
 
 /// Interactive: offer to clone+install MTPLX from daniel-farina/MTPLX, then
 /// optionally start it. Always returns Ok(()).
-async fn offer_install_mtplx() -> Result<()> {
+/// Interactive: clone+install+optionally start MTPLX. Returns Ok(true) when
+/// the server is up and responding so the caller can proceed into chat
+/// mode without re-launching `hip`. Returns Ok(false) when the user picked
+/// a non-blocking option (new-terminal / skip) or background-start failed
+/// to come up within the timeout - in those cases the caller should exit
+/// and the user re-runs `hip` after starting MTPLX themselves.
+async fn offer_install_mtplx(url: &str) -> Result<bool> {
     let d = theme::dim();
     let a = theme::accent();
     let g = theme::good();
@@ -134,14 +151,14 @@ async fn offer_install_mtplx() -> Result<()> {
 
     if !ask_yes_no("install MTPLX now?", true) {
         print_manual_setup();
-        return Ok(());
+        return Ok(false);
     }
 
     // Verify build/runtime prerequisites BEFORE we start cloning multi-MB
     // repos. Auto-install what we safely can (pip via ensurepip); for
     // heavier tools (git/python3) print platform-specific install commands.
     if !ensure_prerequisites() {
-        return Ok(());
+        return Ok(false);
     }
 
     let install_dir = expand(MTPLX_DEFAULT_INSTALL_DIR);
@@ -177,12 +194,12 @@ async fn offer_install_mtplx() -> Result<()> {
                     s
                 );
                 print_manual_setup();
-                return Ok(());
+                return Ok(false);
             }
             Err(e) => {
                 eprintln!("  {w}!{r} git clone failed: {} (is git installed?)", e);
                 print_manual_setup();
-                return Ok(());
+                return Ok(false);
             }
         }
     }
@@ -194,30 +211,71 @@ async fn offer_install_mtplx() -> Result<()> {
     // python so the later start step uses it.
     let venv_python = match ensure_venv(&install_dir) {
         Some(p) => p,
-        None => return Ok(()),
+        None => return Ok(false),
     };
 
+    // Pip can be noisy (version-check banners, build progress lines) and the
+    // output bleeds into the wizard prompts. Capture everything to a log so
+    // the wizard UI stays clean; surface the log path on failure.
+    let install_log = expand("~/.mlx-code/mtplx-install.log");
+    if let Some(parent) = install_log.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     eprintln!();
-    eprintln!("  {d}installing python dependencies into .venv...{r}");
+    eprintln!(
+        "  {d}installing python dependencies into .venv (logging to {a}{}{d})...{r}",
+        install_log.display()
+    );
+    let log_handle = match std::fs::File::create(&install_log) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("  {w}!{r} cannot create install log: {}", e);
+            return Ok(false);
+        }
+    };
+    let log_err = log_handle.try_clone().ok();
     let status = std::process::Command::new(&venv_python)
-        .args(["-m", "pip", "install", "-e", "."])
+        .args([
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "--quiet",
+            "-e",
+            ".",
+        ])
         .current_dir(&install_dir)
+        .stdout(std::process::Stdio::from(log_handle))
+        .stderr(
+            log_err
+                .map(std::process::Stdio::from)
+                .unwrap_or(std::process::Stdio::null()),
+        )
         .status();
     match status {
         Ok(s) if s.success() => eprintln!("  {g}✓{r} installed"),
         Ok(s) => {
             eprintln!("  {w}!{r} pip install (in venv) exited {}", s);
-            eprintln!("    Try manually:");
+            eprintln!("    Install log: {a}{}{r}", install_log.display());
+            eprintln!("    To retry manually:");
             eprintln!(
                 "      {a}cd {} && .venv/bin/python -m pip install -e .{r}",
                 install_dir.display()
             );
-            return Ok(());
+            return Ok(false);
         }
         Err(e) => {
             eprintln!("  {w}!{r} could not invoke venv python: {}", e);
-            return Ok(());
+            return Ok(false);
         }
+    }
+
+    // Make sure the model weights are downloaded before we try to start
+    // the server. MTPLX's load step will hang for a while pulling weights
+    // on first run; doing it explicitly here lets the user see a real
+    // progress bar from huggingface-cli rather than a silent stall.
+    if !ensure_model_weights(&venv_python).await {
+        return Ok(false);
     }
 
     eprintln!();
@@ -231,7 +289,13 @@ async fn offer_install_mtplx() -> Result<()> {
         'b',
     );
     match mode {
-        'b' => start_mtplx_background(&install_dir),
+        'b' => {
+            // Spawn detached, then wait for /v1/models to respond. If it
+            // comes up, we return true so the caller proceeds into chat
+            // mode without exiting. If the timeout hits, we return false
+            // and the user can run `hip --setup` to recheck.
+            start_mtplx_background_and_wait(&install_dir, url).await
+        }
         'n' => {
             eprintln!();
             eprintln!("  Open a new terminal and run:");
@@ -239,18 +303,23 @@ async fn offer_install_mtplx() -> Result<()> {
             eprintln!("    {a}.venv/bin/python -m mtplx.server{r}");
             eprintln!();
             eprintln!("  Then re-run {a}hip{r}.");
+            Ok(false)
         }
         _ => {
             eprintln!();
             eprintln!("  Skipping start. When you're ready:");
             eprintln!("    {a}cd {}{r}", install_dir.display());
             eprintln!("    {a}.venv/bin/python -m mtplx.server{r}");
+            Ok(false)
         }
     }
-    Ok(())
 }
 
-fn start_mtplx_background(install_dir: &Path) {
+/// Spawn MTPLX in the background, then poll the configured URL until the
+/// server responds (model load can take 30-90s for a cold start). Returns
+/// Ok(true) if the server came up within the timeout, Ok(false) if it
+/// didn't (the user should check ~/.mlx-code/mtplx.log and re-run).
+async fn start_mtplx_background_and_wait(install_dir: &Path, url: &str) -> Result<bool> {
     let d = theme::dim();
     let a = theme::accent();
     let g = theme::good();
@@ -270,20 +339,18 @@ fn start_mtplx_background(install_dir: &Path) {
                 log_path.display(),
                 e
             );
-            return;
+            return Ok(false);
         }
     };
     let log_err = match log_file.try_clone() {
         Ok(f) => f,
         Err(e) => {
             eprintln!("  {w}!{r} dup log fd failed: {}", e);
-            return;
+            return Ok(false);
         }
     };
 
-    // Prefer the venv's python if present (we created it during install).
-    // Fallback to system python only if the install was done outside this
-    // wizard (e.g. user ran `iris --setup` against an existing checkout).
+    // Prefer the venv's python if present.
     let venv_python = install_dir.join(".venv").join("bin").join("python");
     let python_bin: std::path::PathBuf = if venv_python.exists() {
         venv_python
@@ -308,21 +375,67 @@ fn start_mtplx_background(install_dir: &Path) {
             })
             .spawn()
     };
-    match child {
+    let pid = match child {
         Ok(c) => {
             let pid = c.id();
             let _ = std::fs::write(&pid_path, format!("{}\n", pid));
-            eprintln!();
-            eprintln!("  {g}✓{r} MTPLX started in background");
-            eprintln!("    {d}pid:{r}  {a}{pid}{r}  ({})", pid_path.display());
-            eprintln!("    {d}logs:{r} {a}tail -f {}{r}", log_path.display());
-            eprintln!("    {d}stop:{r} {a}kill {pid}{r}");
-            eprintln!();
-            eprintln!("  Give it ~10s to load the model, then re-run {a}hip --setup{r} to verify.",);
+            pid
         }
         Err(e) => {
             eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
+            return Ok(false);
         }
+    };
+
+    eprintln!();
+    eprintln!("  {g}✓{r} MTPLX spawned in background");
+    eprintln!("    {d}pid:{r}  {a}{pid}{r}  ({})", pid_path.display());
+    eprintln!("    {d}logs:{r} {a}tail -f {}{r}", log_path.display());
+    eprintln!("    {d}stop:{r} {a}kill {pid}{r}");
+    eprintln!();
+
+    // Poll /v1/models until the server responds. Cold model load on a 27B
+    // can take ~30-60s on M5 Max; we give it 120s of budget before giving
+    // up and pointing the user at the log.
+    let timeout = std::time::Duration::from_secs(120);
+    let poll_interval = std::time::Duration::from_secs(2);
+    let started_at = std::time::Instant::now();
+
+    eprint!("  {d}waiting for MTPLX to be ready (model load can take ~30-60s){r} ");
+    let _ = std::io::stderr().flush();
+    let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let mut tick: usize = 0;
+
+    loop {
+        if probe_server(url).await.is_ok() {
+            eprintln!(
+                "\r  {g}✓{r} MTPLX is ready ({:.1}s){:30}",
+                started_at.elapsed().as_secs_f64(),
+                ""
+            );
+            return Ok(true);
+        }
+        if started_at.elapsed() > timeout {
+            eprintln!(
+                "\r  {w}!{r} MTPLX didn't respond within {}s{:30}",
+                timeout.as_secs(),
+                ""
+            );
+            eprintln!("    Check the log: {a}tail -50 {}{r}", log_path.display());
+            eprintln!(
+                "    The process may still be loading. Try {a}hip --setup{r} again in a moment."
+            );
+            return Ok(false);
+        }
+        // Spinner update
+        eprint!(
+            "\r  {d}waiting for MTPLX{r} {a}{}{r} {d}({:.0}s){r}     ",
+            spinner_chars[tick % spinner_chars.len()],
+            started_at.elapsed().as_secs_f64()
+        );
+        let _ = std::io::stderr().flush();
+        tick += 1;
+        tokio::time::sleep(poll_interval).await;
     }
 }
 
@@ -449,6 +562,105 @@ fn python_cmd() -> &'static str {
 /// Why a venv: modern Homebrew Python and Debian's python3 reject system-wide
 /// pip installs (PEP 668). A venv is the portable way to install MTPLX
 /// without --break-system-packages or sudo.
+/// Ensure the default model is downloaded into MTPLX's cache. If the
+/// canonical `<cache>/Youssofal--<model>/config.json` file is present we
+/// assume the weights are there. Otherwise we run
+/// `<venv>/bin/huggingface-cli download <repo> --local-dir <dir>`,
+/// letting hf-cli's progress bars stream straight to the user. Returns
+/// false if the download fails or hf-cli isn't installed.
+async fn ensure_model_weights(venv_python: &Path) -> bool {
+    let d = theme::dim();
+    let a = theme::accent();
+    let g = theme::good();
+    let w = theme::warn();
+    let r = RESET;
+
+    // Convert "Youssofal/Qwen3.6-27B-MTPLX-Optimized-Speed" to the local
+    // cache directory name MTPLX expects ("Youssofal--Qwen3.6-..."). MTPLX
+    // does this transform internally; we mirror it for the existence check.
+    let model_dir_name = DEFAULT_MODEL_HF_ID.replace('/', "--");
+    let cache_root = expand(MODEL_CACHE_BASE);
+    let model_dir = cache_root.join(&model_dir_name);
+    let config_marker = model_dir.join("config.json");
+
+    if config_marker.exists() {
+        eprintln!();
+        eprintln!(
+            "  {g}✓{r} model already downloaded at {a}{}{r}",
+            model_dir.display()
+        );
+        return true;
+    }
+
+    eprintln!();
+    eprintln!(
+        "  {d}model weights missing at {a}{}{d} - downloading...{r}",
+        model_dir.display()
+    );
+    eprintln!(
+        "  {d}this is a multi-GB download (~16GB for the 4-bit qwen3.6-27b); progress shown below.{r}"
+    );
+    eprintln!();
+
+    if let Some(parent) = model_dir.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!(
+                "  {w}!{r} cannot create cache root {}: {}",
+                parent.display(),
+                e
+            );
+            return false;
+        }
+    }
+
+    // hf-cli ships with huggingface_hub, which is a transitive dep of MTPLX.
+    // We invoke it via `<venv>/bin/python -m huggingface_hub.commands.huggingface_cli`
+    // rather than the bare `huggingface-cli` binary so we don't depend on
+    // the venv being on PATH.
+    let status = std::process::Command::new(venv_python)
+        .args([
+            "-m",
+            "huggingface_hub.commands.huggingface_cli",
+            "download",
+            DEFAULT_MODEL_HF_ID,
+            "--local-dir",
+            model_dir.to_string_lossy().as_ref(),
+        ])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            if config_marker.exists() {
+                eprintln!();
+                eprintln!("  {g}✓{r} model downloaded");
+                true
+            } else {
+                eprintln!(
+                    "  {w}!{r} download succeeded but {} is missing",
+                    config_marker.display()
+                );
+                false
+            }
+        }
+        Ok(s) => {
+            eprintln!("  {w}!{r} model download exited {}", s);
+            eprintln!(
+                "    Try manually: {a}<venv>/bin/huggingface-cli download {} --local-dir {}{r}",
+                DEFAULT_MODEL_HF_ID,
+                model_dir.display()
+            );
+            false
+        }
+        Err(e) => {
+            eprintln!("  {w}!{r} could not invoke huggingface-cli: {}", e);
+            eprintln!(
+                "    The MTPLX install should have brought it in; try {a}<venv>/bin/python -m pip install huggingface_hub{r}"
+            );
+            false
+        }
+    }
+}
+
 fn ensure_venv(install_dir: &Path) -> Option<PathBuf> {
     let d = theme::dim();
     let g = theme::good();
