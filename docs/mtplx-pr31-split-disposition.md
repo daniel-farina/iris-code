@@ -12,8 +12,8 @@ Upstream HEAD at decision time: `1fd87d732ea55def3267e80c32f09b761b34c866 Split 
 | Commit | Subject | Decision | New PR | Resurrect-if |
 |---|---|---|---|---|
 | 1319e48 | 16K cliff fix | KEEP-MERGE | #39 | n/a - already landed |
-| 4169e09 | entry-cap env | KEEP-MERGE | (filled in below) | n/a once merged; if dropped, see archived diff |
-| 110bb9d + 43bd51f | postcommit prefix reuse + miss-reason | MODIFY (Tier 1.2 part 1 + miss-reason only; orchestration split dropped) | (filled in below) | upstream model_scheduler regresses to multi-thread or dedicates a separate executor whose foreground gens contend with idle postcommit on `state.lock` |
+| 4169e09 | entry-cap env | KEEP-MERGE | #40 | n/a once merged; if dropped, see archived diff |
+| 110bb9d + 43bd51f | postcommit prefix reuse + miss-reason | MODIFY (Tier 1.2 part 1 + miss-reason only; orchestration split dropped) | #41 | upstream `ModelWorkScheduler` regresses to multi-thread or dedicates a separate executor whose foreground gens contend with idle postcommit on `state.lock` |
 | 37c8cd7 | storage prefix-match | DROP | none | upstream removes `_postcommit_next_turn_prefix_ids` (`d4315b7`); the sentinel-marker approach can be replaced by 37c8cd7's `<\|im_start\|>` truncation as a fallback |
 
 ## 1319e48 - 16K cliff fix
@@ -150,5 +150,33 @@ Upstream's approach is strictly more general:
 
 ## Test results
 
-(Filled in after running tests for each KEEP-MERGE / MODIFY PR.)
+All tests run in `/Users/dan/code-2/forks/MTPLX/.venv/bin/python -m pytest`.
+
+### PR #40 (entry-cap env)
+
+```
+$ pytest tests/test_session_bank_env_caps.py tests/test_engine_session_env.py
+============================== 35 passed in 0.08s ==============================
+```
+
+19 new tests in `test_session_bank_env_caps.py` plus 16 existing in `test_engine_session_env.py`.
+
+### PR #41 (postcommit prefix reuse + miss-reason)
+
+```
+$ pytest tests/test_postcommit_tools_plumbing.py tests/test_idle_postcommit_subagent.py \
+        tests/test_postcommit_wait.py tests/test_postcommit_wait_integration.py \
+        tests/test_postcommit_prefix_reuse.py
+35 passed in 0.34s
+
+$ pytest tests/test_server_openai.py tests/test_openai_bridge.py tests/test_model_scheduler.py
+64 passed in 0.40s
+```
+
+3 new tests in `test_postcommit_prefix_reuse.py` plus 32 existing postcommit tests; 64 server/scheduler tests confirm no regressions in the surrounding code.
+
+### 37c8cd7 (DROPped)
+
+No tests run; upstream `_postcommit_next_turn_prefix_ids` is exercised by `test_postcommit_tools_plumbing.py` (already passing under PR #41 verification).
+
 

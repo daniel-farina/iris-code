@@ -69,16 +69,18 @@ pub fn set_runtime(t: Theme) {
 /// Reset code: ends any open color sequence.
 pub const RESET: &str = "\x1b[0m";
 
-// River-hippo 256-color palette (River theme):
-//   24  = deep teal-blue (#005f87)  - depth / shadow
-//   67  = steel blue (#5f87af)      - main accent (river surface)
-//   109 = gray-cyan (#87afaf)       - lighter river / mist
-//   102 = medium gray (#878787)     - hippo body
-//   65  = mossy green (#5f875f)     - bank vegetation / good
-//   178 = mustard / dust (#d7af00)  - warn
-//   229 = pale ivory (#ffffaf)      - tusks / highlight
+// Hippo-purple palette (River theme). Pulled directly from the bundled
+// hippo-logo.txt asset so the prompt color matches the logo glyph.
+//   rgb(175,146,204) = #af92cc  - main hippo body / accent
+//   rgb(158,126,189) = #9e7ebd  - hippo shadow / highlight
+//   rgb(92,72,109)   = #5c486d  - deep shadow / thinking dim
+//   65               = mossy green (kept for `good`)
+//   178              = mustard (kept for `warn`)
+//   167              = soft red (kept for `bad`)
 //
-// Use `\x1b[38;5;Nm` for foreground.
+// Truecolor `\x1b[38;2;R;G;Bm` is used for the purples (256-color
+// approximations would land on muddy grays). 256-color is kept where the
+// match is fine.
 
 pub fn dim() -> &'static str {
     match current() {
@@ -87,8 +89,8 @@ pub fn dim() -> &'static str {
 }
 pub fn accent() -> &'static str {
     match current() {
-        Theme::River => "\x1b[38;5;67m", // steel blue - the river
-        Theme::Light => "\x1b[0;34m",    // dark blue (legible on white)
+        Theme::River => "\x1b[38;2;175;146;204m", // hippo purple (logo body)
+        Theme::Light => "\x1b[38;2;120;80;160m",  // darker purple (legible on white)
         Theme::Mono => "\x1b[1m",
     }
 }
@@ -101,7 +103,7 @@ pub fn good() -> &'static str {
 }
 pub fn warn() -> &'static str {
     match current() {
-        Theme::River => "\x1b[38;5;178m", // mustard / sun-on-water
+        Theme::River => "\x1b[38;5;178m", // mustard
         Theme::Light => "\x1b[0;33m",
         Theme::Mono => "",
     }
@@ -109,14 +111,14 @@ pub fn warn() -> &'static str {
 #[allow(dead_code)]
 pub fn bad() -> &'static str {
     match current() {
-        Theme::River => "\x1b[38;5;167m", // soft red, sits well on slate
+        Theme::River => "\x1b[38;5;167m", // soft red, sits well next to purple
         Theme::Light => "\x1b[0;31m",
         Theme::Mono => "\x1b[1m",
     }
 }
 pub fn highlight() -> &'static str {
     match current() {
-        Theme::River => "\x1b[38;5;109m", // gray-cyan, lighter river
+        Theme::River => "\x1b[38;2;158;126;189m", // hippo purple shadow tone
         Theme::Light => "\x1b[0;35m",
         Theme::Mono => "",
     }
@@ -124,22 +126,24 @@ pub fn highlight() -> &'static str {
 #[allow(dead_code)]
 pub fn thinking() -> &'static str {
     match current() {
-        Theme::River => "\x1b[2;38;5;102m", // dim + medium hippo gray
+        Theme::River => "\x1b[2;38;2;92;72;109m", // dim + deep purple shadow
         Theme::Light => "\x1b[2;90m",
         Theme::Mono => "\x1b[2m",
     }
 }
 
-/// River-gradient stops for the logo block letters: deep teal-blue at the
-/// top, fading through steel blue to pale gray-cyan at the bottom. Six
-/// stops match the 6-line block font.
+/// Six-stop purple gradient: lightest hippo body purple at the top,
+/// deepest shadow purple at the bottom. Currently unused by the runtime
+/// (the bundled logo is pre-colored), but kept available for future
+/// gradient-text callers (status bar, transcript headers, etc).
+#[allow(dead_code)]
 pub const RIVER_GRADIENT: &[&str] = &[
-    "\x1b[38;5;24m",  // deep teal-blue (river depth)
-    "\x1b[38;5;25m",  // mid teal
-    "\x1b[38;5;67m",  // steel blue
-    "\x1b[38;5;73m",  // lighter steel
-    "\x1b[38;5;109m", // gray-cyan
-    "\x1b[38;5;152m", // pale river-mist
+    "\x1b[38;2;200;176;221m", // very light lavender
+    "\x1b[38;2;185;160;212m", // light hippo purple
+    "\x1b[38;2;175;146;204m", // hippo body (matches accent)
+    "\x1b[38;2;158;126;189m", // hippo shadow (matches highlight)
+    "\x1b[38;2;130;100;160m", // mid-deep purple
+    "\x1b[38;2;92;72;109m",   // deep shadow
 ];
 
 /// Wrap `inner` with `prefix` and RESET. Convenience for short colored text.
@@ -192,17 +196,17 @@ mod tests {
     }
 
     #[test]
-    fn river_emits_256_color_codes() {
+    fn river_emits_hippo_purple_codes() {
         let _g = TEST_LOCK.lock().unwrap();
         set_runtime(Theme::River);
         assert!(
-            accent().contains("\x1b[38;5;67m"),
-            "expected steel-blue accent, got {:?}",
+            accent().contains("38;2;175;146;204"),
+            "expected hippo-purple accent, got {:?}",
             accent()
         );
         assert!(
-            highlight().contains("\x1b[38;5;109m"),
-            "expected gray-cyan highlight, got {:?}",
+            highlight().contains("38;2;158;126;189"),
+            "expected hippo-shadow highlight, got {:?}",
             highlight()
         );
         assert!(

@@ -426,6 +426,10 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
     }
 
     let mut pending = first;
+    // True if the last keypress was Ctrl-C with an empty buffer. A second
+    // consecutive Ctrl-C exits, matching how python REPL / node / deno behave.
+    // Reset by any non-Ctrl-C event (line submitted, Ctrl-D, etc).
+    let mut ctrl_c_armed = false;
     loop {
         let user_msg = if let Some(p) = pending.take() {
             eprintln!("[hip] (using initial prompt as first turn)");
@@ -435,13 +439,31 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
             let line: RLResult<String> = rl.readline(prompt);
             match line {
                 Ok(l) => {
+                    ctrl_c_armed = false;
                     let l_trim = l.trim().to_string();
                     if !l_trim.is_empty() {
                         let _ = rl.add_history_entry(&l_trim);
                     }
                     l_trim
                 }
-                Err(ReadlineError::Interrupted) => continue, // Ctrl-C: drop line, keep going
+                Err(ReadlineError::Interrupted) => {
+                    // Ctrl-C: first press warns, second consecutive press exits.
+                    if ctrl_c_armed {
+                        if let Some(h) = &history_path {
+                            let _ = rl.save_history(h);
+                        }
+                        eprintln!("[hip] bye");
+                        return Ok(());
+                    }
+                    ctrl_c_armed = true;
+                    eprintln!(
+                        "{d}(press Ctrl-C again to exit, or type {a}exit{d}){r}",
+                        d = theme::dim(),
+                        a = theme::accent(),
+                        r = theme::RESET
+                    );
+                    continue;
+                }
                 Err(ReadlineError::Eof) => {
                     // Ctrl-D: exit
                     if let Some(h) = &history_path {
@@ -470,6 +492,19 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 }
                 eprintln!("[hip] bye");
                 return Ok(());
+            }
+            // Bare-word "exit" / "quit" - friendlier than ":exit". Confirm
+            // before bailing because users sometimes mean to ask the model
+            // about exiting something rather than to leave the REPL.
+            "exit" | "quit" | "bye" => {
+                if confirm_exit(&mut rl) {
+                    if let Some(h) = &history_path {
+                        let _ = rl.save_history(h);
+                    }
+                    eprintln!("[hip] bye");
+                    return Ok(());
+                }
+                continue;
             }
             ":reset" => {
                 let sys = conv.first().cloned().unwrap_or_else(|| {
@@ -712,6 +747,8 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 eprintln!("─ chat commands ─");
                 eprintln!("  :reset             clear conversation history");
                 eprintln!("  :quit / :exit /:q  exit");
+                eprintln!("  exit / quit / bye  exit (with confirmation)");
+                eprintln!("  Ctrl-C twice       exit");
                 eprintln!("  :stats             show recent run stats");
                 eprintln!("  :history           re-print conversation");
                 eprintln!("  :cwd <path>        change working directory");
@@ -813,6 +850,28 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
     }
 }
 
+/// Confirm bare-word `exit` / `quit`. Returns true if the user replied
+/// affirmatively or hit enter on the default. On Ctrl-C / Ctrl-D during
+/// the confirmation prompt, returns false (treat as "I changed my mind").
+fn confirm_exit(
+    rl: &mut rustyline::Editor<repl::MlxHelper, rustyline::history::DefaultHistory>,
+) -> bool {
+    use rustyline::error::ReadlineError;
+    let prompt = format!(
+        "{a}? exit hippo-code? (Y/n) {r}",
+        a = theme::accent(),
+        r = theme::RESET
+    );
+    match rl.readline(&prompt) {
+        Ok(reply) => {
+            let r = reply.trim().to_ascii_lowercase();
+            r.is_empty() || r == "y" || r == "yes"
+        }
+        Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => false,
+        Err(_) => false,
+    }
+}
+
 /// Update env vars that downstream code reads at construction time.
 fn apply_pretty_env(show_thinking: bool, full_output: bool) {
     if show_thinking {
@@ -857,7 +916,7 @@ async fn run_chat_fallback(
         if trimmed.is_empty() {
             continue;
         }
-        if trimmed == ":quit" || trimmed == ":exit" || trimmed == ":q" {
+        if matches!(trimmed, ":quit" | ":exit" | ":q" | "exit" | "quit" | "bye") {
             eprintln!("[hip] bye");
             return Ok(());
         }
