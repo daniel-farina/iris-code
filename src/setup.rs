@@ -182,30 +182,35 @@ async fn offer_install_mtplx() -> Result<()> {
         }
     }
 
+    // Create a virtualenv inside the MTPLX checkout and install into it.
+    // Modern Homebrew Python (and Debian's python3) refuse system-wide pip
+    // installs (PEP 668 / "externally-managed-environment"); a venv sidesteps
+    // that without --break-system-packages. We also remember the venv's
+    // python so the later start step uses it.
+    let venv_python = match ensure_venv(&install_dir) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+
     eprintln!();
-    eprintln!(
-        "  {d}installing python dependencies ({} -m pip install -e .)...{r}",
-        python_cmd()
-    );
-    let status = std::process::Command::new(python_cmd())
+    eprintln!("  {d}installing python dependencies into .venv...{r}");
+    let status = std::process::Command::new(&venv_python)
         .args(["-m", "pip", "install", "-e", "."])
         .current_dir(&install_dir)
         .status();
     match status {
         Ok(s) if s.success() => eprintln!("  {g}✓{r} installed"),
         Ok(s) => {
+            eprintln!("  {w}!{r} pip install (in venv) exited {}", s);
+            eprintln!("    Try manually:");
             eprintln!(
-                "  {w}!{r} pip install exited {}; you may need a venv first.",
-                s
-            );
-            eprintln!(
-                "    {a}cd {} && python -m venv .venv && source .venv/bin/activate && pip install -e .{r}",
+                "      {a}cd {} && .venv/bin/python -m pip install -e .{r}",
                 install_dir.display()
             );
             return Ok(());
         }
         Err(e) => {
-            eprintln!("  {w}!{r} pip not found: {}", e);
+            eprintln!("  {w}!{r} could not invoke venv python: {}", e);
             return Ok(());
         }
     }
@@ -226,7 +231,7 @@ async fn offer_install_mtplx() -> Result<()> {
             eprintln!();
             eprintln!("  Open a new terminal and run:");
             eprintln!("    {a}cd {}{r}", install_dir.display());
-            eprintln!("    {a}python -m mtplx.server{r}");
+            eprintln!("    {a}.venv/bin/python -m mtplx.server{r}");
             eprintln!();
             eprintln!("  Then re-run {a}iris{r}.");
         }
@@ -234,7 +239,7 @@ async fn offer_install_mtplx() -> Result<()> {
             eprintln!();
             eprintln!("  Skipping start. When you're ready:");
             eprintln!("    {a}cd {}{r}", install_dir.display());
-            eprintln!("    {a}python -m mtplx.server{r}");
+            eprintln!("    {a}.venv/bin/python -m mtplx.server{r}");
         }
     }
     Ok(())
@@ -271,9 +276,19 @@ fn start_mtplx_background(install_dir: &Path) {
         }
     };
 
+    // Prefer the venv's python if present (we created it during install).
+    // Fallback to system python only if the install was done outside this
+    // wizard (e.g. user ran `iris --setup` against an existing checkout).
+    let venv_python = install_dir.join(".venv").join("bin").join("python");
+    let python_bin: std::path::PathBuf = if venv_python.exists() {
+        venv_python
+    } else {
+        python_cmd().into()
+    };
+
     use std::os::unix::process::CommandExt;
     let child = unsafe {
-        std::process::Command::new("python")
+        std::process::Command::new(&python_bin)
             .args(["-m", "mtplx.server"])
             .current_dir(install_dir)
             .stdout(std::process::Stdio::from(log_file))
@@ -421,6 +436,71 @@ fn python_cmd() -> &'static str {
         "python3"
     } else {
         "python"
+    }
+}
+
+/// Ensure `<install_dir>/.venv` exists with a working `bin/python`. Creates
+/// it via `python3 -m venv` if missing. Returns the path to the venv's
+/// python executable, or None if creation failed.
+///
+/// Why a venv: modern Homebrew Python and Debian's python3 reject system-wide
+/// pip installs (PEP 668). A venv is the portable way to install MTPLX
+/// without --break-system-packages or sudo.
+fn ensure_venv(install_dir: &Path) -> Option<PathBuf> {
+    let d = theme::dim();
+    let g = theme::good();
+    let w = theme::warn();
+    let a = theme::accent();
+    let r = RESET;
+
+    let venv_dir = install_dir.join(".venv");
+    let venv_python = venv_dir.join("bin").join("python");
+
+    if venv_python.exists() {
+        eprintln!();
+        eprintln!(
+            "  {d}venv exists at {a}{}{d}; reusing{r}",
+            venv_dir.display()
+        );
+        return Some(venv_python);
+    }
+
+    eprintln!();
+    eprintln!(
+        "  {d}creating virtualenv at {a}{}{d}...{r}",
+        venv_dir.display()
+    );
+    let status = std::process::Command::new(python_cmd())
+        .args(["-m", "venv", ".venv"])
+        .current_dir(install_dir)
+        .status();
+    match status {
+        Ok(s) if s.success() => {
+            if !venv_python.exists() {
+                eprintln!(
+                    "  {w}!{r} venv created but {a}{}{r} is missing - aborting",
+                    venv_python.display()
+                );
+                return None;
+            }
+            eprintln!("  {g}✓{r} venv ready");
+            Some(venv_python)
+        }
+        Ok(s) => {
+            eprintln!("  {w}!{r} `python -m venv .venv` exited {}", s);
+            eprintln!(
+                "    On Debian/Ubuntu you may need: {a}sudo apt-get install -y python3-venv{r}"
+            );
+            eprintln!(
+                "    On macOS Homebrew Python this is usually pre-installed; check {a}{} -m venv --help{r}",
+                python_cmd()
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!("  {w}!{r} could not invoke {} -m venv: {}", python_cmd(), e);
+            None
+        }
     }
 }
 
