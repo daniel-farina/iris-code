@@ -395,48 +395,144 @@ async fn start_mtplx_background_and_wait(install_dir: &Path, url: &str) -> Resul
     eprintln!();
 
     // Poll /v1/models until the server responds. Cold model load on a 27B
-    // can take ~30-60s on M5 Max; we give it 120s of budget before giving
-    // up and pointing the user at the log.
-    let timeout = std::time::Duration::from_secs(120);
-    let poll_interval = std::time::Duration::from_secs(2);
+    // can take ~30-90s; we give 5 min of budget. Alongside the spinner we
+    // tail the MTPLX log so the user can see what the server is actually
+    // doing (loading weights, binding port, running warmup) and recognize
+    // a stuck state vs slow progress.
+    let timeout = std::time::Duration::from_secs(300);
+    let poll_interval = std::time::Duration::from_millis(800);
     let started_at = std::time::Instant::now();
 
-    eprint!("  {d}waiting for MTPLX to be ready (model load can take ~30-60s){r} ");
-    let _ = std::io::stderr().flush();
+    eprintln!(
+        "  {d}waiting for MTPLX to bind {a}{url}{d} (model load can take 30-90s on a 27B){r}"
+    );
+    eprintln!("  {d}live log tail of {a}{}{d}:{r}", log_path.display());
+    eprintln!();
     let spinner_chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
     let mut tick: usize = 0;
+    let mut last_log_line = String::from("(waiting for first log line...)");
+    let mut last_log_size: u64 = 0;
+    let mut last_log_change = std::time::Instant::now();
 
     loop {
         if probe_server(url).await.is_ok() {
+            // Final clear of the spinner row.
+            eprint!("\r\x1b[2K");
             eprintln!(
-                "\r  {g}✓{r} MTPLX is ready ({:.1}s){:30}",
-                started_at.elapsed().as_secs_f64(),
-                ""
+                "  {g}✓{r} MTPLX is responding ({:.1}s)",
+                started_at.elapsed().as_secs_f64()
             );
             return Ok(true);
         }
+
+        // Refresh log tail. Track size so we can detect stuck state.
+        if let Ok(meta) = std::fs::metadata(&log_path) {
+            let size = meta.len();
+            if size != last_log_size {
+                last_log_size = size;
+                last_log_change = std::time::Instant::now();
+                if let Some(line) = tail_last_line(&log_path) {
+                    last_log_line = line;
+                }
+            }
+        }
+
         if started_at.elapsed() > timeout {
+            eprint!("\r\x1b[2K");
             eprintln!(
-                "\r  {w}!{r} MTPLX didn't respond within {}s{:30}",
-                timeout.as_secs(),
-                ""
+                "  {w}!{r} MTPLX didn't respond within {}s",
+                timeout.as_secs()
             );
-            eprintln!("    Check the log: {a}tail -50 {}{r}", log_path.display());
-            eprintln!(
-                "    The process may still be loading. Try {a}hip --setup{r} again in a moment."
-            );
+            eprintln!("    Last log line: {d}{}{r}", last_log_line);
+            eprintln!("    Full log:      {a}tail -50 {}{r}", log_path.display());
+            eprintln!("    The process may still be loading. Try {a}hip --setup{r} in a moment.");
             return Ok(false);
         }
-        // Spinner update
+
+        // Stuck-detection hint: log idle for >60s and we've waited >90s.
+        let stuck_hint = if last_log_change.elapsed() > std::time::Duration::from_secs(60)
+            && started_at.elapsed() > std::time::Duration::from_secs(90)
+        {
+            format!(
+                "  {w}(log idle {}s){r}",
+                last_log_change.elapsed().as_secs()
+            )
+        } else {
+            String::new()
+        };
+
+        // Render the spinner + truncated log line on a single row that
+        // doesn't wrap. Use ESC[2K to clear-line each tick so a longer
+        // previous line doesn't leave trailing junk after a shorter one.
+        let term_width = terminal_size::terminal_size()
+            .map(|(w, _)| w.0 as usize)
+            .unwrap_or(120);
+        // Reserve characters for: "  ⠋ (123s) " plus the stuck-hint visible width.
+        let prefix_visible = 2 + 1 + 1 + 1 + 1 + 4 + 1; // "  ⠋ (123s) "
+        let stuck_visible = strip_ansi_len_local(&stuck_hint);
+        let log_budget = term_width
+            .saturating_sub(prefix_visible)
+            .saturating_sub(stuck_visible)
+            .saturating_sub(2);
+        let truncated_log = truncate_log_line(&last_log_line, log_budget);
+
         eprint!(
-            "\r  {d}waiting for MTPLX{r} {a}{}{r} {d}({:.0}s){r}     ",
+            "\r\x1b[2K  {a}{}{r} {d}({:.0}s){r} {d}{}{r}{}",
             spinner_chars[tick % spinner_chars.len()],
-            started_at.elapsed().as_secs_f64()
+            started_at.elapsed().as_secs_f64(),
+            truncated_log,
+            stuck_hint,
         );
         let _ = std::io::stderr().flush();
         tick += 1;
         tokio::time::sleep(poll_interval).await;
     }
+}
+
+/// Read the last non-empty line of a file. Used by the wait spinner to
+/// surface MTPLX's most recent log message.
+fn tail_last_line(path: &Path) -> Option<String> {
+    let body = std::fs::read_to_string(path).ok()?;
+    body.lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .map(|s| s.to_string())
+}
+
+/// Truncate a log line to `max_chars`, preserving the tail (which is where
+/// the most informative progress lives, e.g. "loading weights: shard-7/8").
+fn truncate_log_line(s: &str, max_chars: usize) -> String {
+    if max_chars == 0 {
+        return String::new();
+    }
+    let count = s.chars().count();
+    if count <= max_chars {
+        return s.to_string();
+    }
+    let head = max_chars.saturating_sub(3);
+    let skip = count - head;
+    let mut out = String::with_capacity(max_chars);
+    out.push_str("...");
+    out.push_str(&s.chars().skip(skip).collect::<String>());
+    out
+}
+
+/// Cheap ANSI escape stripper for visible-width math.
+fn strip_ansi_len_local(s: &str) -> usize {
+    let mut out = 0usize;
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            for c2 in chars.by_ref() {
+                if c2 == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out += 1;
+        }
+    }
+    out
 }
 
 /// Check git, python3, and pip. Auto-install pip via `python3 -m ensurepip`
