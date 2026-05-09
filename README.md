@@ -1,4 +1,4 @@
-# iris-code
+# iris
 
 A lean Rust CLI coding agent for a local MTPLX server (Qwen3.6-27B with native MTP).
 Replicates the useful subset of opencode's agent loop without the heavy parent-agent
@@ -28,41 +28,41 @@ Or build from source:
 
 ```
 git clone https://github.com/daniel-farina/iris-code
-cd iris-code
+cd iris-code  # repo name unchanged
 cargo build --release
-./target/release/iris-code --help
+./target/release/iris --help
 ```
 
-On first run, iris-code probes your local MTPLX server, lists available
+On first run, iris probes your local MTPLX server, lists available
 models, and prints any setup hints needed. Re-run the wizard with
-`iris-code --setup`.
+`iris --setup`.
 
 ## Usage
 
 ```
 # One-shot ("print mode") — stream a single response, no tools.
-iris-code --one-shot --save-html ~/airplane.html "make a 3D airplane game; output just <html>...</html>."
-iris-code --print "..."   # alias for --one-shot
+iris --one-shot --save-html ~/airplane.html "make a 3D airplane game; output just <html>...</html>."
+iris --print "..."   # alias for --one-shot
 
 # Agent loop (default) — full tools.
-iris-code "in /tmp/foo, create hello.py and run it"
+iris "in /tmp/foo, create hello.py and run it"
 
 # Interactive chat — REPL with arrow-key history (rustyline).
-iris-code            # empty prompt enters chat
-iris-code --chat     # explicit
+iris            # empty prompt enters chat
+iris --chat     # explicit
 # REPL commands: :help :reset :quit :stats :cwd <path> :show-thinking on|off :full-output on|off
 #                :history :smoke [path] :tools :overhead :diff <a> <b> :peek [N] [failed]
 #                :dry-run [on|off] :cache [clear] :tps [N]
 
 # Recent-runs summary table.
-iris-code --summary --summary-n 10
+iris --summary --summary-n 10
 
 # Verbose / quiet shortcuts.
-iris-code -v "explain recursion"   # show thinking + full tool output + stats
-iris-code -q "..." > out.txt       # suppress live bar / panels for piping
+iris -v "explain recursion"   # show thinking + full tool output + stats
+iris -q "..." > out.txt       # suppress live bar / panels for piping
 
 # Persistent session id keeps the prefix-cache slot warm across calls.
-iris-code --session my-project "find where SamplingOpts defaults are defined"
+iris --session my-project "find where SamplingOpts defaults are defined"
 ```
 
 ## Live status bar (sticky bottom)
@@ -72,7 +72,7 @@ terminal via ANSI scroll regions (DECSTBM). Streamed output flows in the
 region above; the bar stays put even when you scroll the scrollback:
 
 ```
-─[iris-code]─ 247 tok ─ 18 lines ─ 102.9 tok/s ─ ttft 0.6s ─ stream 2.4s ─ total 3.0s
+─[iris]─ 247 tok ─ 18 lines ─ 102.9 tok/s ─ ttft 0.6s ─ stream 2.4s ─ total 3.0s
 ```
 
 After the run finishes the scroll region is released and a final summary
@@ -120,7 +120,7 @@ The bundled `tools/smoke/run_all.sh` validates HTML/JS artifacts:
 - JS/MJS: `node --check` syntax validation
 - Append-only JSONL log at `~/.mlx-code/logs/smoke.jsonl`
 
-Invoke via `iris-code --smoke` or pair with `--auto-smoke` for post-run verify.
+Invoke via `iris --smoke` or pair with `--auto-smoke` for post-run verify.
 
 ## Test-suite stability
 
@@ -146,7 +146,7 @@ Measured on Apple Silicon M5 Max 128GB against local MTPLX serving Qwen3.6-27B:
 | Sustained decode rate | 35-50 tok/s |
 | Agent-loop tool calls per refactor | 7-21 (depends on file count) |
 | Prefill rate at 80K context | 565 tok/s |
-| Prompt overhead (system + 10 tool specs) | ~1.35K tokens (vs opencode's ~13K) - run `iris-code --inspect-prompt` for live breakdown |
+| Prompt overhead (system + 10 tool specs) | ~1.35K tokens (vs opencode's ~13K) - run `iris --inspect-prompt` for live breakdown |
 
 ## Tested project shapes
 

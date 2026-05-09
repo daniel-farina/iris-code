@@ -373,7 +373,7 @@ impl MtplxClient {
         let mut buf: Vec<u8> = Vec::with_capacity(8 * 1024);
         let mut result = StreamResult::default();
         let mut ttft_set = false;
-        let label = std::env::var("MLX_CODE_TPS_LABEL").unwrap_or_else(|_| "iris-code".into());
+        let label = std::env::var("MLX_CODE_TPS_LABEL").unwrap_or_else(|_| "iris".into());
         let mut live = LiveTps::new(started, label);
         let mut pretty = PrettyOut::new();
         // tool_calls accumulator: index -> (id, name, args_buf)
@@ -409,7 +409,7 @@ impl MtplxClient {
                             Err(e) => {
                                 // Don't bail on a single malformed line; log to stderr.
                                 eprintln!(
-                                    "\n[iris-code] failed to parse SSE chunk: {} ({})",
+                                    "\n[iris] failed to parse SSE chunk: {} ({})",
                                     e,
                                     truncate(payload, 200)
                                 );

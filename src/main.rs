@@ -30,9 +30,9 @@ use crate::schema::ChatMessage;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "iris-code",
+    name = "iris",
     version,
-    about = "iris-code · lean coding agent for the local MTPLX model"
+    about = "iris · lean coding agent for the local MTPLX model"
 )]
 struct Cli {
     /// User prompt. Positional, joined with spaces.
@@ -277,13 +277,11 @@ async fn main() -> Result<()> {
     if cli.continue_last {
         match find_last_session_id() {
             Some(sid) => {
-                eprintln!("[iris-code] resuming session: {}", sid);
+                eprintln!("[iris] resuming session: {}", sid);
                 cli.session = sid;
             }
             None => {
-                eprintln!(
-                    "[iris-code] --continue: no prior runs found in ~/.mlx-code/logs/runs.jsonl"
-                );
+                eprintln!("[iris] --continue: no prior runs found in ~/.mlx-code/logs/runs.jsonl");
             }
         }
     }
@@ -293,11 +291,7 @@ async fn main() -> Result<()> {
         match std::fs::read_to_string(expand(p)?) {
             Ok(s) => cli.system = Some(s.trim().to_string()),
             Err(e) => {
-                eprintln!(
-                    "[iris-code] failed to read --system-file {}: {}",
-                    p.display(),
-                    e
-                );
+                eprintln!("[iris] failed to read --system-file {}: {}", p.display(), e);
                 std::process::exit(2);
             }
         }
@@ -316,7 +310,7 @@ async fn main() -> Result<()> {
     if let Some(watch_path) = cli.watch.clone() {
         let prompt = cli.prompt.join(" ");
         if prompt.trim().is_empty() {
-            eprintln!("[iris-code] --watch requires a prompt");
+            eprintln!("[iris] --watch requires a prompt");
             std::process::exit(2);
         }
         let client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
@@ -343,7 +337,7 @@ async fn main() -> Result<()> {
     }
 
     if prompt.trim().is_empty() {
-        eprintln!("usage: iris-code [--one-shot] [--chat] [--save PATH] [--save-html PATH] [--open] <prompt...>");
+        eprintln!("usage: iris [--one-shot] [--chat] [--save PATH] [--save-html PATH] [--open] <prompt...>");
         std::process::exit(2);
     }
 
@@ -390,7 +384,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
         Ok(r) => r,
         Err(e) => {
             eprintln!(
-                "[iris-code] rustyline init failed: {} - falling back to raw stdin",
+                "[iris] rustyline init failed: {} - falling back to raw stdin",
                 e
             );
             return run_chat_fallback(cli, client, first, conv, show_thinking, full_output).await;
@@ -413,7 +407,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
     let mut pending = first;
     loop {
         let user_msg = if let Some(p) = pending.take() {
-            eprintln!("[iris-code] (using initial prompt as first turn)");
+            eprintln!("[iris] (using initial prompt as first turn)");
             p
         } else {
             let prompt = "\x1b[1;36m> \x1b[0m";
@@ -432,11 +426,11 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     if let Some(h) = &history_path {
                         let _ = rl.save_history(h);
                     }
-                    eprintln!("\n[iris-code] bye");
+                    eprintln!("\n[iris] bye");
                     return Ok(());
                 }
                 Err(e) => {
-                    eprintln!("[iris-code] readline error: {}", e);
+                    eprintln!("[iris] readline error: {}", e);
                     return Ok(());
                 }
             }
@@ -453,7 +447,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 if let Some(h) = &history_path {
                     let _ = rl.save_history(h);
                 }
-                eprintln!("[iris-code] bye");
+                eprintln!("[iris] bye");
                 return Ok(());
             }
             ":reset" => {
@@ -461,24 +455,25 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     ChatMessage::system(agent::DEFAULT_SYSTEM_PROMPT.to_string())
                 });
                 conv = vec![sys];
-                eprintln!(
-                    "[iris-code] conversation cleared (session_id unchanged so cache stays warm)"
-                );
+                eprintln!("[iris] conversation cleared (session_id unchanged so cache stays warm)");
                 continue;
             }
             ":stats" => {
                 eprintln!(
-                    "[iris-code] turns_in_history={} session={} cwd={} show_thinking={} full_output={}",
-                    conv.iter().filter(|m| m.role == "user" || m.role == "assistant").count(),
+                    "[iris] turns_in_history={} session={} cwd={} show_thinking={} full_output={}",
+                    conv.iter()
+                        .filter(|m| m.role == "user" || m.role == "assistant")
+                        .count(),
                     client.session_id(),
                     std::env::current_dir().unwrap_or_default().display(),
-                    show_thinking, full_output,
+                    show_thinking,
+                    full_output,
                 );
                 continue;
             }
             ":history" => {
                 eprintln!(
-                    "[iris-code] history file: {}",
+                    "[iris] history file: {}",
                     history_path
                         .as_ref()
                         .map(|p| p.display().to_string())
@@ -489,10 +484,10 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
             cmd if cmd.starts_with(":cwd ") => {
                 let path = &cmd[5..].trim();
                 if let Err(e) = std::env::set_current_dir(path) {
-                    eprintln!("[iris-code] cd failed: {}", e);
+                    eprintln!("[iris] cd failed: {}", e);
                 } else {
                     eprintln!(
-                        "[iris-code] cwd={}",
+                        "[iris] cwd={}",
                         std::env::current_dir().unwrap_or_default().display()
                     );
                 }
@@ -501,13 +496,13 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
             cmd if cmd.starts_with(":show-thinking ") => {
                 show_thinking = matches!(cmd[15..].trim(), "on" | "1" | "true");
                 apply_pretty_env(show_thinking, full_output);
-                eprintln!("[iris-code] show_thinking = {}", show_thinking);
+                eprintln!("[iris] show_thinking = {}", show_thinking);
                 continue;
             }
             cmd if cmd.starts_with(":full-output ") => {
                 full_output = matches!(cmd[13..].trim(), "on" | "1" | "true");
                 apply_pretty_env(show_thinking, full_output);
-                eprintln!("[iris-code] full_output = {}", full_output);
+                eprintln!("[iris] full_output = {}", full_output);
                 continue;
             }
             ":smoke" => {
@@ -567,14 +562,14 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 let rest = cmd[6..].trim();
                 let parts: Vec<&str> = rest.splitn(2, char::is_whitespace).collect();
                 if parts.len() != 2 {
-                    eprintln!("[iris-code] usage: :diff <path_a> <path_b>");
+                    eprintln!("[iris] usage: :diff <path_a> <path_b>");
                     continue;
                 }
                 let args = serde_json::json!({"path_a": parts[0], "path_b": parts[1]});
                 let t = tools::diff::tool();
                 match (t.exec)(args).await {
                     Ok(out) => eprint!("{}", out),
-                    Err(e) => eprintln!("[iris-code] diff failed: {}", e),
+                    Err(e) => eprintln!("[iris] diff failed: {}", e),
                 }
                 continue;
             }
@@ -626,7 +621,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                         theme::RESET
                     );
                 } else {
-                    eprintln!("[iris-code] unknown theme: {} (try dark/light/mono)", arg);
+                    eprintln!("[iris] unknown theme: {} (try dark/light/mono)", arg);
                 }
                 continue;
             }
@@ -661,7 +656,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     "on" | "1" | "true" => true,
                     "off" | "0" | "false" => false,
                     _ => {
-                        eprintln!("[iris-code] usage: :dry-run [on|off]");
+                        eprintln!("[iris] usage: :dry-run [on|off]");
                         continue;
                     }
                 };
@@ -688,7 +683,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 let t = tools::peek_log::tool();
                 match (t.exec)(serde_json::Value::Object(args)).await {
                     Ok(out) => eprint!("{}", out),
-                    Err(e) => eprintln!("[iris-code] peek_log failed: {}", e),
+                    Err(e) => eprintln!("[iris] peek_log failed: {}", e),
                 }
                 continue;
             }
@@ -714,7 +709,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 continue;
             }
             cmd if cmd.starts_with(':') => {
-                eprintln!("[iris-code] unknown command: {} (try :help)", cmd);
+                eprintln!("[iris] unknown command: {} (try :help)", cmd);
                 continue;
             }
             _ => {}
@@ -755,7 +750,7 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 Err(e) => {
                     log.success = false;
                     log.error = Some(format!("{}", e));
-                    eprintln!("[iris-code] error: {}", e);
+                    eprintln!("[iris] error: {}", e);
                 }
             }
         } else {
@@ -772,16 +767,19 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     );
                     if cli.stats {
                         eprintln!(
-                            "[iris-code] rounds={} ttft={:?} total={:?} tool_calls={} completion_tok={}",
-                            stats.rounds, stats.first_ttft, stats.total,
-                            stats.total_tool_calls, stats.total_completion_tokens,
+                            "[iris] rounds={} ttft={:?} total={:?} tool_calls={} completion_tok={}",
+                            stats.rounds,
+                            stats.first_ttft,
+                            stats.total,
+                            stats.total_tool_calls,
+                            stats.total_completion_tokens,
                         );
                     }
                 }
                 Err(e) => {
                     log.success = false;
                     log.error = Some(format!("{}", e));
-                    eprintln!("[iris-code] error: {}", e);
+                    eprintln!("[iris] error: {}", e);
                 }
             }
         }
@@ -829,7 +827,7 @@ async fn run_chat_fallback(
             let mut line = String::new();
             let n = std::io::stdin().lock().read_line(&mut line).unwrap_or(0);
             if n == 0 {
-                eprintln!("\n[iris-code] bye");
+                eprintln!("\n[iris] bye");
                 return Ok(());
             }
             line.trim_end_matches(['\n', '\r']).to_string()
@@ -839,7 +837,7 @@ async fn run_chat_fallback(
             continue;
         }
         if trimmed == ":quit" || trimmed == ":exit" || trimmed == ":q" {
-            eprintln!("[iris-code] bye");
+            eprintln!("[iris] bye");
             return Ok(());
         }
         conv.push(ChatMessage::user(trimmed));
@@ -895,13 +893,13 @@ async fn run_one_shot(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<(
     if let Some(path) = &cli.save_html {
         let html = extract_html(&res.content);
         save_file(path, &html)?;
-        eprintln!("[iris-code] saved html to {}", path.display());
+        eprintln!("[iris] saved html to {}", path.display());
         if cli.open {
             open_in_browser(path)?;
         }
     } else if let Some(path) = &cli.save {
         save_file(path, &res.content)?;
-        eprintln!("[iris-code] saved to {}", path.display());
+        eprintln!("[iris] saved to {}", path.display());
         if cli.open {
             open_in_browser(path)?;
         }
@@ -956,7 +954,7 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
     }
     if cli.stats {
         eprintln!(
-            "[iris-code] rounds={} ttft={:?} total={:?} tool_calls={} first_prompt_tok={} completion_tok={}",
+            "[iris] rounds={} ttft={:?} total={:?} tool_calls={} first_prompt_tok={} completion_tok={}",
             stats.rounds,
             stats.first_ttft,
             stats.total,
@@ -1240,7 +1238,7 @@ async fn run_watch_loop(
         Some(pat) => match globset::Glob::new(pat) {
             Ok(g) => Some(g.compile_matcher()),
             Err(e) => {
-                eprintln!("[iris-code] --watch-pattern '{}' invalid: {}", pat, e);
+                eprintln!("[iris] --watch-pattern '{}' invalid: {}", pat, e);
                 return Ok(());
             }
         },
@@ -1425,7 +1423,7 @@ fn open_in_browser(path: &std::path::Path) -> Result<()> {
 fn run_smoke(paths: &str) -> Result<()> {
     let script = "/Users/dan/code-2/mlx-code/tools/smoke/run_all.sh";
     if !std::path::Path::new(script).exists() {
-        eprintln!("[iris-code] smoke: missing {}", script);
+        eprintln!("[iris] smoke: missing {}", script);
         std::process::exit(2);
     }
     let mut cmd = std::process::Command::new("bash");
@@ -1441,14 +1439,14 @@ fn run_smoke(paths: &str) -> Result<()> {
 
 fn print_run_summary(n: usize) -> Result<()> {
     let Ok(home) = std::env::var("HOME") else {
-        eprintln!("[iris-code] HOME unset");
+        eprintln!("[iris] HOME unset");
         return Ok(());
     };
     let path = format!("{}/.mlx-code/logs/runs.jsonl", home);
     let file = match std::fs::read_to_string(&path) {
         Ok(s) => s,
         Err(_) => {
-            eprintln!("[iris-code] no runs yet at {}", path);
+            eprintln!("[iris] no runs yet at {}", path);
             return Ok(());
         }
     };
@@ -1633,7 +1631,7 @@ fn print_chat_banner(client: &MtplxClient, cli: &Cli) {
         String::new()
     };
     eprintln!(
-        "{d}╭─ {a}iris-code{d} ─ {a}{model}{d} ─ session {a}{sess}{d}{dry}{r}",
+        "{d}╭─ {a}iris{d} ─ {a}{model}{d} ─ session {a}{sess}{d}{dry}{r}",
         d = d,
         a = a,
         r = r,

@@ -13,7 +13,7 @@
 set -eu
 
 REPO="daniel-farina/iris-code"
-BIN_NAME="iris-code"
+BIN_NAME="iris"
 INSTALL_DIR="${IRIS_INSTALL_DIR:-$HOME/.local/bin}"
 
 # --- Colors (respect NO_COLOR) ---
