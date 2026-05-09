@@ -57,8 +57,7 @@ async fn run(args: Value) -> Result<String> {
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
         .unwrap_or(DEFAULT_DEPTH)
-        .min(6)
-        .max(1);
+        .clamp(1, 6);
     let show_hidden = args
         .get("show_hidden")
         .and_then(|v| v.as_bool())

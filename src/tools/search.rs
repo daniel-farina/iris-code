@@ -201,12 +201,13 @@ async fn run(args: Value) -> Result<String> {
     Ok(out)
 }
 
+/// One match: (line_number, line_text, weight).
+type Hit = (usize, String, u32);
+/// Map of path -> hits in that path.
+type HitsByFile = HashMap<String, Vec<Hit>>;
+
 /// Single-pass scan over the file tree. Returns (hits-by-file, files_scanned).
-fn scan(
-    query: &str,
-    root: &std::path::Path,
-    case_insensitive: bool,
-) -> Result<(HashMap<String, Vec<(usize, String, u32)>>, u32)> {
+fn scan(query: &str, root: &std::path::Path, case_insensitive: bool) -> Result<(HitsByFile, u32)> {
     // Each matcher carries (label, matcher, lowercased-literal-or-empty).
     let mut matchers: Vec<(String, Matcher, String)> = Vec::new();
     let regex_q = if case_insensitive {
@@ -250,7 +251,7 @@ fn scan(
         None
     };
 
-    let mut hits: HashMap<String, Vec<(usize, String, u32)>> = HashMap::new();
+    let mut hits: HitsByFile = HashMap::new();
     let mut files_scanned = 0u32;
 
     for entry in WalkBuilder::new(root)

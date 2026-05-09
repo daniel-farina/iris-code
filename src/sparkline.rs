@@ -22,7 +22,7 @@ pub fn render(values: &[f64]) -> String {
     let lo = values.iter().cloned().fold(f64::INFINITY, f64::min);
     let hi = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     if (hi - lo).abs() < 0.001 {
-        return std::iter::repeat(BLOCKS[4]).take(values.len()).collect();
+        return std::iter::repeat_n(BLOCKS[4], values.len()).collect();
     }
     values
         .iter()

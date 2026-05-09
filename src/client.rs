@@ -156,7 +156,7 @@ impl LiveTps {
             let _ = stderr.flush();
         }
         self.last_line_len = 0;
-        self.last_render = self.last_render - Duration::from_secs(60);
+        self.last_render -= Duration::from_secs(60);
     }
 
     fn render(&mut self) {
@@ -386,10 +386,7 @@ impl MtplxClient {
             live.heartbeat();
             buf.extend_from_slice(&chunk);
             // Split on \n\n event boundaries
-            loop {
-                let Some(pos) = find_double_newline(&buf) else {
-                    break;
-                };
+            while let Some(pos) = find_double_newline(&buf) {
                 let event = buf.drain(..pos + 2).collect::<Vec<u8>>();
                 let event_text = match std::str::from_utf8(&event) {
                     Ok(s) => s,

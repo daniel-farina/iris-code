@@ -4,7 +4,7 @@
 //! - `dark`  (default): bright accents on a dark terminal background
 //! - `light`: muted accents that read on white/light backgrounds
 //! - `mono`:  no color at all - just bold/dim/reset for accessibility,
-//!            log files, or pipes that don't strip ANSI
+//!   log files, or pipes that don't strip ANSI
 //!
 //! Resolution order:
 //! 1. Runtime override (set by `:theme` REPL command -> `set_runtime`)

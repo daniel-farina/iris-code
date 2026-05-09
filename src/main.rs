@@ -227,10 +227,10 @@ async fn main() -> Result<()> {
     cli.show_thinking = if cli.hide_thinking {
         false
     } else {
-        match std::env::var("MLX_CODE_SHOW_THINKING").as_deref() {
-            Ok("0") | Ok("false") | Ok("off") => false,
-            _ => true,
-        }
+        !matches!(
+            std::env::var("MLX_CODE_SHOW_THINKING").as_deref(),
+            Ok("0") | Ok("false") | Ok("off")
+        )
     };
 
     if cli.verbose {
@@ -583,9 +583,8 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     .trim_start_matches(":tps")
                     .trim()
                     .parse()
-                    .unwrap_or(20)
-                    .min(50)
-                    .max(1);
+                    .unwrap_or(20usize)
+                    .clamp(1, 50);
                 let path = shellexpand::tilde("~/.mlx-code/logs/runs.jsonl").into_owned();
                 let body = std::fs::read_to_string(&path).unwrap_or_default();
                 let rates: Vec<f64> = body
@@ -1162,12 +1161,9 @@ fn print_diff(before: &FileSnaps, after: &FileSnaps) {
                 continue; // identical content; only metadata changed (mtime/head)
             }
             // Allocate the cap proportionally so a 200-line removal doesn't
-            // starve the additions.
-            let rem_share = if total_changes == 0 {
-                0
-            } else {
-                (shown_cap * removed.len() + total_changes / 2) / total_changes
-            };
+            // starve the additions. `total_changes > 0` here - the
+            // `continue` above already handled the zero case.
+            let rem_share = (shown_cap * removed.len() + total_changes / 2) / total_changes;
             let add_share = shown_cap.saturating_sub(rem_share);
 
             for (i, line) in removed.iter().take(rem_share).enumerate() {
@@ -1293,10 +1289,7 @@ fn scan_mtimes(root: &std::path::Path, matcher: Option<&globset::GlobMatcher>) -
             // name ("foo.rs") so users can pass either "*.rs" or "src/**/*.rs".
             if let Some(m) = matcher {
                 let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
-                let name = rel
-                    .file_name()
-                    .map(|n| std::path::Path::new(n))
-                    .unwrap_or(rel);
+                let name = rel.file_name().map(std::path::Path::new).unwrap_or(rel);
                 if !m.is_match(rel) && !m.is_match(name) {
                     continue;
                 }
@@ -1384,8 +1377,7 @@ fn dedupe_html_shell(s: &str) -> String {
     let mut s = s.to_string();
     // Drop a leading bare `<html>` line if there's another `<html` after it.
     let lower = s.to_lowercase();
-    if lower.starts_with("<html>") {
-        let after = &lower[6..];
+    if let Some(after) = lower.strip_prefix("<html>") {
         if let Some(pos) = after.find("<html") {
             // skip over the leading "<html>" + any whitespace, keep the second one
             let cut = 6 + pos;
@@ -1408,7 +1400,7 @@ fn dedupe_html_shell(s: &str) -> String {
     s
 }
 
-fn save_file(path: &PathBuf, content: &str) -> Result<()> {
+fn save_file(path: &std::path::Path, content: &str) -> Result<()> {
     let path = expand(path)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -1418,13 +1410,13 @@ fn save_file(path: &PathBuf, content: &str) -> Result<()> {
     Ok(())
 }
 
-fn expand(path: &PathBuf) -> Result<PathBuf> {
+fn expand(path: &std::path::Path) -> Result<PathBuf> {
     let s = path.to_string_lossy();
     let expanded = shellexpand::tilde(&s);
     Ok(PathBuf::from(expanded.into_owned()))
 }
 
-fn open_in_browser(path: &PathBuf) -> Result<()> {
+fn open_in_browser(path: &std::path::Path) -> Result<()> {
     let path = expand(path)?;
     let _ = std::process::Command::new("open").arg(&path).status();
     Ok(())

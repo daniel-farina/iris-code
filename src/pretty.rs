@@ -241,9 +241,8 @@ pub fn tool_result(name: &str, ok: bool, body: &str, default_max_lines: usize) {
         "\x1b[2m╭─ {}{}\x1b[0;2m result: \x1b[1m{}\x1b[0;2m ─────────────────────\x1b[0m",
         icon_color, icon, name
     );
-    let mut shown = 0usize;
     let total = body.lines().count();
-    for line in body.lines() {
+    for (shown, line) in body.lines().enumerate() {
         if shown == max_lines && total > max_lines + 2 {
             eprintln!(
                 "\x1b[2m│ ... ({} more lines, truncated; --full-output to see all)\x1b[0m",
@@ -252,7 +251,6 @@ pub fn tool_result(name: &str, ok: bool, body: &str, default_max_lines: usize) {
             break;
         }
         eprintln!("\x1b[2m│\x1b[0m {}", line);
-        shown += 1;
     }
     eprintln!("\x1b[2m╰─────────────────────────────────────\x1b[0m");
 }

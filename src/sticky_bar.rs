@@ -108,7 +108,7 @@ pub fn leave() {
     let _ = write!(err, "\x1b[r");
     if h > 0 {
         // Move cursor to the bar's row and clear it, then drop a newline.
-        let _ = write!(err, "\x1b[{};1H\x1b[2K\n", h);
+        let _ = writeln!(err, "\x1b[{};1H\x1b[2K", h);
     }
     let _ = err.flush();
 }

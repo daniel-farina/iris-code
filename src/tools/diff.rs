@@ -81,8 +81,8 @@ async fn run(args: Value) -> Result<String> {
         let mut b_count = 0usize;
         let mut anchored = false;
         // First pass: compute hunk header counts.
-        for k in r.from..r.to {
-            match &ops[k] {
+        for op in &ops[r.from..r.to] {
+            match op {
                 Op::Eq(ai, bi) => {
                     if !anchored {
                         a_start = *ai;
@@ -116,12 +116,12 @@ async fn run(args: Value) -> Result<String> {
             b_count
         ));
         // Second pass: emit lines.
-        for k in r.from..r.to {
+        for op in &ops[r.from..r.to] {
             if emitted >= MAX_OUTPUT_LINES {
                 out.push_str("... (output truncated)\n");
                 return Ok(out);
             }
-            match &ops[k] {
+            match op {
                 Op::Eq(ai, _bi) => {
                     out.push(' ');
                     out.push_str(&a_lines[*ai]);

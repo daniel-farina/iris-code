@@ -135,6 +135,7 @@ pub struct ToolCallDelta {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default, rename = "type")]
+    #[allow(dead_code)]
     pub kind: Option<String>,
     #[serde(default)]
     pub function: Option<FunctionCallDelta>,

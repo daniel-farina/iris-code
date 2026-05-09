@@ -105,7 +105,7 @@ pub async fn run_wizard(url: &str) -> Result<bool> {
         let mark = if i == 0 {
             format!("{g}*{r}")
         } else {
-            format!(" ")
+            " ".to_string()
         };
         eprintln!("    {} {a}{m}{r}", mark, a = a, r = r, m = m);
     }

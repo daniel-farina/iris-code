@@ -38,8 +38,7 @@ async fn run(args: Value) -> Result<String> {
         .and_then(|v| v.as_u64())
         .map(|x| x as usize)
         .unwrap_or(DEFAULT_N)
-        .min(MAX_N)
-        .max(1);
+        .clamp(1, MAX_N);
     let failed_only = args
         .get("failed_only")
         .and_then(|v| v.as_bool())
@@ -78,7 +77,7 @@ async fn run(args: Value) -> Result<String> {
         total,
         if failed_only { " (failed_only)" } else { "" },
         if total > take.len() {
-            format!(" (file has more)")
+            " (file has more)".to_string()
         } else {
             String::new()
         },

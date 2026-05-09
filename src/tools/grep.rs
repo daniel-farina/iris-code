@@ -75,7 +75,7 @@ async fn run(args: Value) -> Result<String> {
         }
         let p = entry.path();
         if let Some(m) = &glob_match {
-            let basename = p.file_name().map(|f| Path::new(f)).unwrap_or(p);
+            let basename = p.file_name().map(Path::new).unwrap_or(p);
             if !m.is_match(basename) {
                 continue;
             }
