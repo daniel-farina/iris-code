@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+._*
+
+# Local state - don't ship the tester's history
+/demo/
+/examples/.runs/
+
+# Editor swap files
+*.swp
+*.swo
+
+# Logs that might land here from runs
+*.log

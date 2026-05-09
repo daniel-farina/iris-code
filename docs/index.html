@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>iris-code - a lean coding agent for the local MTPLX model</title>
+  <meta name="description" content="iris-code: a tiny Rust CLI coding agent for a local MTPLX server. 10 tools, ~1.35K token prompt overhead, ~9.6x lighter than opencode." />
+  <meta name="color-scheme" content="dark light" />
+  <meta property="og:title" content="iris-code" />
+  <meta property="og:description" content="A lean coding agent for the local MTPLX model. 10 tools, ~1.35K token prompt overhead." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      /* iris-flower palette */
+      --deep-violet: #5e17eb;
+      --royal-purple: #7c3aed;
+      --soft-violet: #a78bfa;
+      --lavender: #ddd6fe;
+      --gold: #fde047;
+      --white: #ffffff;
+
+      /* dark theme defaults */
+      --bg: #0c0a14;
+      --bg-elev: #15101f;
+      --bg-term: #0a0612;
+      --bg-card: #1a142b;
+      --border: #2a1f48;
+      --border-strong: #3b2c63;
+      --text: #ece9f5;
+      --text-dim: #b8b0d4;
+      --text-muted: #7d749a;
+      --accent: var(--soft-violet);
+      --accent-strong: var(--royal-purple);
+      --accent-soft: var(--lavender);
+      --accent-gold: var(--gold);
+      --shadow: 0 8px 30px rgba(94, 23, 235, 0.18);
+    }
+
+    [data-theme="light"] {
+      --bg: #fbfaff;
+      --bg-elev: #ffffff;
+      --bg-term: #1a142b;
+      --bg-card: #f4f1ff;
+      --border: #e3dcf7;
+      --border-strong: #cbbef0;
+      --text: #1a142b;
+      --text-dim: #4a3f70;
+      --text-muted: #6e6491;
+      --accent: var(--royal-purple);
+      --accent-strong: var(--deep-violet);
+      --accent-soft: var(--soft-violet);
+      --accent-gold: #d4a800;
+      --shadow: 0 8px 30px rgba(94, 23, 235, 0.10);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      background:
+        radial-gradient(1200px 600px at 50% -200px, rgba(124, 58, 237, 0.18), transparent 60%),
+        radial-gradient(800px 500px at 90% 10%, rgba(167, 139, 250, 0.10), transparent 70%),
+        var(--bg);
+      min-height: 100vh;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { color: var(--accent-soft); text-decoration: underline; }
+
+    code, pre, .mono {
+      font-family: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    }
+
+    .container {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* ─────────── nav ─────────── */
+    nav.top {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: color-mix(in srgb, var(--bg) 75%, transparent);
+      border-bottom: 1px solid var(--border);
+    }
+    nav.top .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      max-width: 980px;
+      margin: 0 auto;
+    }
+    nav.top .brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; letter-spacing: 0.02em;
+      color: var(--text);
+    }
+    nav.top .brand .iris-mini {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent);
+      font-size: 18px;
+      line-height: 1;
+    }
+    nav.top .brand .iris-mini .beard { color: var(--accent-gold); }
+    nav.top .links { display: flex; gap: 22px; align-items: center; }
+    nav.top .links a {
+      color: var(--text-dim);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    nav.top .links a:hover { color: var(--accent); text-decoration: none; }
+    .theme-toggle {
+      background: transparent;
+      border: 1px solid var(--border-strong);
+      color: var(--text-dim);
+      width: 36px; height: 32px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      display: inline-flex; align-items: center; justify-content: center;
+      transition: border-color 120ms ease, color 120ms ease;
+    }
+    .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ─────────── hero ─────────── */
+    .hero {
+      padding: 64px 0 56px;
+      text-align: center;
+    }
+
+    .ascii-wrap {
+      display: inline-block;
+      text-align: left;
+      padding: 16px 22px;
+      background: linear-gradient(180deg, rgba(124, 58, 237, 0.06), rgba(124, 58, 237, 0));
+      border-radius: 16px;
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    pre.logo {
+      margin: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.05;
+      letter-spacing: 0;
+      white-space: pre;
+      text-shadow: 0 0 18px rgba(167, 139, 250, 0.25);
+    }
+    pre.logo .row { display: block; }
+    pre.logo .flower { display: inline-block; padding-right: 16px; }
+    /* gradient stops mirror IRIS_GRADIENT */
+    .grad-1 { color: #5f0087; }
+    .grad-2 { color: #8700af; }
+    .grad-3 { color: #af5fff; }
+    .grad-4 { color: #af87ff; }
+    .grad-5 { color: #d787ff; }
+    .grad-6 { color: #d7afff; }
+    .f-lavender   { color: #d7afff; }
+    .f-violet-top { color: #af87ff; }
+    .f-gold       { color: #ffd700; }
+    .f-violet-bot { color: #8700af; }
+    .f-stem       { color: #87af87; }
+    .f-stem-dim   { color: #5e7e5e; }
+
+    .tagline {
+      margin-top: 22px;
+      font-size: 19px;
+      color: var(--text-dim);
+      font-weight: 400;
+    }
+    .tagline .accent { color: var(--accent); font-weight: 600; }
+    .tagline .gold { color: var(--accent-gold); font-weight: 600; }
+
+    .hero-sub {
+      margin-top: 6px;
+      color: var(--text-muted);
+      font-size: 14px;
+      letter-spacing: 0.02em;
+    }
+    .hero-sub .dot { color: var(--accent); margin: 0 8px; }
+
+    /* ─────────── copy box ─────────── */
+    .copybox {
+      margin: 32px auto 0;
+      max-width: 720px;
+      background: var(--bg-term);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: var(--shadow);
+      text-align: left;
+    }
+    .copybox .prompt { color: var(--accent-gold); user-select: none; flex-shrink: 0; }
+    .copybox .cmd {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px;
+      color: var(--text);
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .copybox .cmd .bin { color: var(--accent); }
+    .copybox .cmd .url { color: var(--accent-soft); }
+    .copy-btn {
+      background: transparent;
+      color: var(--text-dim);
+      border: 1px solid var(--border-strong);
+      padding: 6px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      flex-shrink: 0;
+      transition: all 120ms ease;
+      font-family: 'Inter', sans-serif;
+    }
+    .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .copy-btn.copied { color: #6ee7b7; border-color: #6ee7b7; }
+
+    /* ─────────── sections ─────────── */
+    section {
+      padding: 56px 0;
+      border-top: 1px solid var(--border);
+    }
+    section:first-of-type { border-top: 0; }
+    h1 { margin: 0; font-size: 36px; }
+    h2 {
+      margin: 0 0 8px;
+      font-size: 26px;
+      letter-spacing: -0.01em;
+    }
+    h2 .num {
+      display: inline-block;
+      width: 28px; height: 28px;
+      line-height: 28px; text-align: center;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--royal-purple), var(--deep-violet));
+      color: var(--white);
+      font-size: 14px;
+      font-weight: 700;
+      margin-right: 12px;
+      vertical-align: 3px;
+    }
+    h3 { margin: 24px 0 8px; font-size: 17px; color: var(--accent-soft); }
+    .subtitle { color: var(--text-muted); margin: 0 0 24px; font-size: 15px; }
+
+    .bullets {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 14px;
+    }
+    .bullets li {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 10px;
+      padding: 14px 18px;
+      transition: border-color 120ms ease, transform 120ms ease;
+    }
+    .bullets li:hover {
+      border-color: var(--border-strong);
+      border-left-color: var(--accent-gold);
+    }
+    .bullets li b { color: var(--accent-soft); font-weight: 600; }
+    .bullets li code {
+      background: var(--bg-term);
+      color: var(--accent-soft);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      border: 1px solid var(--border);
+    }
+
+    /* ─────────── terminal blocks ─────────── */
+    .term {
+      background: var(--bg-term);
+      border: 1px solid var(--border-strong);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      margin-top: 16px;
+    }
+    .term .titlebar {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px;
+      background: linear-gradient(180deg, rgba(124, 58, 237, 0.10), transparent);
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .term .titlebar .dots { display: flex; gap: 6px; margin-right: 8px; }
+    .term .titlebar .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      display: inline-block;
+    }
+    .term .titlebar .dot.r { background: #ff6b6b; opacity: 0.7; }
+    .term .titlebar .dot.y { background: #fbbf24; opacity: 0.7; }
+    .term .titlebar .dot.g { background: #4ade80; opacity: 0.7; }
+
+    .term pre {
+      margin: 0;
+      padding: 18px 18px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.55;
+      color: #ece9f5;
+      overflow-x: auto;
+    }
+    /* terminal ANSI-ish coloring */
+    .t-prompt { color: var(--gold); }
+    .t-cmd    { color: #ece9f5; }
+    .t-dim    { color: #7d749a; }
+    .t-good   { color: #6ee7b7; }
+    .t-warn   { color: var(--gold); }
+    .t-accent { color: var(--soft-violet); }
+    .t-key    { color: #d7afff; }
+    .t-str    { color: #c4b5fd; }
+    .t-num    { color: #fde047; }
+    .t-bar    { color: #5b21b6; }
+    .t-flag   { color: #f0abfc; }
+
+    /* ─────────── alternates (install) ─────────── */
+    .alts {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .alts .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .alts .card h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--accent-gold);
+      font-weight: 700;
+    }
+    .alts .card pre {
+      margin: 0;
+      background: var(--bg-term);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 12.5px;
+      overflow-x: auto;
+    }
+
+    /* ─────────── tables ─────────── */
+    .tbl-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    table th, table td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+    }
+    table th {
+      background: rgba(124, 58, 237, 0.10);
+      color: var(--accent-soft);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+    table tr:last-child td { border-bottom: 0; }
+    table tr:hover td { background: rgba(167, 139, 250, 0.04); }
+    table td.mod {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    table td.metric { font-family: 'JetBrains Mono', monospace; color: var(--accent-gold); }
+
+    /* ─────────── perf cards ─────────── */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-top: 16px;
+    }
+    .stat {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 16px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .stat::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--royal-purple), var(--soft-violet), var(--gold));
+      opacity: 0.6;
+    }
+    .stat .v {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 26px;
+      font-weight: 700;
+      color: var(--accent-soft);
+      letter-spacing: -0.01em;
+    }
+    .stat .v .unit { font-size: 14px; color: var(--text-muted); margin-left: 2px; }
+    .stat .l {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .stat.gold .v { color: var(--accent-gold); }
+
+    /* ─────────── footer ─────────── */
+    footer {
+      padding: 40px 0 60px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 14px;
+      border-top: 1px solid var(--border);
+      margin-top: 32px;
+    }
+    footer .links {
+      display: inline-flex;
+      gap: 20px;
+      margin-bottom: 14px;
+    }
+    footer .links a {
+      color: var(--text-dim);
+      font-weight: 500;
+    }
+    footer .links a:hover { color: var(--accent); text-decoration: none; }
+    footer .iris-foot {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent);
+      font-size: 16px;
+      margin-bottom: 8px;
+      letter-spacing: 1px;
+    }
+    footer .iris-foot .beard { color: var(--accent-gold); }
+
+    /* ─────────── responsive ─────────── */
+    @media (max-width: 720px) {
+      h1 { font-size: 28px; }
+      h2 { font-size: 22px; }
+      pre.logo { font-size: 9px; }
+      pre.logo .flower { display: none; }
+      .alts { grid-template-columns: 1fr; }
+      .stat-grid { grid-template-columns: repeat(2, 1fr); }
+      .stat .v { font-size: 22px; }
+      nav.top .links a:not(.theme-toggle):not(.gh) { display: none; }
+      .copybox { padding: 12px; gap: 8px; }
+      .copybox .cmd { font-size: 12.5px; }
+      .term pre { font-size: 11.5px; padding: 14px; }
+      section { padding: 44px 0; }
+      .hero { padding: 40px 0 36px; }
+    }
+    @media (max-width: 480px) {
+      pre.logo { font-size: 7.5px; }
+      .stat-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<nav class="top">
+  <div class="row">
+    <div class="brand">
+      <span class="iris-mini">&#x2746;<span class="beard">&#x25C6;</span>&#x2746;</span>
+      <span>iris-code</span>
+    </div>
+    <div class="links">
+      <a href="#install">Install</a>
+      <a href="#what">What it does</a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#performance">Performance</a>
+      <a class="gh" href="https://github.com/daniel-farina/iris-code" target="_blank" rel="noopener">GitHub</a>
+      <button class="theme-toggle" id="themeBtn" aria-label="Toggle theme" title="Toggle light/dark">&#9789;</button>
+    </div>
+  </div>
+</nav>
+
+<!-- ─────────── HERO ─────────── -->
+<section class="hero">
+  <div class="container">
+    <div class="ascii-wrap" aria-label="iris-code logo">
+<pre class="logo" aria-hidden="true"><span class="row"><span class="flower f-lavender"> &#x2572;&#x258E;&#x2502;&#x258E;&#x2571; </span><span class="grad-1">&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;     &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="flower f-violet-top"> &#x258E;&#x258E;&#x2502;&#x258E;&#x258E; </span><span class="grad-2">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;    &#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span><span class="row"><span class="flower f-gold">&#x2500;&#x25C6;&#x2500;&#x25C6;&#x2500;&#x25C6;&#x2500;</span><span class="grad-3">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;  </span></span><span class="row"><span class="flower f-violet-bot"> &#x2571;&#x258E;&#x2502;&#x258E;&#x2572; </span><span class="grad-4">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2551;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x255D;  </span></span><span class="row"><span class="flower f-stem">   &#x2502;   </span><span class="grad-5">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2551;    &#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;&#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="flower f-stem-dim">  &#x2500;&#x2534;&#x2500;  </span><span class="grad-6">&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;  &#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;     &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span></pre>
+    </div>
+
+    <p class="tagline">a <span class="accent">lean coding agent</span> for the local <span class="gold">MTPLX</span> model</p>
+    <p class="hero-sub">Rust CLI <span class="dot">&middot;</span> 10 tools <span class="dot">&middot;</span> ~1.35K token prompt overhead <span class="dot">&middot;</span> qwen3.6-27b</p>
+
+    <div class="copybox">
+      <span class="prompt">$</span>
+      <span class="cmd" id="installCmd"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh</span> | sh</span>
+      <button class="copy-btn" data-copy="installCmd">COPY</button>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── INSTALL ─────────── -->
+<section id="install">
+  <div class="container">
+    <h2><span class="num">1</span>Install</h2>
+    <p class="subtitle">A single curl line. No daemon, no auth, no MCP.</p>
+
+    <div class="copybox">
+      <span class="prompt">$</span>
+      <span class="cmd" id="installCmd2"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/iris-code/main/install.sh</span> | sh</span>
+      <button class="copy-btn" data-copy="installCmd2">COPY</button>
+    </div>
+
+    <div class="alts">
+      <div class="card">
+        <h4>Cargo install (from git)</h4>
+        <pre><span class="t-cmd">cargo install --git https://github.com/daniel-farina/iris-code</span></pre>
+      </div>
+      <div class="card">
+        <h4>Build from source</h4>
+        <pre><span class="t-cmd">git clone https://github.com/daniel-farina/iris-code
+cd iris-code
+cargo build --release
+./target/release/iris-code --help</span></pre>
+      </div>
+      <div class="card">
+        <h4>Manual download</h4>
+        <pre><span class="t-cmd"># grab a release binary
+curl -LO https://github.com/daniel-farina/\
+iris-code/releases/latest/download/iris-code
+chmod +x iris-code &amp;&amp; mv iris-code /usr/local/bin/</span></pre>
+      </div>
+      <div class="card">
+        <h4>Point at your MTPLX server</h4>
+        <pre><span class="t-cmd">export MLX_CODE_URL=http://localhost:8088/v1
+export MLX_CODE_MODEL=mtplx-qwen36-27b-optimized-speed
+iris-code</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── WHAT IT DOES ─────────── -->
+<section id="what">
+  <div class="container">
+    <h2><span class="num">2</span>What it does</h2>
+    <p class="subtitle">A tight subset of opencode's agent loop, without the parent-agent prompt overhead.</p>
+
+    <ul class="bullets">
+      <li><b>10 built-in tools.</b> <code>read</code>, <code>grep</code>, <code>edit</code>, <code>bash</code>, <code>list</code>, <code>glob</code>, <code>search</code>, <code>diff</code>, <code>tree</code>, <code>peek_log</code>. Each is a JSON-schema spec sent to the model plus a small local executor. Gitignore-aware where it matters.</li>
+      <li><b>Thinking mode shown by default.</b> <code>&lt;think&gt;</code> blocks render in a dim panel above the response. Hide with <code>--hide-thinking</code> or <code>MLX_CODE_SHOW_THINKING=0</code>; verbose with <code>-v</code> to also get full tool output and stats.</li>
+      <li><b>Dry run.</b> <code>--dry-run</code> makes <code>edit</code> and <code>bash</code> return <code>(dry_run) would&hellip;</code> previews instead of writing or executing - the agent loop still runs end-to-end so you can validate plans safely.</li>
+      <li><b>Sticky bottom status bar.</b> ANSI scroll regions (DECSTBM) pin a live <code>tok / lines / tok-s / ttft / total</code> bar to the bottom row while output streams above. Falls back to inline <code>\r</code> if the terminal can't, or with <code>MLX_CODE_NO_STICKY=1</code>.</li>
+      <li><b>~1.35K token prompt overhead vs opencode's ~13K</b> - roughly 9.6&times; lighter cold prefills. Run <code>iris-code --inspect-prompt</code> for a live per-tool breakdown.</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ─────────── QUICKSTART ─────────── -->
+<section id="quickstart">
+  <div class="container">
+    <h2><span class="num">3</span>Quickstart</h2>
+    <p class="subtitle">Launch into chat, list commands, swap themes, watch tokens fly.</p>
+
+    <div class="term">
+      <div class="titlebar">
+        <span class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></span>
+        <span>~/code &mdash; iris-code</span>
+      </div>
+<pre><span class="t-prompt">$</span> <span class="t-cmd">iris-code</span>
+<span class="t-dim">                  &mdash; a lean coding agent &middot; <span class="t-warn">MTPLX</span> &middot; qwen3.6-27b &mdash;</span>
+
+<span class="t-accent">iris&gt;</span> <span class="t-cmd">:help</span>
+  <span class="t-key">:help</span>            show this help
+  <span class="t-key">:tools</span>           list registered tools and their schemas
+  <span class="t-key">:theme</span> <span class="t-flag">[name]</span>    iris &middot; light &middot; mono     (current: <span class="t-accent">iris</span>)
+  <span class="t-key">:tps</span> <span class="t-flag">[N]</span>         tok/s sparkline for last N runs
+  <span class="t-key">:overhead</span>        prompt-overhead breakdown (system + 10 tools)
+  <span class="t-key">:dry-run</span> <span class="t-flag">on|off</span>  preview edits/bash without writing
+  <span class="t-key">:peek</span> <span class="t-flag">[N]</span>        last N runs from runs.jsonl
+  <span class="t-key">:reset</span> <span class="t-key">:quit</span>     conversation controls
+
+<span class="t-accent">iris&gt;</span> <span class="t-cmd">:tools</span>
+  <span class="t-good">read</span>      <span class="t-dim">text-file slice (offset/limit/around+context)</span>
+  <span class="t-good">grep</span>      <span class="t-dim">regex search via the ignore crate</span>
+  <span class="t-good">edit</span>      <span class="t-dim">exact-match replace (dry_run supported)</span>
+  <span class="t-good">bash</span>      <span class="t-dim">zsh -lc, 30s default timeout, 16 KB cap</span>
+  <span class="t-good">list</span>      <span class="t-dim">directory listing</span>
+  <span class="t-good">glob</span>      <span class="t-dim">file globbing, gitignore-aware, 200 cap</span>
+  <span class="t-good">search</span>    <span class="t-dim">query-expanded search (definitions/files-only modes)</span>
+  <span class="t-good">diff</span>     <span class="t-dim">LCS unified diff between two files</span>
+  <span class="t-good">tree</span>      <span class="t-dim">recursive view, gitignore-aware, 500 entries</span>
+  <span class="t-good">peek_log</span>  <span class="t-dim">last N entries from runs.jsonl</span>
+
+<span class="t-accent">iris&gt;</span> <span class="t-cmd">:theme</span> <span class="t-str">light</span>
+  theme: <span class="t-accent">iris</span> &rarr; <span class="t-accent">light</span>
+
+<span class="t-accent">iris&gt;</span> <span class="t-cmd">:tps</span> <span class="t-num">10</span>
+  last 10 runs &nbsp;<span class="t-accent">&#x2581;&#x2583;&#x2585;&#x2587;&#x2587;&#x2585;&#x2583;&#x2585;&#x2587;&#x2588;</span>&nbsp; <span class="t-num">42.7</span> tok/s avg
+
+<span class="t-bar">&mdash;[iris-code]&mdash; <span class="t-num">247</span> tok &mdash; <span class="t-num">18</span> lines &mdash; <span class="t-num">102.9</span> tok/s &mdash; ttft <span class="t-num">0.6</span>s &mdash; total <span class="t-num">3.0</span>s</span></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── ARCHITECTURE ─────────── -->
+<section id="architecture">
+  <div class="container">
+    <h2><span class="num">4</span>Architecture</h2>
+    <p class="subtitle">No daemon, no TUI framework, no MCP. Just modules.</p>
+
+    <h3>Core (src/*.rs)</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Module</th><th>Responsibility</th></tr></thead>
+        <tbody>
+          <tr><td class="mod">main.rs</td><td>CLI flag parsing, mode dispatch (one-shot, agent, chat, smoke, summary).</td></tr>
+          <tr><td class="mod">agent.rs</td><td>Tool-using agent loop &mdash; up to 30 rounds of stream &rarr; tool_calls &rarr; tool results.</td></tr>
+          <tr><td class="mod">client.rs</td><td>Thin HTTP/SSE client for the OpenAI-compatible MTPLX endpoint.</td></tr>
+          <tr><td class="mod">schema.rs</td><td>Serde types for the chat-completions wire shape (only fields we use).</td></tr>
+          <tr><td class="mod">repl.rs</td><td>rustyline Helper: <code>:command</code> completion, path completion, history.</td></tr>
+          <tr><td class="mod">pretty.rs</td><td>Pretty-print streamed think blocks, content, tool calls, tool results.</td></tr>
+          <tr><td class="mod">theme.rs</td><td>iris / light / mono color themes &mdash; named accessors over 256-color ANSI.</td></tr>
+          <tr><td class="mod">logo.rs</td><td>Startup ASCII logo: 6-row "IRIS-CODE" with iris flower + violet gradient.</td></tr>
+          <tr><td class="mod">sticky_bar.rs</td><td>Sticky bottom status bar via DECSTBM scroll regions, with safe fallback.</td></tr>
+          <tr><td class="mod">sparkline.rs</td><td>Tiny Unicode-block sparkline + small formatting helpers.</td></tr>
+          <tr><td class="mod">runlog.rs</td><td>Append-only JSONL run log at <code>~/.mlx-code/logs/runs.jsonl</code>.</td></tr>
+          <tr><td class="mod">read_cache.rs</td><td>Process-global content cache for the <code>read</code> tool within one run.</td></tr>
+          <tr><td class="mod">dry_run_log.rs</td><td>Accumulator of paths a dry run would have mutated; printed at end-of-run.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Tools (src/tools/*.rs)</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Module</th><th>Tool</th></tr></thead>
+        <tbody>
+          <tr><td class="mod">tools/mod.rs</td><td>Tool registry &mdash; JSON-schema specs + dispatch to local executors.</td></tr>
+          <tr><td class="mod">tools/read.rs</td><td><code>read(path, offset?, limit?, around?, context=20)</code>; refuses &gt;1MB.</td></tr>
+          <tr><td class="mod">tools/grep.rs</td><td><code>grep(pattern, path?, glob?)</code> via the <code>ignore</code> crate, 50-hit cap.</td></tr>
+          <tr><td class="mod">tools/edit.rs</td><td><code>edit(path, old, new, replace_all?, dry_run?)</code>; empty <code>old</code> creates.</td></tr>
+          <tr><td class="mod">tools/bash.rs</td><td><code>bash(command, timeout_s?)</code> in <code>zsh -lc</code>, 16 KB output cap.</td></tr>
+          <tr><td class="mod">tools/list.rs</td><td><code>list(path)</code> directory listing.</td></tr>
+          <tr><td class="mod">tools/glob.rs</td><td><code>glob(pattern, path?)</code>, gitignore-aware, 200-path cap.</td></tr>
+          <tr><td class="mod">tools/search.rs</td><td><code>search(query, &hellip;)</code> with query expansion + definitions/files-only modes.</td></tr>
+          <tr><td class="mod">tools/diff.rs</td><td><code>diff(a, b, context=3)</code> LCS unified diff with <code>@@</code> hunks.</td></tr>
+          <tr><td class="mod">tools/tree.rs</td><td><code>tree(path?, depth=2, show_hidden?)</code>, gitignore-aware, 500 entries.</td></tr>
+          <tr><td class="mod">tools/peek_log.rs</td><td><code>peek_log(n=10, failed_only?)</code> &mdash; last N rows from runs.jsonl.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── PERFORMANCE ─────────── -->
+<section id="performance">
+  <div class="container">
+    <h2><span class="num">5</span>Performance</h2>
+    <p class="subtitle">Measured on Apple Silicon M5 Max 128 GB against local MTPLX serving Qwen3.6-27B.</p>
+
+    <div class="stat-grid">
+      <div class="stat">
+        <div class="v">1353<span class="unit">tok</span></div>
+        <div class="l">prompt overhead</div>
+      </div>
+      <div class="stat gold">
+        <div class="v">9.6&times;</div>
+        <div class="l">lighter than opencode</div>
+      </div>
+      <div class="stat">
+        <div class="v">64</div>
+        <div class="l">tests passing</div>
+      </div>
+      <div class="stat gold">
+        <div class="v">943</div>
+        <div class="l">cumulative smoke passes / 0 fail</div>
+      </div>
+    </div>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Metric</th><th>Typical</th></tr></thead>
+        <tbody>
+          <tr><td>Prompt overhead (system + 10 tool specs)</td><td class="metric">~1.35K tokens</td></tr>
+          <tr><td>vs opencode parent-agent prompt</td><td class="metric">~13K tokens (9.6&times; heavier)</td></tr>
+          <tr><td>Cold one-shot TTFT (~250 input tokens)</td><td class="metric">15-30 s</td></tr>
+          <tr><td>Warm <code>--continue</code> TTFT</td><td class="metric">1-3 s (3-4&times; speedup)</td></tr>
+          <tr><td>Sustained decode rate</td><td class="metric">35-50 tok/s</td></tr>
+          <tr><td>Prefill rate at 80K context</td><td class="metric">565 tok/s</td></tr>
+          <tr><td>Test suite</td><td class="metric">64 tests, 0 failures</td></tr>
+          <tr><td>Smoke harness (cumulative)</td><td class="metric">943 passes, 0 failures</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── FOOTER ─────────── -->
+<footer>
+  <div class="container">
+    <div class="iris-foot">&#x2746;&#x2746;<span class="beard">&#x25C6;</span>&#x2746;&#x2746;</div>
+    <div class="links">
+      <a href="https://github.com/daniel-farina/iris-code" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/daniel-farina/iris-code/blob/main/README.md" target="_blank" rel="noopener">README</a>
+      <a href="https://github.com/daniel-farina/iris-code/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/daniel-farina/iris-code/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+    </div>
+    <div>iris-code &middot; MIT License &middot; built for the local MTPLX stack</div>
+  </div>
+</footer>
+
+<script>
+  // ─── theme toggle ────────────────────────────────────────────────────
+  (function () {
+    var btn = document.getElementById('themeBtn');
+    var key = 'iris-code-theme';
+    var saved = null;
+    try { saved = localStorage.getItem(key); } catch (_) {}
+    if (saved === 'light' || saved === 'dark') {
+      document.documentElement.setAttribute('data-theme', saved);
+    }
+    function setIcon() {
+      var t = document.documentElement.getAttribute('data-theme');
+      btn.innerHTML = t === 'light' ? '&#9728;' : '&#9789;';
+    }
+    setIcon();
+    btn.addEventListener('click', function () {
+      var cur = document.documentElement.getAttribute('data-theme');
+      var next = cur === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', next);
+      try { localStorage.setItem(key, next); } catch (_) {}
+      setIcon();
+    });
+  })();
+
+  // ─── copy buttons ────────────────────────────────────────────────────
+  document.querySelectorAll('.copy-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var id = btn.getAttribute('data-copy');
+      var el = document.getElementById(id);
+      if (!el) return;
+      var text = el.innerText;
+      var ok = function () {
+        var prev = btn.textContent;
+        btn.textContent = 'COPIED';
+        btn.classList.add('copied');
+        setTimeout(function () {
+          btn.textContent = prev;
+          btn.classList.remove('copied');
+        }, 1400);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(ok, function () {
+          fallback(text, ok);
+        });
+      } else {
+        fallback(text, ok);
+      }
+    });
+  });
+  function fallback(text, ok) {
+    var ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'absolute';
+    ta.style.left = '-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); ok(); } catch (_) {}
+    document.body.removeChild(ta);
+  }
+</script>
+
+</body>
+</html>
