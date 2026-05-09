@@ -892,20 +892,43 @@ async fn ensure_model_weights(venv_python: &Path) -> bool {
         }
     }
 
-    // hf-cli ships with huggingface_hub, which is a transitive dep of MTPLX.
-    // We invoke it via `<venv>/bin/python -m huggingface_hub.commands.huggingface_cli`
-    // rather than the bare `huggingface-cli` binary so we don't depend on
-    // the venv being on PATH.
-    let status = std::process::Command::new(venv_python)
-        .args([
-            "-m",
-            "huggingface_hub.commands.huggingface_cli",
-            "download",
+    // huggingface_hub ships a `huggingface-cli` binary in the venv's bin dir
+    // when it's installed (it's a transitive dep of MTPLX). Prefer that over
+    // `python -m huggingface_hub.commands.huggingface_cli` because the
+    // `commands` submodule was restructured in newer huggingface_hub releases
+    // and `python -m huggingface_hub.commands.huggingface_cli` now fails with
+    // ModuleNotFoundError. The binary has a stable entry point.
+    //
+    // If the binary is missing for any reason, fall back to calling
+    // `huggingface_hub.snapshot_download()` directly via `python -c` -
+    // that's the underlying API the CLI wraps and it's been stable since
+    // huggingface_hub 0.10.
+    let venv_bin = venv_python.parent().map(|p| p.to_path_buf());
+    let hf_cli_binary = venv_bin.as_ref().map(|b| b.join("huggingface-cli"));
+
+    let status = if let Some(cli) = hf_cli_binary.as_ref().filter(|p| p.exists()) {
+        std::process::Command::new(cli)
+            .args([
+                "download",
+                DEFAULT_MODEL_HF_ID,
+                "--local-dir",
+                model_dir.to_string_lossy().as_ref(),
+            ])
+            .status()
+    } else {
+        // Fallback path: drive snapshot_download from a one-liner. This works
+        // on any huggingface_hub version that exposes snapshot_download (all
+        // currently-supported releases). tqdm progress bars stream by default.
+        let py_snippet = format!(
+            "from huggingface_hub import snapshot_download; \
+             snapshot_download(repo_id={:?}, local_dir={:?})",
             DEFAULT_MODEL_HF_ID,
-            "--local-dir",
             model_dir.to_string_lossy().as_ref(),
-        ])
-        .status();
+        );
+        std::process::Command::new(venv_python)
+            .args(["-c", &py_snippet])
+            .status()
+    };
 
     match status {
         Ok(s) if s.success() => {
@@ -931,7 +954,7 @@ async fn ensure_model_weights(venv_python: &Path) -> bool {
             false
         }
         Err(e) => {
-            eprintln!("  {w}!{r} could not invoke huggingface-cli: {}", e);
+            eprintln!("  {w}!{r} could not invoke huggingface downloader: {}", e);
             eprintln!(
                 "    The MTPLX install should have brought it in; try {a}<venv>/bin/python -m pip install huggingface_hub{r}"
             );
