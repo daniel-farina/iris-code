@@ -130,7 +130,6 @@ pub fn last_read(path: &Path) -> Option<ReadStamp> {
 /// read-before-edit gate, but we DO NOT use it for the staleness check
 /// because we never had the contents to compare against. Stored as a
 /// stamp with `seen_mtime = 0` so callers can distinguish.
-#[allow(dead_code)]
 pub fn mark_seen_by_search(path: &Path) {
     let key = path.to_path_buf();
     let now = std::time::SystemTime::now()

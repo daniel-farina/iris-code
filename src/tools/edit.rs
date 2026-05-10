@@ -120,6 +120,22 @@ async fn run(args: Value) -> Result<String> {
         return Ok(format!("wrote {} ({} bytes)\n", p.display(), new.len()));
     }
 
+    // Read-before-edit gate (off by default; opt-in via env). When the
+    // file already exists AND was never read or seen by a search tool in
+    // this session, refuse the edit. Empty old_string (create/overwrite)
+    // is exempt above.
+    if std::env::var("HIP_REQUIRE_READ_BEFORE_EDIT")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        && p.exists()
+        && crate::read_cache::last_read(&p).is_none()
+    {
+        return Err(anyhow!(
+            "edit: {} was not read in this session; read it before editing (HIP_REQUIRE_READ_BEFORE_EDIT=1 is active)",
+            p.display()
+        ));
+    }
+
     // Read-staleness gate: if the agent already read this file in this
     // session (we have a stamp with a real seen_mtime), refuse the edit
     // when the file's current mtime is later. The agent must re-read.
@@ -1148,6 +1164,95 @@ mod tests {
             "hint should include actual L3 content (the divergent line):\n{}",
             hint
         );
+    }
+
+    #[test]
+    fn read_before_edit_gate_blocks_unread_files_when_env_set() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-gate-{}.txt", std::process::id()));
+        std::fs::write(&p, "alpha\n").unwrap();
+
+        std::env::set_var("HIP_REQUIRE_READ_BEFORE_EDIT", "1");
+        let res = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "alpha",
+            "new_string": "beta",
+        }));
+        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
+        assert!(res.is_err(), "expected gate failure: {:?}", res);
+        let msg = format!("{}", res.unwrap_err());
+        assert!(msg.contains("was not read"), "unexpected error: {}", msg);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "alpha\n");
+        crate::read_cache::clear_reads();
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_before_edit_gate_off_by_default() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-gate-off-{}.txt", std::process::id()));
+        std::fs::write(&p, "alpha\n").unwrap();
+
+        // No gate -> edit should proceed.
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "alpha",
+            "new_string": "beta",
+        }))
+        .unwrap();
+        assert!(out.contains("edited"));
+        crate::read_cache::clear_reads();
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_before_edit_gate_allows_when_seen_by_search() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-gate-seen-{}.txt", std::process::id()));
+        std::fs::write(&p, "alpha\n").unwrap();
+        // Simulate a glob/grep hit.
+        crate::read_cache::mark_seen_by_search(&p);
+
+        std::env::set_var("HIP_REQUIRE_READ_BEFORE_EDIT", "1");
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "alpha",
+            "new_string": "beta",
+        }))
+        .unwrap();
+        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
+        assert!(out.contains("edited"));
+        crate::read_cache::clear_reads();
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_before_edit_gate_allows_create_of_new_file() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-gate-new-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+
+        std::env::set_var("HIP_REQUIRE_READ_BEFORE_EDIT", "1");
+        // Empty old_string + non-existent file -> gate should not fire.
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "",
+            "new_string": "hello\n",
+        }))
+        .unwrap();
+        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
+        assert!(out.contains("wrote"));
+        crate::read_cache::clear_reads();
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

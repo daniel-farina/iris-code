@@ -72,6 +72,26 @@ async fn run(args: Value) -> Result<String> {
 
     let p = PathBuf::from(shellexpand::tilde(&path).into_owned());
 
+    // Read-before-edit gate (opt-in via env var). Skip if first edit is
+    // a create/overwrite (empty old_string) or the file doesn't exist.
+    let first_old = edits
+        .first()
+        .and_then(|e| e.get("old_string"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if std::env::var("HIP_REQUIRE_READ_BEFORE_EDIT")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+        && p.exists()
+        && !first_old.is_empty()
+        && crate::read_cache::last_read(&p).is_none()
+    {
+        return Err(anyhow!(
+            "multi_edit: {} was not read in this session; read it before editing (HIP_REQUIRE_READ_BEFORE_EDIT=1 is active)",
+            p.display()
+        ));
+    }
+
     // Read-staleness gate: same as single edit.
     if let Some(stamp) = crate::read_cache::last_read(&p) {
         if stamp.seen_mtime != 0 {

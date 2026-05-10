@@ -97,6 +97,9 @@ async fn run(args: Value) -> Result<String> {
             }
             if matcher.is_match(&line) {
                 hits.push(format!("{}:{}:{}", p.display(), i + 1, line));
+                // Record that this path was seen by a search tool, so the
+                // read-before-edit gate (when enabled) treats it as observed.
+                crate::read_cache::mark_seen_by_search(p);
                 if hits.len() >= MAX_HITS {
                     break 'outer;
                 }
