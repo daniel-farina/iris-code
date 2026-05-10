@@ -39,13 +39,14 @@ impl Default for SamplingOpts {
             temperature: 0.6,
             top_p: 0.95,
             top_k: 20,
-            // 32K is a comfortable default for an agent run — at 64K context
-            // the model has half the window for output if it really wants
-            // to compose a long file or multi-step plan. With 16K we were
-            // truncating mid-explanation on long file reads, which the
-            // user perceived as "the model stopped and I had to ask it to
-            // continue". --max-tokens overrides this from the CLI.
-            max_tokens: 32768,
+            // Set effectively-unlimited so the model decides when to stop,
+            // not the sampler cap. The MTPLX server clamps internally to
+            // (context_length - prompt_tokens), so picking a number larger
+            // than the context window is safe — it just means "no cap from
+            // our side". Was 16384, which truncated mid-explanation on
+            // long file reads and made the model look like it had stopped
+            // when it was actually capped. --max-tokens still overrides.
+            max_tokens: 128_000,
             enable_thinking: false,
         }
     }
