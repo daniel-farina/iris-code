@@ -378,11 +378,30 @@ async fn main() -> Result<()> {
     }
 
     let prompt = cli.prompt.join(" ");
+
+    // Auto-rotate the session id for non-interactive --print/agent runs when
+    // the user is on the default. Reusing one default session across many
+    // back-to-back agent invocations builds up enough MTPLX prefix-cache
+    // state that occasional rounds return finish_reason=error with zero
+    // tokens (observed running 21+ iters of a self-paced game-build loop).
+    // Interactive --chat runs and explicit --session / --continue-last
+    // still keep their stable id so warm-cache-on-purpose still works.
+    let going_interactive = cli.chat
+        || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin()));
+    let on_default_session = cli.session == "mlx-code-default";
+    let resume_explicitly = cli.continue_last || cli.resume.is_some();
+    if !going_interactive && on_default_session && !resume_explicitly {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        cli.session = format!("hip-print-{}-{}", now, std::process::id());
+    }
+
     let mut client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
 
     // Interactive chat: explicit --chat flag, or no prompt and stdin is a TTY.
-    if cli.chat || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin()))
-    {
+    if going_interactive {
         return run_chat(
             &cli,
             &mut client,
