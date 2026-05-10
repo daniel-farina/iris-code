@@ -47,6 +47,21 @@ struct Cli {
     #[arg(long, alias = "print")]
     one_shot: bool,
 
+    /// Run multiple turns sequentially against the same session, saving
+    /// state between turns so subsequent turns hit the prefix cache.
+    /// Repeatable: `--turn "first question" --turn "second" ...`.
+    /// Useful for scripted multi-turn tests against a resumed session.
+    /// Implies one-shot mode per turn (no agent tool loop) unless --agent
+    /// is also set; combine with --resume to load a saved conversation.
+    #[arg(long)]
+    turn: Vec<String>,
+
+    /// When --turn is also set, run the full agent loop (tools, multiple
+    /// rounds) for each turn instead of one-shot. Off by default because
+    /// scripted tests usually want deterministic single-shot turns.
+    #[arg(long)]
+    turn_agent: bool,
+
     /// Save the response to this path. If omitted, no file is written.
     #[arg(long)]
     save: Option<PathBuf>,
@@ -412,6 +427,25 @@ async fn main() -> Result<()> {
             },
         )
         .await;
+    }
+
+    // Multi-turn scripted mode: --turn "first" --turn "second" runs each
+    // turn in order against the same session. Saves to disk between turns
+    // so the prefix cache warms naturally. Independent of the positional
+    // prompt — if both are given, the positional runs first.
+    if !cli.turn.is_empty() {
+        let turns: Vec<String> = if prompt.trim().is_empty() {
+            cli.turn.clone()
+        } else {
+            std::iter::once(prompt.clone())
+                .chain(cli.turn.iter().cloned())
+                .collect()
+        };
+        let result = run_turns(&cli, &mut client, &turns).await;
+        if cli.dry_run {
+            print_dry_run_summary();
+        }
+        return result;
     }
 
     if prompt.trim().is_empty() {
@@ -1376,6 +1410,59 @@ async fn run_chat_fallback(
             let _ = agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await?;
         }
     }
+}
+
+async fn run_turns(cli: &Cli, client: &mut MtplxClient, turns: &[String]) -> Result<()> {
+    // Programmatic multi-turn driver: feed N user turns through the same
+    // session sequentially. Each turn appends to `conv` and persists, so
+    // the next turn hits the prefix cache the same way an interactive
+    // session would. Used for scripted caching/quality validation.
+    let system = cli
+        .system
+        .clone()
+        .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
+    let mut conv: Vec<ChatMessage> = vec![ChatMessage::system(system)];
+
+    if cli.resume.is_some() {
+        if let Some(prev) = session_store::load(client.session_id()) {
+            if !prev.is_empty() {
+                conv = prev;
+            }
+        }
+    }
+
+    let opts = sampler_opts(cli);
+    let mut out = stdout();
+    for (i, turn) in turns.iter().enumerate() {
+        let preview: String = turn.chars().take(80).collect();
+        eprintln!(
+            "{}─ turn {}/{}: {}{}",
+            theme::dim(),
+            i + 1,
+            turns.len(),
+            preview,
+            theme::RESET
+        );
+        conv.push(ChatMessage::user(turn));
+        if cli.one_shot && !cli.turn_agent {
+            let res = client.stream(&conv, None, opts, &mut out).await?;
+            out.write_all(b"\n").await.ok();
+            out.flush().await.ok();
+            conv.push(ChatMessage::assistant_text(res.content.clone()));
+        } else {
+            let _ = agent::run_loop(client, &mut conv, cli.max_rounds, opts).await?;
+        }
+        // Persist between turns so the prefix cache extends naturally.
+        session_store::save(client.session_id(), &conv);
+    }
+    eprintln!(
+        "{}─ {} turn(s) completed; session {} saved{}",
+        theme::dim(),
+        turns.len(),
+        client.session_id(),
+        theme::RESET
+    );
+    Ok(())
 }
 
 async fn run_one_shot(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> {
