@@ -1774,9 +1774,11 @@ fn pick_session_to_resume() -> Option<String> {
         return None;
     }
     entries.sort_by_key(|e| std::cmp::Reverse(e.last_ts));
-    // Cap to the 30 most recent so the picker doesn't scroll forever.
-    if entries.len() > 30 {
-        entries.truncate(30);
+    // Cap at 100 most recent so very-old sessions don't clutter the picker.
+    // The user navigates through this with arrow keys; only 10 visible at a
+    // time (max_length below).
+    if entries.len() > 100 {
+        entries.truncate(100);
     }
 
     let labels: Vec<String> = entries.iter().map(format_resume_row).collect();
@@ -1784,9 +1786,15 @@ fn pick_session_to_resume() -> Option<String> {
     use dialoguer::{theme::ColorfulTheme, Select};
     let theme = ColorfulTheme::default();
     let result = Select::with_theme(&theme)
-        .with_prompt("Resume which session? (Enter to select, ESC/q to cancel)")
+        .with_prompt(format!(
+            "Resume which session? (showing {} most recent — ↑↓ to scroll, Enter to select, ESC/q to cancel)",
+            entries.len()
+        ))
         .items(&labels)
         .default(0)
+        // Show 10 rows at a time; arrow-keys scroll the window so the user
+        // can reach all 100 without flooding the terminal up-front.
+        .max_length(10)
         .interact_opt();
 
     match result {
@@ -1795,10 +1803,11 @@ fn pick_session_to_resume() -> Option<String> {
     }
 }
 
-/// Format one row of the `--resume` picker. Two lines per row would be
-/// nicer but dialoguer wraps each item on a single line, so we cram the
-/// useful bits in: relative time, cwd basename, last-prompt snippet,
-/// truncated session id.
+/// Format one row of the `--resume` picker. dialoguer's Select renders each
+/// item on a single line, so we cram the useful bits in one densely-padded
+/// row: relative time, full cwd path, turn count, last-prompt snippet, and
+/// a session-id suffix. The full path is the priority because the user
+/// might have ten "agent" sessions across different projects.
 fn format_resume_row(e: &ResumeEntry) -> String {
     // Relative time, e.g. "2m ago" / "3h ago" / "5d ago".
     let now = std::time::SystemTime::now()
@@ -1807,39 +1816,60 @@ fn format_resume_row(e: &ResumeEntry) -> String {
         .unwrap_or(0);
     let age = now.saturating_sub(e.last_ts);
     let age_str = if age < 60 {
-        format!("{}s ago", age)
+        format!("{}s", age)
     } else if age < 3600 {
-        format!("{}m ago", age / 60)
+        format!("{}m", age / 60)
     } else if age < 86400 {
-        format!("{}h ago", age / 3600)
+        format!("{}h", age / 3600)
     } else {
-        format!("{}d ago", age / 86400)
+        format!("{}d", age / 86400)
     };
-    let cwd_basename = e.cwd.rsplit('/').find(|s| !s.is_empty()).unwrap_or(&e.cwd);
+
+    // Replace $HOME with ~ in the cwd path so it stays compact while still
+    // showing the full project location.
+    let cwd_display = if let Ok(home) = std::env::var("HOME") {
+        if !e.cwd.is_empty() && e.cwd.starts_with(&home) {
+            format!("~{}", &e.cwd[home.len()..])
+        } else if e.cwd.is_empty() {
+            "(unknown cwd)".to_string()
+        } else {
+            e.cwd.clone()
+        }
+    } else if e.cwd.is_empty() {
+        "(unknown cwd)".to_string()
+    } else {
+        e.cwd.clone()
+    };
+
     let snippet: String = e
         .last_prompt
         .chars()
-        .take(60)
+        .take(70)
         .collect::<String>()
         .replace('\n', " ");
     let snippet_display = if snippet.is_empty() {
         "(no prompt)".to_string()
     } else {
-        snippet
+        format!("\"{}\"", snippet)
     };
     let sid_short = if e.session_id.len() > 24 {
         format!("…{}", &e.session_id[e.session_id.len() - 24..])
     } else {
         e.session_id.clone()
     };
+
+    // Two-line entry: line 1 is the metadata header, line 2 is the prompt
+    // snippet indented under it. dialoguer renders the selection arrow on
+    // line 1; the second line scrolls along with it as one logical item.
+    // Dim ANSI on the second line keeps it visually subordinate.
     format!(
-        "{:<9} · {:<20} · {} turn{:<3} · {}  [{}]",
-        age_str,
-        cwd_basename,
-        e.turns,
-        if e.turns == 1 { "" } else { "s" },
-        snippet_display,
-        sid_short,
+        "{age:>4} · {cwd}  ({turns} turn{plural}) [{sid}]\n      \x1b[2m{snippet}\x1b[0m",
+        age = age_str,
+        cwd = cwd_display,
+        turns = e.turns,
+        plural = if e.turns == 1 { "" } else { "s" },
+        sid = sid_short,
+        snippet = snippet_display,
     )
 }
 
