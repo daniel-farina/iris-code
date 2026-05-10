@@ -93,20 +93,35 @@ async fn run(args: Value) -> Result<String> {
     }
 
     let original = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
-    if !original.contains(old) {
-        // Helpful diagnostics: hint at near-misses (whitespace? line endings? case?)
+
+    // Try exact, then whitespace-tolerant fallback. The fallback strips
+    // trailing whitespace per line on both sides — a common drift cause
+    // (file uses tabs, model emitted spaces, or model dropped a trailing
+    // space) — and on hit, uses the file's actual matched slice as
+    // `actual_old` so the diff is computed against real bytes.
+    let actual_old: String = if original.contains(old) {
+        old.to_string()
+    } else if let Some((slice, occurrences)) =
+        find_with_whitespace_tolerance(&original, old, replace_all)
+    {
+        eprintln!(
+            "\x1b[2m[edit] exact match failed; matched after whitespace normalization ({} occurrence{})\x1b[0m",
+            occurrences,
+            if occurrences == 1 { "" } else { "s" },
+        );
+        slice
+    } else {
         let hint = diagnose_missing(&original, old);
         return Err(anyhow!(
             "edit: old_string not found in {}{}",
             p.display(),
             hint
         ));
-    }
-    let count = original.matches(old).count();
+    };
+
+    let count = original.matches(&actual_old).count();
     if count > 1 && !replace_all {
-        // List line numbers of all occurrences so the model can include more
-        // context to disambiguate next try.
-        let lines = locate_match_lines(&original, old, 5);
+        let lines = locate_match_lines(&original, &actual_old, 5);
         return Err(anyhow!(
             "edit: old_string occurs {} times in {} - pass replace_all=true OR include more surrounding context to disambiguate. \
             First {} match line(s): {}",
@@ -114,9 +129,9 @@ async fn run(args: Value) -> Result<String> {
         ));
     }
     let updated = if replace_all {
-        original.replace(old, new)
+        original.replace(&actual_old, new)
     } else {
-        original.replacen(old, new, 1)
+        original.replacen(&actual_old, new, 1)
     };
     let lines_added = new.bytes().filter(|&b| b == b'\n').count() as i64;
     let lines_removed = old.bytes().filter(|&b| b == b'\n').count() as i64;
@@ -235,10 +250,40 @@ fn diagnose_missing(haystack: &str, needle: &str) -> String {
             return " (hint: case differs — match found case-insensitively)".into();
         }
     }
-    // First-line of needle present? Probably old_string drifted later in the file.
+    // First-line of needle present? Probably old_string drifted later in the file
+    // OR the model has a typo on a later line. Include the file's actual block
+    // starting at that line so the model can spot the divergence without a
+    // re-read round-trip — this is THE common case the LLM hits with
+    // multi-line edits, so giving it the real content is high-leverage.
     if let Some(first_line) = needle.lines().next() {
         if first_line.len() >= 10 && haystack.contains(first_line) {
-            return format!(" (hint: first line of old_string '{}…' is present, but the rest doesn't match - file may have changed; read it again)", first_line.chars().take(40).collect::<String>());
+            let needle_lines = needle.lines().count();
+            // Find the line number of the first occurrence.
+            let lines: Vec<&str> = haystack.lines().collect();
+            if let Some(start_idx) = lines.iter().position(|l| *l == first_line) {
+                // Show up to needle_lines + 2 lines from the file at that
+                // location, so the model can diff its old_string against
+                // reality. Cap the per-line content at 200 chars to avoid
+                // dumping huge minified strings into the error.
+                let end_idx = (start_idx + needle_lines).min(lines.len());
+                let mut block = String::new();
+                for (i, l) in lines[start_idx..end_idx].iter().enumerate() {
+                    let trimmed: String = l.chars().take(200).collect();
+                    block.push_str(&format!("\n  L{}: {}", start_idx + 1 + i, trimmed));
+                }
+                return format!(
+                    " (hint: first line matches L{} but old_string diverges from actual file content. \
+                    Compare your old_string against the real {}-line block:{})",
+                    start_idx + 1,
+                    end_idx - start_idx,
+                    block,
+                );
+            }
+            // Fallback if we can't find the line index for some reason.
+            return format!(
+                " (hint: first line of old_string '{}…' is present, but the rest doesn't match - file may have changed; read it again)",
+                first_line.chars().take(40).collect::<String>()
+            );
         }
     }
     // Final fallback: trigram-based fuzzy match.
@@ -373,6 +418,95 @@ fn closest_line_by_trigram(haystack: &str, needle: &str) -> Option<(usize, Strin
         }
     }
     best
+}
+
+/// Whitespace-tolerant fallback. If the exact `needle` doesn't appear in
+/// `haystack`, slide a window of `needle.lines().count()` lines through
+/// the haystack and compare line-by-line with both sides trim-end normalized.
+/// On hit, return the file's actual matched slice (real bytes, real
+/// whitespace) so the caller can apply the edit with the correct anchor.
+///
+/// Returns `(actual_slice, occurrence_count)`. With `replace_all=false`,
+/// stops at the first match (occurrence_count == 1). With `replace_all=true`,
+/// requires every fuzzy-matched window to produce the *same* real slice so
+/// the replace operation is unambiguous.
+fn find_with_whitespace_tolerance(
+    haystack: &str,
+    needle: &str,
+    replace_all: bool,
+) -> Option<(String, usize)> {
+    let needle_lines: Vec<&str> = needle.lines().collect();
+    if needle_lines.is_empty() {
+        return None;
+    }
+    let needle_norm: Vec<&str> = needle_lines.iter().map(|l| l.trim_end()).collect();
+    let needle_trim_lead = needle_norm.iter().any(|l| l.trim_start() != *l);
+    let normalize = |s: &str| -> String {
+        if needle_trim_lead {
+            s.trim().to_string()
+        } else {
+            s.trim_end().to_string()
+        }
+    };
+    let needle_keys: Vec<String> = needle_lines.iter().map(|l| normalize(l)).collect();
+
+    let hay_lines: Vec<&str> = haystack.lines().collect();
+    if hay_lines.len() < needle_lines.len() {
+        return None;
+    }
+
+    // For each window, capture the byte offset in haystack so we can extract
+    // the exact slice (including the original whitespace).
+    let mut byte_offsets: Vec<usize> = Vec::with_capacity(hay_lines.len() + 1);
+    let mut acc = 0usize;
+    for l in &hay_lines {
+        byte_offsets.push(acc);
+        acc += l.len() + 1; // +1 for \n
+    }
+    byte_offsets.push(haystack.len());
+
+    let mut found: Option<String> = None;
+    let mut count = 0usize;
+    for start in 0..=hay_lines.len() - needle_lines.len() {
+        let window = &hay_lines[start..start + needle_lines.len()];
+        let matches = window
+            .iter()
+            .zip(needle_keys.iter())
+            .all(|(h, n)| normalize(h) == *n);
+        if !matches {
+            continue;
+        }
+        // Build the actual slice from the file (real whitespace).
+        let begin = byte_offsets[start];
+        // End at end-of-last-window-line (no trailing newline beyond the slice).
+        let last_line_end = byte_offsets[start + needle_lines.len()].saturating_sub(1);
+        let end = last_line_end.max(begin);
+        let slice = haystack.get(begin..end)?.to_string();
+
+        // Sanity check: the extracted slice must reappear in the haystack
+        // (it should — we just sliced from it). If not, bail to avoid
+        // corrupting the file with an indeterminate replacement.
+        if !haystack.contains(&slice) {
+            return None;
+        }
+
+        match &found {
+            None => {
+                found = Some(slice);
+                count = 1;
+            }
+            Some(prev) if prev == &slice => count += 1,
+            Some(_) if !replace_all => {
+                // Conflicting slices found. Don't try to guess.
+                return None;
+            }
+            Some(_) => return None,
+        }
+        if !replace_all && count >= 1 {
+            break;
+        }
+    }
+    found.map(|s| (s, count))
 }
 
 fn locate_match_lines(text: &str, needle: &str, cap: usize) -> Vec<usize> {
@@ -598,6 +732,57 @@ mod tests {
             "dry_run should still surface missing-old_string errors"
         );
         let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn whitespace_tolerant_match_recovers_from_indent_drift() {
+        // Acquire env lock — sibling tests mutate MLX_CODE_DRY_RUN under it,
+        // which would otherwise leak into this test and silently skip the write.
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        // File uses 4-space indent; agent supplied 2-space.
+        let p = std::env::temp_dir().join(format!("mlx-edit-ws-{}.txt", std::process::id()));
+        std::fs::write(&p, "fn main() {\n    let x = 1;\n    let y = 2;\n}\n").unwrap();
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "  let x = 1;\n  let y = 2;",
+            "new_string": "    let x = 10;\n    let y = 20;",
+        }))
+        .unwrap();
+        assert!(out.contains("edited"), "expected success:\n{}", out);
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            body.contains("    let x = 10;\n    let y = 20;"),
+            "expected new content with file's real indent:\n{}",
+            body
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn first_line_match_hint_includes_real_file_block() {
+        // Multi-line needle whose first line matches but later lines have a typo.
+        // The hint should embed the actual file content so the model can
+        // diff and self-correct without a re-read round-trip.
+        let h =
+            "void update() {\n    if (testX.x < 0) return;\n    if (testX.z > 100) return;\n    move();\n}\n";
+        let n = "void update() {\n    if (testX.x < 0) return;\n    if (testZ.z > 100) return;\n";
+        let hint = diagnose_missing(h, n);
+        assert!(
+            hint.contains("first line matches L1"),
+            "expected line anchor:\n{}",
+            hint
+        );
+        assert!(
+            hint.contains("L2: ") && hint.contains("testX.x < 0"),
+            "hint should include actual L2 content:\n{}",
+            hint
+        );
+        assert!(
+            hint.contains("L3: ") && hint.contains("testX.z > 100"),
+            "hint should include actual L3 content (the divergent line):\n{}",
+            hint
+        );
     }
 
     #[test]
