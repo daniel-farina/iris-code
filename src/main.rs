@@ -357,10 +357,15 @@ async fn main() -> Result<()> {
         );
         cli.session = sid;
         // Force chat mode so the resume actually does something interactive
-        // — UNLESS scripted --turn flags are set, in which case the resume
-        // is feeding into the multi-turn driver and chat would short-circuit
-        // it back to the REPL.
-        if cli.turn.is_empty() {
+        // — UNLESS the user is feeding the resume into a non-interactive
+        // path: scripted --turn flags, or a positional prompt that means
+        // "load this session and run this single agent turn against it".
+        // In both cases we need run_agent / run_turns to load the session
+        // explicitly (which they already do via session_store::load when
+        // cli.resume.is_some()), and the chat-force would short-circuit
+        // back to the REPL and discard the prompt.
+        let has_positional_prompt = !cli.prompt.join(" ").trim().is_empty();
+        if cli.turn.is_empty() && !has_positional_prompt {
             cli.chat = true;
         }
     }
@@ -1547,7 +1552,22 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
         .system
         .clone()
         .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
-    let mut conv = vec![ChatMessage::system(system), ChatMessage::user(prompt)];
+    // If --resume was passed (e.g. `hip --resume X "do thing"`), load the
+    // saved conversation so the new prompt extends prior turns instead of
+    // starting fresh. Without this, scripted multi-call agent runs lose
+    // prior context every invocation and MTPLX cold-misses every time.
+    let mut conv: Vec<ChatMessage> = if cli.resume.is_some() {
+        match session_store::load(client.session_id()) {
+            Some(prev) if !prev.is_empty() => {
+                let mut v = prev;
+                v.push(ChatMessage::user(prompt));
+                v
+            }
+            _ => vec![ChatMessage::system(system), ChatMessage::user(prompt)],
+        }
+    } else {
+        vec![ChatMessage::system(system), ChatMessage::user(prompt)]
+    };
     let mut log = runlog::RunLog::new("agent", client.session_id(), client.model(), prompt);
     let pre_snap = if cli.diff { Some(snap_cwd()) } else { None };
     let stats = match agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await {
@@ -1594,6 +1614,11 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
         let post = snap_cwd();
         print_diff(&pre, &post);
     }
+    // Persist the conversation so subsequent --resume invocations against
+    // the same session id see the new turns. Without this, scripted
+    // multi-call agent runs (e.g. iterating game improvements turn by
+    // turn) keep cold-missing because each invocation starts fresh.
+    session_store::save(client.session_id(), &conv);
     Ok(())
 }
 
