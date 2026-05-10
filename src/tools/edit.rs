@@ -1173,6 +1173,13 @@ mod tests {
 
     #[test]
     fn dry_run_does_not_write_file_but_returns_preview() {
+        // Hold ENV_LOCK because sibling tests mutate HIP_REQUIRE_READ_BEFORE_EDIT
+        // and MLX_CODE_DRY_RUN under it; without the guard we race them and
+        // observe spurious env state during this test's call into edit.
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
+        crate::read_cache::clear_reads();
         let p = std::env::temp_dir().join(format!("mlx-edit-dry-{}.txt", std::process::id()));
         let body = "fn main() {\n    println!(\"hi\");\n}\n";
         std::fs::write(&p, body).unwrap();
@@ -1348,10 +1355,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// Drop guard that always wipes HIP_REQUIRE_READ_BEFORE_EDIT on
+    /// scope exit even if the test panics, so the env var can't leak
+    /// into sibling tests via a failed assert.
+    struct GateEnvGuard;
+    impl Drop for GateEnvGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
+        }
+    }
+
     #[test]
     fn read_before_edit_gate_blocks_unread_files_when_env_set() {
-        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        let _env = crate::dry_run_log::ENV_LOCK.lock().unwrap();
         std::env::remove_var("MLX_CODE_DRY_RUN");
+        let _gate = GateEnvGuard;
         crate::read_cache::clear_reads();
         let p = std::env::temp_dir().join(format!("mlx-edit-gate-{}.txt", std::process::id()));
         std::fs::write(&p, "alpha\n").unwrap();
@@ -1362,7 +1380,6 @@ mod tests {
             "old_string": "alpha",
             "new_string": "beta",
         }));
-        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
         assert!(res.is_err(), "expected gate failure: {:?}", res);
         let msg = format!("{}", res.unwrap_err());
         assert!(msg.contains("was not read"), "unexpected error: {}", msg);
@@ -1394,8 +1411,9 @@ mod tests {
 
     #[test]
     fn read_before_edit_gate_allows_when_seen_by_search() {
-        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        let _env = crate::dry_run_log::ENV_LOCK.lock().unwrap();
         std::env::remove_var("MLX_CODE_DRY_RUN");
+        let _gate = GateEnvGuard;
         crate::read_cache::clear_reads();
         let p = std::env::temp_dir().join(format!("mlx-edit-gate-seen-{}.txt", std::process::id()));
         std::fs::write(&p, "alpha\n").unwrap();
@@ -1409,7 +1427,6 @@ mod tests {
             "new_string": "beta",
         }))
         .unwrap();
-        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
         assert!(out.contains("edited"));
         crate::read_cache::clear_reads();
         let _ = std::fs::remove_file(&p);
@@ -1417,8 +1434,9 @@ mod tests {
 
     #[test]
     fn read_before_edit_gate_allows_create_of_new_file() {
-        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        let _env = crate::dry_run_log::ENV_LOCK.lock().unwrap();
         std::env::remove_var("MLX_CODE_DRY_RUN");
+        let _gate = GateEnvGuard;
         crate::read_cache::clear_reads();
         let p = std::env::temp_dir().join(format!("mlx-edit-gate-new-{}.txt", std::process::id()));
         let _ = std::fs::remove_file(&p);
@@ -1431,7 +1449,6 @@ mod tests {
             "new_string": "hello\n",
         }))
         .unwrap();
-        std::env::remove_var("HIP_REQUIRE_READ_BEFORE_EDIT");
         assert!(out.contains("wrote"));
         crate::read_cache::clear_reads();
         let _ = std::fs::remove_file(&p);
