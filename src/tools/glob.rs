@@ -62,6 +62,7 @@ async fn run(args: Value) -> Result<String> {
         let basename: &Path = p.file_name().map(Path::new).unwrap_or(p);
         if g.is_match(rel) || g.is_match(basename) {
             hits.push(p.display().to_string());
+            crate::read_cache::mark_seen_by_search(p);
             if hits.len() >= MAX_RESULTS {
                 break;
             }

@@ -108,6 +108,22 @@ pub struct StreamChunk {
     pub choices: Vec<StreamChoice>,
     #[serde(default)]
     pub usage: Option<Usage>,
+    /// MTPLX ships a structured `error` object alongside `finish_reason="error"`
+    /// chunks (see openai.py error_chunk). Capturing it lets us surface the
+    /// real server-side exception instead of just logging an opaque "error"
+    /// finish_reason with zero ctok.
+    #[serde(default)]
+    pub error: Option<StreamError>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct StreamError {
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default, rename = "type")]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub status_code: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]

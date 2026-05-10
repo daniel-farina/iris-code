@@ -15,10 +15,27 @@ use crate::client::{MtplxClient, SamplingOpts};
 use crate::schema::ChatMessage;
 use crate::tools::{self, Tool};
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a coding assistant. Use tools to read, search, and edit files. Make minimal targeted changes. \
-When `edit` fails: the error message lists hints (CRLF, whitespace, case, drift) and the line numbers of all matches - use them to fix the next call instead of re-reading. \
-When unsure where something lives, use `search` (returns ranked file:line:text); pass `definitions_only=true` to jump straight to the declaration. Then use `read(path, around=<line>)` to grab context around the hit instead of reading the whole file. \
-After applying edits, verify with `bash` if the user asked to verify, or use `diff(path_a, path_b)` to compare two files (e.g. compare a freshly written file to a reference). Be concise.";
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a SURGICAL coding assistant. Default to small, targeted edits informed by search — NOT reading entire files.\n\
+\n\
+For any change request:\n\
+1. ALWAYS start with `search \"<keyword>\"` to locate the relevant code (returns ranked file:line:text). Pass `definitions_only=true` for declarations.\n\
+2. After search, use `read(path, around=<line>, lines=20)` to grab the minimum context. Files >500 lines should ALMOST NEVER be read entirely. If you find yourself wanting to read more than 100 lines at once, search again with a narrower term first.\n\
+3. Apply the smallest possible `edit` that satisfies the request. Don't rewrite a whole function if a one-line change suffices.\n\
+4. Verify with one focused `search` or a 10-line `read(path, around=<line>)` of the changed region.\n\
+\n\
+When `edit` fails: the error message has hints (CRLF, whitespace, case, drift, line numbers of matches). Use them to fix your next `edit` call. NEVER re-read the whole file just because an edit didn't apply.\n\
+\n\
+The user has the file in front of them. DON'T echo file content back to them. Describe what you changed in 1-2 sentences and why.\n\
+\n\
+VERIFY before declaring done. If you imported a symbol or referenced an exported name, check it actually exists in the source module (a quick `search \"<name>\"` in that file). For projects with a build tool you can detect from the cwd:\n\
+- npm/Vite/webpack (package.json present): run `bash` with `npm run build 2>&1 | tail -20` and stop the agent loop with an error message if it fails. The user would rather you flag a broken build than ship it.\n\
+- Cargo (Cargo.toml present): `cargo check 2>&1 | tail -20`.\n\
+- Python (pyproject.toml / requirements.txt): `python -m py_compile <changed-file>`.\n\
+Skip the build check if cwd has none of these — don't invent a tool just to invoke it.\n\
+\n\
+Use `diff(path_a, path_b)` for cross-file comparisons.\n\
+\n\
+Be terse. Search first. Read narrow. Edit small. Verify the build before claiming done.";
 
 #[derive(Debug, Default)]
 pub struct LoopStats {
@@ -62,6 +79,95 @@ pub async fn run_loop(
             // Tail newline so subsequent tool output starts on its own line.
             out.write_all(b"\n").await.ok();
             out.flush().await.ok();
+        }
+
+        // Surface finish_reason every round so we can see why a turn ended.
+        // Helps diagnose the "model stopped after a big tool result with
+        // tiny ctok" symptom — finish_reason="stop" with empty content
+        // means the model itself decided to end; "length" means we hit
+        // max_tokens; missing means the server didn't send one.
+        //
+        // For "error" specifically, MTPLX ships a structured error payload
+        // alongside the chunk (see openai.py error_chunk). Surface it so the
+        // user sees the real server-side exception instead of an opaque
+        // "finish_reason=error" with no diagnosis hook.
+        if let Some(reason) = res.finish_reason.as_deref() {
+            if reason != "tool_calls" {
+                let ctok = res
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.completion_tokens)
+                    .unwrap_or(0);
+                if reason == "error" {
+                    if let Some(err) = res.error.as_ref() {
+                        let msg = err.message.as_deref().unwrap_or("(no message)");
+                        let kind = err.kind.as_deref().unwrap_or("?");
+                        let status = err
+                            .status_code
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        eprintln!(
+                            "\x1b[2m[hip] round {} finish_reason=error ctok={} \x1b[31m{}/{}: {}\x1b[0m",
+                            round + 1,
+                            ctok,
+                            kind,
+                            status,
+                            msg,
+                        );
+                    } else {
+                        eprintln!(
+                            "\x1b[2m[hip] round {} finish_reason=error ctok={} \x1b[31m(server sent no error payload — likely upstream cutoff)\x1b[0m",
+                            round + 1,
+                            ctok,
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "\x1b[2m[hip] round {} finish_reason={} ctok={}\x1b[0m",
+                        round + 1,
+                        reason,
+                        ctok,
+                    );
+                }
+            }
+        }
+
+        // finish_reason="error" with a malformed-tool_call payload is the
+        // server telling us the assistant content it just streamed contains
+        // a <tool_call>...</tool_call> block it can't parse (unclosed,
+        // unsupported format, etc.). If we naively appended that garbage
+        // text to conv as the assistant turn, the SAME garbage would re-
+        // tokenize on the next request and MTPLX would reject every
+        // subsequent turn — the chat is bricked until /new. Detect this
+        // shape and drop the malformed turn from history instead so the
+        // user can keep going from the previous user prompt.
+        let malformed_tool_call_rejected = res
+            .finish_reason
+            .as_deref()
+            .map(|r| r == "error")
+            .unwrap_or(false)
+            && res
+                .error
+                .as_ref()
+                .and_then(|e| e.message.as_deref())
+                .map(|m| {
+                    let lo = m.to_lowercase();
+                    lo.contains("malformed tool_call")
+                        || lo.contains("unclosed <tool_call>")
+                        || lo.contains("unsupported tool_call payload")
+                })
+                .unwrap_or(false);
+        if malformed_tool_call_rejected {
+            eprintln!(
+                "\x1b[33m[hip] server rejected the assistant turn (malformed tool_call). \
+                Dropping the bad turn from history so subsequent turns aren't blocked. \
+                You can re-ask or rephrase your last prompt.\x1b[0m"
+            );
+            // Don't append the malformed content to conv. Return as a
+            // graceful no-op so the chat loop accepts the user's next
+            // turn. Stats still reflect what just happened.
+            stats.total = started.elapsed();
+            return Ok(stats);
         }
 
         // finish_reason="length" means the model was cut off because it hit

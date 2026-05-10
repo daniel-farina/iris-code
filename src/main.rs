@@ -13,11 +13,13 @@ mod read_cache;
 mod repl;
 mod runlog;
 mod schema;
+mod session_store;
 mod setup;
 mod sparkline;
 mod sticky_bar;
 mod theme;
 mod tools;
+mod typeahead;
 mod updater;
 
 use anyhow::{Context, Result};
@@ -376,11 +378,30 @@ async fn main() -> Result<()> {
     }
 
     let prompt = cli.prompt.join(" ");
+
+    // Auto-rotate the session id for non-interactive --print/agent runs when
+    // the user is on the default. Reusing one default session across many
+    // back-to-back agent invocations builds up enough MTPLX prefix-cache
+    // state that occasional rounds return finish_reason=error with zero
+    // tokens (observed running 21+ iters of a self-paced game-build loop).
+    // Interactive --chat runs and explicit --session / --continue-last
+    // still keep their stable id so warm-cache-on-purpose still works.
+    let going_interactive = cli.chat
+        || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin()));
+    let on_default_session = cli.session == "mlx-code-default";
+    let resume_explicitly = cli.continue_last || cli.resume.is_some();
+    if !going_interactive && on_default_session && !resume_explicitly {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        cli.session = format!("hip-print-{}-{}", now, std::process::id());
+    }
+
     let mut client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
 
     // Interactive chat: explicit --chat flag, or no prompt and stdin is a TTY.
-    if cli.chat || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin()))
-    {
+    if going_interactive {
         return run_chat(
             &cli,
             &mut client,
@@ -421,6 +442,46 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
         .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
     let mut conv: Vec<ChatMessage> = vec![ChatMessage::system(system)];
 
+    // If the user passed --resume (with or without an explicit session id),
+    // try to reload the prior conversation off disk so the model actually
+    // sees the past turns instead of just inheriting a warm prefix cache.
+    // Without this the running ctx counter shows a tiny number (e.g.
+    // 1.7K/64K) on the first turn after resume because the model only sees
+    // system + new prompt.
+    let mut resumed_turns: usize = 0;
+    if cli.resume.is_some() {
+        if let Some(prev) = session_store::load(client.session_id()) {
+            if !prev.is_empty() {
+                conv = prev;
+                resumed_turns = conv
+                    .iter()
+                    .filter(|m| m.role == "user" || m.role == "assistant")
+                    .count();
+                eprintln!(
+                    "{d}  loaded {a}{n}{d} prior message{plural} for this session ({a}{tok}{d} estimated tokens){r}",
+                    d = theme::dim(),
+                    a = theme::accent(),
+                    r = theme::RESET,
+                    n = resumed_turns,
+                    plural = if resumed_turns == 1 { "" } else { "s" },
+                    tok = humanize_tokens(session_store::estimate_tokens(&conv)),
+                );
+            } else {
+                eprintln!(
+                    "{d}  session has no saved messages yet (fresh resume){r}",
+                    d = theme::dim(),
+                    r = theme::RESET,
+                );
+            }
+        } else {
+            eprintln!(
+                "{d}  no saved messages for this session id; starting fresh{r}",
+                d = theme::dim(),
+                r = theme::RESET,
+            );
+        }
+    }
+
     print_chat_banner(client, cli);
     if cli.one_shot {
         eprintln!(
@@ -448,11 +509,20 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
         }
     };
     rl.set_helper(Some(repl::MlxHelper::new()));
-    // Alt+Enter -> insert newline in the buffer (multiline editing).
-    rl.bind_sequence(
-        Event::KeySeq(vec![KeyEvent::new('\r', Modifiers::ALT)]),
-        rustyline::EventHandler::Simple(Cmd::Newline),
-    );
+    // Multi-line newline bindings (plain Enter still submits):
+    //   Alt+Enter   — works on every terminal that sends ESC+CR for Alt
+    //   Shift+Enter — modern terminals with csi-u / modifyOtherKeys
+    //   Ctrl+J      — universal fallback (ASCII 0x0A)
+    for ev in [
+        KeyEvent::new('\r', Modifiers::ALT),
+        KeyEvent::new('\r', Modifiers::SHIFT),
+        KeyEvent::new('\n', Modifiers::NONE),
+    ] {
+        rl.bind_sequence(
+            Event::KeySeq(vec![ev]),
+            rustyline::EventHandler::Simple(Cmd::Newline),
+        );
+    }
     let history_path = expand(&PathBuf::from("~/.mlx-code/history.txt")).ok();
     if let Some(h) = &history_path {
         if let Some(parent) = h.parent() {
@@ -475,19 +545,49 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
     //                       be folded into the next request's prompt).
     //   ctx_turns         = count of model turns in the current conversation,
     //                       resets on /new.
-    let mut ctx_input_tokens: u32 = 0;
+    // Seed the indicator from the loaded session (if any) so the first
+    // ─ ctx X/64K ─ line after resume shows a realistic number instead of
+    // 0 / 64K. After the first model turn the counter switches over to
+    // exact prompt_tokens / completion_tokens from the API response.
+    let mut ctx_input_tokens: u32 = if resumed_turns > 0 {
+        session_store::estimate_tokens(&conv)
+    } else {
+        0
+    };
     let mut ctx_output_tokens: u32 = 0;
-    let mut ctx_turns: u32 = 0;
-    let ctx_max_tokens: u32 = 64000; // matches the qwen3.6-27b-mtplx model's max_context_length
+    let mut ctx_turns: u32 = resumed_turns as u32;
+    let ctx_max_tokens: u32 = 128000; // qwen3.6-27b-mtplx supports 128K with rope-scaling enabled in MTPLX
+
+    // Pending-message queue. Users can stage follow-up prompts via
+    // `/queue add <msg>` between turns; the loop will dequeue them as
+    // the next prompts automatically. Phase 2 will replace this with
+    // type-ahead capture during streaming.
+    let queue = typeahead::PendingQueue::new();
 
     // Inline tip block above the first prompt — shown once per chat session
     // so users discover slash commands and shortcuts without `/help`.
     print_chat_tips();
 
     loop {
+        // Source priority for the next user message:
+        //   1. Initial --prompt (one-time, on first iteration).
+        //   2. Pending queue (drained one item at a time across turns —
+        //      the user pre-staged these via /queue add or /queue <msg>).
+        //   3. Interactive readline.
         let user_msg = if let Some(p) = pending.take() {
             eprintln!("[hip] (using initial prompt as first turn)");
             p
+        } else if let Some(q) = queue.pop_front() {
+            // Show what we're auto-sending so the user sees turn-chaining.
+            eprintln!(
+                "{d}─ from queue ({n} remaining): {a}{q}{r}",
+                d = theme::dim(),
+                a = theme::accent(),
+                r = theme::RESET,
+                n = queue.len(),
+                q = q,
+            );
+            q
         } else {
             let prompt = "\x1b[1;36m> \x1b[0m";
             let line: RLResult<String> = rl.readline(prompt);
@@ -583,6 +683,10 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 ctx_input_tokens = 0;
                 ctx_output_tokens = 0;
                 ctx_turns = 0;
+                // Persist the cleared conv so a subsequent --resume on this
+                // same session id doesn't bring the old messages back from
+                // disk.
+                session_store::save(client.session_id(), &conv);
                 eprintln!("[hip] conversation cleared (session_id unchanged so cache stays warm; use :new for a clean MTPLX session too)");
                 continue;
             }
@@ -606,6 +710,8 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                         .unwrap_or(0)
                 );
                 client.set_session_id(&new_sid);
+                // No save here: the new sid has no history yet. The first
+                // successful turn on this sid will write its own file.
                 eprintln!(
                     "{d}─ new conversation · session={a}{}{d} · context reset to 0 tokens ─{r}",
                     new_sid,
@@ -623,6 +729,56 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                     ctx_turns,
                     ctx_max_tokens,
                 );
+                continue;
+            }
+            ":queue" => {
+                let pending_items = queue.peek_all();
+                if pending_items.is_empty() {
+                    eprintln!(
+                        "{d}─ queue empty ─ stage messages with {a}/queue add <message>{d} (auto-sent before next prompt){r}",
+                        d = theme::dim(),
+                        a = theme::accent(),
+                        r = theme::RESET,
+                    );
+                } else {
+                    eprintln!(
+                        "{d}─ queue ({n} pending) ─{r}",
+                        d = theme::dim(),
+                        r = theme::RESET,
+                        n = pending_items.len(),
+                    );
+                    for (i, m) in pending_items.iter().enumerate() {
+                        let preview: String = m.chars().take(80).collect();
+                        eprintln!(
+                            "  {a}{n:>2}.{r} {p}",
+                            a = theme::accent(),
+                            r = theme::RESET,
+                            n = i + 1,
+                            p = preview,
+                        );
+                    }
+                }
+                continue;
+            }
+            ":queue clear" => {
+                let n = queue.len();
+                queue.clear();
+                eprintln!("[hip] cleared {n} queued message(s)");
+                continue;
+            }
+            cmd if cmd.starts_with(":queue add ") => {
+                let msg = cmd[":queue add ".len()..].trim();
+                if msg.is_empty() {
+                    eprintln!("[hip] usage: /queue add <message>");
+                } else {
+                    queue.push(msg);
+                    eprintln!(
+                        "{d}─ queued ({n} pending now) ─{r}",
+                        d = theme::dim(),
+                        r = theme::RESET,
+                        n = queue.len(),
+                    );
+                }
                 continue;
             }
             ":stats" => {
@@ -865,10 +1021,17 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 eprintln!(
                     "  {a}/context{r}          show context size: tokens used vs max + turn count"
                 );
+                eprintln!("  {a}/queue{r}            list pending queued messages");
+                eprintln!(
+                    "  {a}/queue add <msg>{r}  stage a message — auto-sent as the next prompt"
+                );
+                eprintln!("  {a}/queue clear{r}      drop all queued messages");
                 eprintln!("  {a}/quit{r} / {a}/exit{r} / {a}/q{r}  exit");
                 eprintln!("  {d}exit / quit / bye{r}  exit (bare word, asks confirmation)");
                 eprintln!("  {d}Ctrl-C twice{r}       exit immediately");
-                eprintln!("  {d}Alt-Enter{r}          insert a newline (multi-line prompt)");
+                eprintln!(
+                    "  {d}Alt/Shift/Ctrl-J + Enter{r}   insert a newline (multi-line prompt)"
+                );
                 eprintln!("  {a}/stats{r}            recent run stats (turns, session, cwd)");
                 eprintln!("  {a}/history{r}          show history file path");
                 eprintln!("  {a}/cwd <path>{r}       change working directory");
@@ -978,6 +1141,9 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 ctx_output_tokens = c;
             }
             ctx_turns = ctx_turns.saturating_add(1);
+            // Persist the updated conversation to disk so `hip --resume
+            // <session_id>` on next launch picks up exactly here.
+            session_store::save(client.session_id(), &conv);
             // Single-line context status printed below the response so the
             // user always knows where they sit relative to the 64K window.
             print_context_line(
@@ -1023,7 +1189,7 @@ fn print_chat_tips() {
         "{d}  tips: {a}/help{d} for all commands · {a}/new{d} for fresh context · {a}/context{d} shows token usage{r}"
     );
     eprintln!(
-        "{d}        tab-completes after {a}/{d} or {a}:{d} · {a}Alt-Enter{d} for newline · {a}Ctrl-C{d} twice to exit{r}"
+        "{d}        tab-completes after {a}/{d} or {a}:{d} · {a}Alt/Shift+Enter{d} or {a}Ctrl-J{d} for newline · {a}Ctrl-C{d} twice to exit{r}"
     );
     eprintln!();
 }
@@ -2168,7 +2334,7 @@ fn print_chat_banner(client: &MtplxClient, cli: &Cli) {
         sess = client.session_id(),
         dry = dry,
     );
-    eprintln!("{d}╰─ cwd {a}{cwd}{d} ─ type {a}/help{d} for commands · Alt-Enter for newline · {a}/quit{d} to exit{r}",
+    eprintln!("{d}╰─ cwd {a}{cwd}{d} ─ type {a}/help{d} for commands · Alt/Shift+Enter or Ctrl-J for newline · {a}/quit{d} to exit{r}",
         d = d, a = a, r = r, cwd = cwd,
     );
 }

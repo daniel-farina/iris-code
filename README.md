@@ -5,10 +5,10 @@ Replicates the useful subset of opencode's agent loop without the heavy parent-a
 prompt overhead, so cold prefills are tiny and the model's prompt format is exactly
 what it expects.
 
-> **Status:** ~5K LoC across 24 modules · 10 tools · ~1.35K token prompt overhead
-> (9.6× lighter than opencode) · 66 tests passing · 943 cumulative smoke passes / 0 failures
-> · river theme · sticky bottom status bar · runs entirely against your local
-> MTPLX server.
+> **Status:** ~9.6K LoC across 28 modules · 10 tools · ~1.35K token prompt overhead
+> (9.6× lighter than opencode) · 69 tests passing · 943 cumulative smoke passes / 0 failures
+> · hippo-purple theme · sticky bottom status bar · `--resume` picker with persisted
+> history · runs entirely against your local MTPLX server.
 
 ## Install
 
@@ -102,7 +102,7 @@ Toggle at launch (CLI flags) or runtime (REPL `:cmds`) or via env vars:
 | `--temperature N`   | —                       | 0.6     | Sampler temperature                   |
 | `--top-p N`         | —                       | 0.95    | Sampler top-p                         |
 | `--top-k N`         | —                       | 20      | Sampler top-k                         |
-| `--max-tokens N`    | —                       | 16384   | Max output tokens per turn            |
+| `--max-tokens N`    | —                       | 128000  | Max output tokens per turn (effectively uncapped); auto-continues on length truncation |
 | `--diff`            | -                       | off     | Snapshot cwd before/after; show A/M/D files plus +/- line diff (5 files x 20 lines cap) |
 | `--auto-smoke`      | `MLX_CODE_AUTO_SMOKE`   | off     | Auto-run smoke harness against cwd post-run |
 | `--smoke [PATH,…]`  | —                       | —       | Run smoke harness only, exit code 0/1 |
@@ -180,8 +180,8 @@ Default registry (Phase 2 + 3):
 - **Agent loop** (`src/agent.rs`): up to 30 rounds. Each round sends the conversation + tool
   specs, streams the response, and either appends an assistant text and exits, or appends
   the assistant tool_calls + one `tool` role message per result and recurses.
-- **System prompt**: 1 line (~30 tokens). Combined with all 7 tool specs the prompt is
-  ~1.05K tokens of fixed overhead, vs opencode's ~13K parent-agent prompt.
+- **System prompt**: search-first playbook (~250 tokens). Combined with all 10 tool specs the prompt is
+  ~1.35K tokens of fixed overhead, vs opencode's ~13K parent-agent prompt.
 - **Session header**: every request sends `x-mtplx-session-id: <session>` so MTPLX can keep
   a per-session prefix-cache slot warm.
 - **No daemon, no TUI, no MCP, no auth.**

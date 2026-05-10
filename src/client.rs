@@ -13,7 +13,9 @@ use std::time::{Duration, Instant};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use crate::pretty::PrettyOut;
-use crate::schema::{ChatMessage, ChatRequest, FunctionCall, StreamChunk, ToolCall, Usage};
+use crate::schema::{
+    ChatMessage, ChatRequest, FunctionCall, StreamChunk, StreamError, ToolCall, Usage,
+};
 
 pub struct MtplxClient {
     http: Client,
@@ -60,6 +62,10 @@ pub struct StreamResult {
     pub usage: Option<Usage>,
     pub ttft: Option<Duration>,
     pub total: Duration,
+    /// Set when MTPLX emitted a `finish_reason="error"` chunk with a
+    /// structured `error` field. Lets the agent loop surface the actual
+    /// server-side exception message instead of swallowing it.
+    pub error: Option<StreamError>,
 }
 
 /// Live throughput / metrics bar.
@@ -433,6 +439,9 @@ impl MtplxClient {
                         };
                         if let Some(usage) = parsed.usage {
                             result.usage = Some(usage);
+                        }
+                        if let Some(err) = parsed.error {
+                            result.error = Some(err);
                         }
                         for choice in parsed.choices {
                             if let Some(reason) = choice.finish_reason {

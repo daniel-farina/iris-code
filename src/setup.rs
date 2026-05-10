@@ -25,17 +25,15 @@ use std::time::Duration;
 use crate::theme::{self, RESET};
 
 const MARKER_PATH: &str = "~/.mlx-code/.welcomed";
-// We pin fresh installs to a curated share branch on the fork that has
-// every unmerged perf fix cherry-picked on top of upstream main:
-//   - #38 TurboQuant graceful fallback (vllm-metal-optional)
-//   - #39 SessionBank cache miss fix above 16K-token cliff
-//   - #40 env-overridable SessionBank.max_entries
-//   - #41 postcommit reuses bank prefix + cache_miss_reason observability
-// Plus the four already-merged PRs (#32 Metal memory caps, #33 prefill
-// chunk-size split, #35 preamble-in-stored-content, #37 postcommit-wait).
-// Switch to upstream main once all four open PRs land.
-const MTPLX_REPO_URL: &str = "https://github.com/daniel-farina/MTPLX";
-const MTPLX_BRANCH: &str = "share/install-2026-05-10-all-prs";
+// As of 2026-05-10: upstream merged all 8 of our perf PRs (the original
+// 4 — #32, #33, #35, #37 — plus the second wave #38 TurboQuant fallback,
+// #39 SessionBank 16K cliff fix, #40 entry-cap env, #41 postcommit
+// prefix-reuse + miss-reason). Fresh installs can clone upstream main
+// directly. The runtime env vars below (MTPLX_SESSION_BANK_*) still need
+// to be set per-instance because they're env-overridable, not baked-in
+// defaults.
+const MTPLX_REPO_URL: &str = "https://github.com/youssofal/MTPLX";
+const MTPLX_BRANCH: &str = "main";
 const MTPLX_DEFAULT_INSTALL_DIR: &str = "~/code/MTPLX";
 const MTPLX_PID_FILE: &str = "~/.mlx-code/mtplx.pid";
 const MTPLX_LOG_FILE: &str = "~/.mlx-code/mtplx.log";
