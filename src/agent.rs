@@ -132,6 +132,44 @@ pub async fn run_loop(
             }
         }
 
+        // finish_reason="error" with a malformed-tool_call payload is the
+        // server telling us the assistant content it just streamed contains
+        // a <tool_call>...</tool_call> block it can't parse (unclosed,
+        // unsupported format, etc.). If we naively appended that garbage
+        // text to conv as the assistant turn, the SAME garbage would re-
+        // tokenize on the next request and MTPLX would reject every
+        // subsequent turn — the chat is bricked until /new. Detect this
+        // shape and drop the malformed turn from history instead so the
+        // user can keep going from the previous user prompt.
+        let malformed_tool_call_rejected = res
+            .finish_reason
+            .as_deref()
+            .map(|r| r == "error")
+            .unwrap_or(false)
+            && res
+                .error
+                .as_ref()
+                .and_then(|e| e.message.as_deref())
+                .map(|m| {
+                    let lo = m.to_lowercase();
+                    lo.contains("malformed tool_call")
+                        || lo.contains("unclosed <tool_call>")
+                        || lo.contains("unsupported tool_call payload")
+                })
+                .unwrap_or(false);
+        if malformed_tool_call_rejected {
+            eprintln!(
+                "\x1b[33m[hip] server rejected the assistant turn (malformed tool_call). \
+                Dropping the bad turn from history so subsequent turns aren't blocked. \
+                You can re-ask or rephrase your last prompt.\x1b[0m"
+            );
+            // Don't append the malformed content to conv. Return as a
+            // graceful no-op so the chat loop accepts the user's next
+            // turn. Stats still reflect what just happened.
+            stats.total = started.elapsed();
+            return Ok(stats);
+        }
+
         // finish_reason="length" means the model was cut off because it hit
         // max_tokens, NOT because it considered the task done. If we let the
         // loop exit here the user has to manually type "continue" — which
