@@ -509,11 +509,23 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
         }
     };
     rl.set_helper(Some(repl::MlxHelper::new()));
-    // Alt+Enter -> insert newline in the buffer (multiline editing).
-    rl.bind_sequence(
-        Event::KeySeq(vec![KeyEvent::new('\r', Modifiers::ALT)]),
-        rustyline::EventHandler::Simple(Cmd::Newline),
-    );
+    // Multi-line newline bindings. Plain Enter still submits.
+    //   Alt+Enter   -> insert newline (universal, terminal sends \x1b\r)
+    //   Shift+Enter -> insert newline (modern terminals: csi-u / modifyOtherKeys)
+    //   Ctrl+J      -> insert newline (universal: ASCII 0x0A; works in every terminal)
+    // For Cmd+Enter on macOS: configure your terminal to send `\x1ba` on Cmd+Enter
+    // (iTerm2: Prefs > Keys > +, key Cmd+Enter, action "Send Escape Sequence: a Return").
+    // That makes Cmd+Enter behave identically to Alt+Enter.
+    for ev in [
+        KeyEvent::new('\r', Modifiers::ALT),
+        KeyEvent::new('\r', Modifiers::SHIFT),
+        KeyEvent::new('\n', Modifiers::NONE),
+    ] {
+        rl.bind_sequence(
+            Event::KeySeq(vec![ev]),
+            rustyline::EventHandler::Simple(Cmd::Newline),
+        );
+    }
     let history_path = expand(&PathBuf::from("~/.mlx-code/history.txt")).ok();
     if let Some(h) = &history_path {
         if let Some(parent) = h.parent() {
@@ -1020,7 +1032,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 eprintln!("  {a}/quit{r} / {a}/exit{r} / {a}/q{r}  exit");
                 eprintln!("  {d}exit / quit / bye{r}  exit (bare word, asks confirmation)");
                 eprintln!("  {d}Ctrl-C twice{r}       exit immediately");
-                eprintln!("  {d}Alt-Enter{r}          insert a newline (multi-line prompt)");
+                eprintln!("  {d}Alt/Shift/Ctrl-J + Enter{r}   insert a newline (multi-line prompt)");
                 eprintln!("  {a}/stats{r}            recent run stats (turns, session, cwd)");
                 eprintln!("  {a}/history{r}          show history file path");
                 eprintln!("  {a}/cwd <path>{r}       change working directory");
@@ -1178,7 +1190,7 @@ fn print_chat_tips() {
         "{d}  tips: {a}/help{d} for all commands · {a}/new{d} for fresh context · {a}/context{d} shows token usage{r}"
     );
     eprintln!(
-        "{d}        tab-completes after {a}/{d} or {a}:{d} · {a}Alt-Enter{d} for newline · {a}Ctrl-C{d} twice to exit{r}"
+        "{d}        tab-completes after {a}/{d} or {a}:{d} · {a}Alt/Shift+Enter{d} or {a}Ctrl-J{d} for newline · {a}Ctrl-C{d} twice to exit{r}"
     );
     eprintln!();
 }
@@ -2323,7 +2335,7 @@ fn print_chat_banner(client: &MtplxClient, cli: &Cli) {
         sess = client.session_id(),
         dry = dry,
     );
-    eprintln!("{d}╰─ cwd {a}{cwd}{d} ─ type {a}/help{d} for commands · Alt-Enter for newline · {a}/quit{d} to exit{r}",
+    eprintln!("{d}╰─ cwd {a}{cwd}{d} ─ type {a}/help{d} for commands · Alt/Shift+Enter or Ctrl-J for newline · {a}/quit{d} to exit{r}",
         d = d, a = a, r = r, cwd = cwd,
     );
 }
