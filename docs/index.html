@@ -4,10 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>hip - a lean coding agent for the local MTPLX model</title>
-  <meta name="description" content="hip: a tiny Rust CLI coding agent (hippo-code) for a local MTPLX server. 10 tools, ~1.35K token prompt overhead, ~9.6x lighter than opencode. Slash-command REPL, first-run setup wizard, in-place self-updater." />
+  <meta name="description" content="hip: a tiny Rust CLI coding agent (hippo-code) for a local MTPLX server. 10 tools, ~1.35K token prompt overhead, ~9.6x lighter than opencode. Slash-command REPL, --resume picker with persisted history, queued follow-ups, in-place self-updater." />
   <meta name="color-scheme" content="dark light" />
   <meta property="og:title" content="hip" />
-  <meta property="og:description" content="A lean coding agent for the local MTPLX model. 10 tools, ~1.35K token prompt overhead. Slash-command REPL with /new, /context, sticky bar, and a one-shot setup wizard." />
+  <meta property="og:description" content="A lean coding agent for the local MTPLX model. 10 tools, ~1.35K token prompt overhead, 128K context. --resume reloads full history, /queue stages follow-ups, slash-command REPL, search-first agent prompt." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -546,16 +546,22 @@
 <section id="whats-new">
   <div class="container">
     <h2><span class="num">&#x2605;</span>What's new</h2>
-    <p class="subtitle">The <a href="https://github.com/daniel-farina/hippo-code/releases/latest" target="_blank" rel="noopener">latest release</a> ships a redesigned chat REPL, a one-shot setup wizard, and an MTPLX fork pre-loaded with four still-open performance PRs.</p>
+    <p class="subtitle">v0.3.8 brings a search-first agent prompt, a 4000-line <code>read</code> default, 128K-token context, persisted resume, and a refreshed mood-pigmy launch banner. The setup wizard now clones MTPLX upstream <code>main</code> directly &mdash; all eight perf PRs landed.</p>
 
     <ul class="bullets">
+      <li><b><code>hip --resume</code> picker.</b> Arrow-key list of recent sessions (cap 100, 10-row scroll window, two-line entries with full cwd path). Selecting a row reloads its full conversation history &mdash; not just the session id, so the model picks up where it left off.</li>
+      <li><b>Queued follow-ups.</b> Press Enter while a turn is streaming to stage a follow-up message; the agent auto-chains through the queue between turns instead of dropping it.</li>
+      <li><b>Effectively uncapped <code>--max-tokens</code>.</b> Default raised to 128K to match the new 128K context window; the agent auto-continues on <code>finish_reason=length</code> truncation so long generations resume seamlessly.</li>
+      <li><b>Search-first system prompt.</b> Rewritten DEFAULT_SYSTEM_PROMPT around an explicit search-first playbook. A/B against an open-ended task: 2&times; faster wall time, 2.7&times; fewer output tokens, 4&times; more surgical edits &mdash; with no regression on targeted edits.</li>
+      <li><b>4000-line <code>read</code> default.</b> Was 200; bumped so the model gets the whole file on a typical 3500-line source instead of a truncated head + an early give-up. MAX_BYTES=1MiB still bounds the absolute worst case.</li>
+      <li><b>Mood-pigmy launch banner.</b> Refined truecolor mascot art (mascot name: <i>mood</i>) replaces the prior pigmy iteration. Same 14-line ANSI-truecolor format.</li>
+      <li><b>MTPLX upstream main.</b> The first-run wizard now clones <code>youssofal/MTPLX#main</code> directly &mdash; all eight perf PRs we were carrying landed. <code>MTPLX_SESSION_BANK_*</code> env vars (per_session 16G, max 32G, max_entries 24) are still set before spawn as per-instance tuning.</li>
       <li><b>Slash &amp; colon commands.</b> Both <code>/help</code> and <code>:help</code> work; tab-completes after typing <code>/</code> or <code>:</code>; the empty buffer shows an inline hint of the most useful next move.</li>
       <li><b><code>/new</code> vs <code>/reset</code>.</b> <code>/new</code> starts a fresh conversation - clears history <em>and</em> rotates the MTPLX session id so the prefix cache resets. <code>/reset</code> keeps the session id so you stay on a warm cache.</li>
-      <li><b><code>/context</code> usage tracker.</b> Shows current tokens vs the 64K window with input/completion split and turn count. After every response a one-line bar prints inline: <code>&#x2500; ctx 12.4K/64K (19%) &middot; 3 turns &#x2500;</code>, colored green &rarr; warn &rarr; bad past 75% / 90%.</li>
+      <li><b><code>/context</code> usage tracker.</b> Shows current tokens vs the 128K window with input/completion split and turn count. After every response a one-line bar prints inline: <code>&#x2500; ctx 12.4K/128K (10%) &middot; 3 turns &#x2500;</code>, colored green &rarr; warn &rarr; bad past 75% / 90%.</li>
       <li><b>Sticky bottom bar, resize-aware.</b> The live <code>tok / lines / tok-s / ttft</code> bar survives terminal resizes (SIGWINCH-aware) and falls back gracefully on dumb terminals.</li>
-      <li><b>Hippo-purple truecolor theme.</b> New default theme + bundled hippo logo. Double-Ctrl-C exits; bare <code>exit</code>, <code>quit</code>, <code>bye</code> exit with confirmation.</li>
+      <li><b>Hippo-purple truecolor theme.</b> Default theme + bundled hippo logo. Double-Ctrl-C exits; bare <code>exit</code>, <code>quit</code>, <code>bye</code> exit with confirmation.</li>
       <li><b>First-run setup wizard.</b> Probes for MTPLX, offers to clone &amp; install, downloads the model, starts the server in the background, then drops you straight into chat. Auto-detects Python &lt; 3.11 and offers <code>brew install python@3.12</code>; recreates stale <code>.venv</code> built with old Python; surfaces real pip errors inline.</li>
-      <li><b>Fork-pinned MTPLX with perf PRs.</b> The wizard now clones <code>daniel-farina/MTPLX#share/install-2026-05-10-all-prs</code>, which cherry-picks four still-open upstream PRs: <a href="https://github.com/youssofal/MTPLX/pull/38" target="_blank" rel="noopener">#38 TurboQuant fallback</a>, <a href="https://github.com/youssofal/MTPLX/pull/39" target="_blank" rel="noopener">#39 16K cliff fix</a>, <a href="https://github.com/youssofal/MTPLX/pull/40" target="_blank" rel="noopener">#40 entry-cap env</a>, <a href="https://github.com/youssofal/MTPLX/pull/41" target="_blank" rel="noopener">#41 postcommit prefix-reuse</a>. Sets <code>MTPLX_SESSION_BANK_PER_SESSION_BYTES=16G</code>, <code>_MAX_BYTES=32G</code>, <code>_MAX_ENTRIES=24</code> before spawn.</li>
       <li><b>In-place self-update.</b> <code>hip --update</code> downloads and replaces the binary from the latest GitHub release - no curl pipe, no Cargo rebuild.</li>
     </ul>
   </div>
@@ -626,7 +632,7 @@ hip</span></pre>
       <li><b>Thinking mode shown by default.</b> <code>&lt;think&gt;</code> blocks render in a dim panel above the response. Hide with <code>--hide-thinking</code> or <code>MLX_CODE_SHOW_THINKING=0</code>; verbose with <code>-v</code> to also get full tool output and stats.</li>
       <li><b>Dry run.</b> <code>--dry-run</code> makes <code>edit</code> and <code>bash</code> return <code>(dry_run) would&hellip;</code> previews instead of writing or executing - the agent loop still runs end-to-end so you can validate plans safely.</li>
       <li><b>Sticky bottom status bar.</b> ANSI scroll regions (DECSTBM) pin a live <code>tok / lines / tok-s / ttft / total</code> bar to the bottom row while output streams above. Falls back to inline <code>\r</code> if the terminal can't, or with <code>MLX_CODE_NO_STICKY=1</code>.</li>
-      <li><b>~1.35K token prompt overhead vs opencode's ~13K</b> - roughly 9.6&times; lighter cold prefills. Run <code>hippo-code --inspect-prompt</code> for a live per-tool breakdown.</li>
+      <li><b>~1.35K token prompt overhead vs opencode's ~13K</b> - roughly 9.6&times; lighter cold prefills. Run <code>hip --inspect-prompt</code> for a live per-tool breakdown.</li>
     </ul>
   </div>
 </section>
@@ -703,7 +709,9 @@ hip</span></pre>
           <tr><td class="mod">runlog.rs</td><td>Append-only JSONL run log at <code>~/.mlx-code/logs/runs.jsonl</code>.</td></tr>
           <tr><td class="mod">read_cache.rs</td><td>Process-global content cache for the <code>read</code> tool within one run.</td></tr>
           <tr><td class="mod">dry_run_log.rs</td><td>Accumulator of paths a dry run would have mutated; printed at end-of-run.</td></tr>
-          <tr><td class="mod">setup.rs</td><td>First-run wizard: probes for MTPLX, clones the perf-PR fork, installs deps, downloads the model, spawns the server, then drops into chat.</td></tr>
+          <tr><td class="mod">setup.rs</td><td>First-run wizard: probes for MTPLX, clones <code>youssofal/MTPLX#main</code>, installs deps, downloads the model, spawns the server, then drops into chat.</td></tr>
+          <tr><td class="mod">session_store.rs</td><td>Persists conversation history per session id and reloads it on <code>--resume</code>; not just rotating the session id.</td></tr>
+          <tr><td class="mod">typeahead.rs</td><td>Pending-message queue: <code>/queue add &lt;msg&gt;</code> stages follow-ups; the chat loop auto-dequeues each as the next prompt.</td></tr>
           <tr><td class="mod">updater.rs</td><td><code>hip --update</code>: fetches the latest GitHub release binary and replaces the running executable in place.</td></tr>
         </tbody>
       </table>
@@ -747,7 +755,7 @@ hip</span></pre>
         <div class="l">lighter than opencode</div>
       </div>
       <div class="stat">
-        <div class="v">64</div>
+        <div class="v">69</div>
         <div class="l">tests passing</div>
       </div>
       <div class="stat gold">
@@ -766,7 +774,7 @@ hip</span></pre>
           <tr><td>Warm <code>--continue</code> TTFT</td><td class="metric">1-3 s (3-4&times; speedup)</td></tr>
           <tr><td>Sustained decode rate</td><td class="metric">35-50 tok/s</td></tr>
           <tr><td>Prefill rate at 80K context</td><td class="metric">565 tok/s</td></tr>
-          <tr><td>Test suite</td><td class="metric">64 tests, 0 failures</td></tr>
+          <tr><td>Test suite</td><td class="metric">69 tests, 0 failures</td></tr>
           <tr><td>Smoke harness (cumulative)</td><td class="metric">943 passes, 0 failures</td></tr>
         </tbody>
       </table>
