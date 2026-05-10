@@ -160,7 +160,24 @@ async fn run(args: Value) -> Result<String> {
         }
     }
 
-    let original = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
+    let original = match std::fs::read_to_string(&p) {
+        Ok(s) => s,
+        Err(e) => {
+            // If the file simply doesn't exist, suggest similar names.
+            if e.kind() == std::io::ErrorKind::NotFound {
+                let suggestions = similar_paths(&p);
+                if !suggestions.is_empty() {
+                    return Err(anyhow!(
+                        "edit: file not found: {} - did you mean: {}?",
+                        p.display(),
+                        suggestions.join(", ")
+                    ));
+                }
+                return Err(anyhow!("edit: file not found: {}", p.display()));
+            }
+            return Err(anyhow!("edit: read {}: {}", p.display(), e));
+        }
+    };
 
     // Line-ending preservation: if the file uses CRLF and the model
     // supplied LF strings, transparently re-encode old/new so matching
@@ -266,6 +283,71 @@ async fn run(args: Value) -> Result<String> {
         plural,
         net_disp,
     ))
+}
+
+/// Walk the user's CWD (gitignore-aware) and return up to 3 paths whose
+/// basename is most similar to `target`'s basename. Used to enrich
+/// "file not found" errors so the agent can self-correct typos like
+/// `src/Index.tsx` -> `src/index.tsx`. Levenshtein scoring; cap walk
+/// at a few thousand entries so we don't pay a fortune on huge trees.
+pub(crate) fn similar_paths(target: &std::path::Path) -> Vec<String> {
+    let target_base = match target.file_name().and_then(|n| n.to_str()) {
+        Some(b) => b.to_string(),
+        None => return Vec::new(),
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut scored: Vec<(usize, String)> = Vec::new();
+    let mut walked = 0usize;
+    for entry in ignore::WalkBuilder::new(&cwd)
+        .hidden(false)
+        .git_ignore(true)
+        .build()
+    {
+        if walked >= 5000 {
+            break;
+        }
+        walked += 1;
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let p = entry.path();
+        let Some(base) = p.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let dist = levenshtein(&target_base.to_lowercase(), &base.to_lowercase());
+        // Only suggest if the distance is small relative to the basename.
+        let max_dist = target_base.len().max(base.len()).saturating_div(2).max(2);
+        if dist <= max_dist {
+            scored.push((dist, p.display().to_string()));
+        }
+    }
+    scored.sort_by_key(|s| s.0);
+    scored.into_iter().take(3).map(|(_, p)| p).collect()
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let m = a.len();
+    let n = b.len();
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut cur: Vec<usize> = vec![0; n + 1];
+    for i in 1..=m {
+        cur[0] = i;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[n]
 }
 
 /// Strip trailing whitespace from each line of `s`, preserving line
@@ -1164,6 +1246,44 @@ mod tests {
             "hint should include actual L3 content (the divergent line):\n{}",
             hint
         );
+    }
+
+    #[test]
+    fn levenshtein_basic_cases() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", "abc"), 0);
+        assert_eq!(levenshtein("abc", "abd"), 1);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("Index", "index"), 1);
+    }
+
+    #[test]
+    fn similar_paths_suggests_typo_match_in_cwd() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        // Build a small temp tree, cd into it, and probe.
+        let root = std::env::temp_dir().join(format!("mlx-edit-sim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/index.tsx"), "// real\n").unwrap();
+        std::fs::write(root.join("src/index.ts"), "// real\n").unwrap();
+        std::fs::write(root.join("README.md"), "x\n").unwrap();
+
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&root).unwrap();
+        // Non-existent path with similar basename.
+        let target = std::path::PathBuf::from("src/Index.tsx");
+        let suggestions = similar_paths(&target);
+        std::env::set_current_dir(&prev).unwrap();
+
+        assert!(!suggestions.is_empty(), "expected at least one suggestion");
+        assert!(
+            suggestions.iter().any(|s| s.contains("index.tsx")),
+            "expected index.tsx in suggestions: {:?}",
+            suggestions
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

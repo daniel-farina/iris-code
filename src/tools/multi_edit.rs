@@ -117,7 +117,7 @@ async fn run(args: Value) -> Result<String> {
     // Load current contents (or treat as empty if first edit's old_string is "" and file missing).
     let original = match std::fs::read_to_string(&p) {
         Ok(s) => s,
-        Err(_) => {
+        Err(e) => {
             // Missing-file path is only legal if first edit is a create (old_string == "").
             let first = edits
                 .first()
@@ -125,10 +125,18 @@ async fn run(args: Value) -> Result<String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !first.is_empty() {
-                return Err(anyhow!(
-                    "multi_edit: cannot read {} and first edit's old_string is non-empty",
-                    p.display()
-                ));
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    let suggestions = super::edit::similar_paths(&p);
+                    if !suggestions.is_empty() {
+                        return Err(anyhow!(
+                            "multi_edit: file not found: {} - did you mean: {}?",
+                            p.display(),
+                            suggestions.join(", ")
+                        ));
+                    }
+                    return Err(anyhow!("multi_edit: file not found: {}", p.display()));
+                }
+                return Err(anyhow!("multi_edit: cannot read {}: {}", p.display(), e));
             }
             String::new()
         }
