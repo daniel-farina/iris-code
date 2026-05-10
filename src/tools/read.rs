@@ -8,7 +8,15 @@ use std::path::PathBuf;
 use super::Tool;
 
 const MAX_BYTES: u64 = 1_048_576; // 1 MiB
-const DEFAULT_LIMIT: usize = 200;
+// Default line cap when the caller doesn't specify a `limit`. Was 200 — too
+// conservative for our 64K-context model. A 200-line cap means files like
+// the user's 3500-line index.html return only the first 200 lines + a
+// "[truncated]" marker, which trips the model into either re-reading in
+// chunks (slow) or giving up. Bumping to 4000 lines comfortably covers
+// most files in one shot (4000 lines ≈ 30K tokens, well within 64K) while
+// `MAX_BYTES` (1 MiB) still bounds the absolute worst case. Callers can
+// still pass a smaller `limit` for narrow reads.
+const DEFAULT_LIMIT: usize = 4000;
 
 pub fn tool() -> Tool {
     Tool {
@@ -17,13 +25,13 @@ pub fn tool() -> Tool {
             "type": "function",
             "function": {
                 "name": "read",
-                "description": "Read a UTF-8 text file slice. Default: first 200 lines. Use `around` for symmetric context around a target line. Refuses files >1MB.",
+                "description": "Read a UTF-8 text file slice. Default: up to 4000 lines from start. Use `around` for symmetric context around a target line, `offset`+`limit` for an explicit window. Refuses files >1MB.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path":   { "type": "string", "description": "absolute or cwd-relative file path" },
                         "offset": { "type": "integer", "description": "1-based starting line (default 1)" },
-                        "limit":  { "type": "integer", "description": "max lines to return (default 200)" },
+                        "limit":  { "type": "integer", "description": "max lines to return (default 4000)" },
                         "around": { "type": "integer", "description": "1-based target line; overrides offset/limit. Returns ±context lines around it." },
                         "context":{ "type": "integer", "description": "context lines for `around` (default 20)" }
                     },

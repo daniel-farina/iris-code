@@ -15,10 +15,21 @@ use crate::client::{MtplxClient, SamplingOpts};
 use crate::schema::ChatMessage;
 use crate::tools::{self, Tool};
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a coding assistant. Use tools to read, search, and edit files. Make minimal targeted changes. \
-When `edit` fails: the error message lists hints (CRLF, whitespace, case, drift) and the line numbers of all matches - use them to fix the next call instead of re-reading. \
-When unsure where something lives, use `search` (returns ranked file:line:text); pass `definitions_only=true` to jump straight to the declaration. Then use `read(path, around=<line>)` to grab context around the hit instead of reading the whole file. \
-After applying edits, verify with `bash` if the user asked to verify, or use `diff(path_a, path_b)` to compare two files (e.g. compare a freshly written file to a reference). Be concise.";
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a SURGICAL coding assistant. Default to small, targeted edits informed by search — NOT reading entire files.\n\
+\n\
+For any change request:\n\
+1. ALWAYS start with `search \"<keyword>\"` to locate the relevant code (returns ranked file:line:text). Pass `definitions_only=true` for declarations.\n\
+2. After search, use `read(path, around=<line>, lines=20)` to grab the minimum context. Files >500 lines should ALMOST NEVER be read entirely. If you find yourself wanting to read more than 100 lines at once, search again with a narrower term first.\n\
+3. Apply the smallest possible `edit` that satisfies the request. Don't rewrite a whole function if a one-line change suffices.\n\
+4. Verify with one focused `search` or a 10-line `read(path, around=<line>)` of the changed region.\n\
+\n\
+When `edit` fails: the error message has hints (CRLF, whitespace, case, drift, line numbers of matches). Use them to fix your next `edit` call. NEVER re-read the whole file just because an edit didn't apply.\n\
+\n\
+The user has the file in front of them. DON'T echo file content back to them. Describe what you changed in 1-2 sentences and why.\n\
+\n\
+Use `bash` to verify the change applied correctly when the user asks; use `diff(path_a, path_b)` for cross-file comparisons.\n\
+\n\
+Be terse. Search first. Read narrow. Edit small. Verify with a peek.";
 
 #[derive(Debug, Default)]
 pub struct LoopStats {
@@ -62,6 +73,26 @@ pub async fn run_loop(
             // Tail newline so subsequent tool output starts on its own line.
             out.write_all(b"\n").await.ok();
             out.flush().await.ok();
+        }
+
+        // Surface finish_reason every round so we can see why a turn ended.
+        // Helps diagnose the "model stopped after a big tool result with
+        // tiny ctok" symptom — finish_reason="stop" with empty content
+        // means the model itself decided to end; "length" means we hit
+        // max_tokens; missing means the server didn't send one.
+        if let Some(reason) = res.finish_reason.as_deref() {
+            if reason != "tool_calls" {
+                eprintln!(
+                    "\x1b[2m[hip] round {} finish_reason={} ctok={}\x1b[0m",
+                    round + 1,
+                    reason,
+                    res
+                        .usage
+                        .as_ref()
+                        .and_then(|u| u.completion_tokens)
+                        .unwrap_or(0),
+                );
+            }
         }
 
         // finish_reason="length" means the model was cut off because it hit

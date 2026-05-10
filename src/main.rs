@@ -528,7 +528,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
     };
     let mut ctx_output_tokens: u32 = 0;
     let mut ctx_turns: u32 = resumed_turns as u32;
-    let ctx_max_tokens: u32 = 64000; // matches the qwen3.6-27b-mtplx model's max_context_length
+    let ctx_max_tokens: u32 = 128000; // qwen3.6-27b-mtplx supports 128K with rope-scaling enabled in MTPLX
 
     // Pending-message queue. Users can stage follow-up prompts via
     // `/queue add <msg>` between turns; the loop will dequeue them as
