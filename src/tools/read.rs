@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use super::Tool;
 
 const MAX_BYTES: u64 = 1_048_576; // 1 MiB
+
 // Default line cap when the caller doesn't specify a `limit`. Was 200 — too
 // conservative for our 64K-context model. A 200-line cap means files like
 // the user's 3500-line index.html return only the first 200 lines + a

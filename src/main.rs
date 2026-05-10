@@ -1032,7 +1032,9 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 eprintln!("  {a}/quit{r} / {a}/exit{r} / {a}/q{r}  exit");
                 eprintln!("  {d}exit / quit / bye{r}  exit (bare word, asks confirmation)");
                 eprintln!("  {d}Ctrl-C twice{r}       exit immediately");
-                eprintln!("  {d}Alt/Shift/Ctrl-J + Enter{r}   insert a newline (multi-line prompt)");
+                eprintln!(
+                    "  {d}Alt/Shift/Ctrl-J + Enter{r}   insert a newline (multi-line prompt)"
+                );
                 eprintln!("  {a}/stats{r}            recent run stats (turns, session, cwd)");
                 eprintln!("  {a}/history{r}          show history file path");
                 eprintln!("  {a}/cwd <path>{r}       change working directory");
