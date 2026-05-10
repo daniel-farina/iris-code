@@ -115,11 +115,19 @@ async fn run(args: Value) -> Result<String> {
     };
 
     // Apply edits in sequence to an in-memory buffer. If ANY fails, abort.
+    let strip_ws = !super::edit::is_markdown_path(&p);
     let mut buf = original.clone();
     let mut total_replacements: usize = 0;
     for (i, e) in edits.iter().enumerate() {
         let old = e.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
-        let new = e.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+        let new_raw = e.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+        let new_stripped;
+        let new: &str = if strip_ws {
+            new_stripped = super::edit::strip_trailing_whitespace(new_raw);
+            new_stripped.as_str()
+        } else {
+            new_raw
+        };
         let replace_all = e
             .get("replace_all")
             .and_then(|v| v.as_bool())

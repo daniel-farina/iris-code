@@ -68,6 +68,17 @@ async fn run(args: Value) -> Result<String> {
 
     let p = PathBuf::from(shellexpand::tilde(&path).into_owned());
 
+    // Strip trailing whitespace from new_string for non-Markdown files.
+    // Markdown's two-trailing-spaces semantics (hard line break) means we
+    // must NOT do this for .md/.mdx.
+    let new_stripped;
+    let new: &str = if is_markdown_path(&p) {
+        new
+    } else {
+        new_stripped = strip_trailing_whitespace(new);
+        new_stripped.as_str()
+    };
+
     if old.is_empty() {
         // create or overwrite. If overwriting an existing CRLF file with an
         // LF-only payload, re-encode to CRLF so the file's typography is
@@ -239,6 +250,61 @@ async fn run(args: Value) -> Result<String> {
         plural,
         net_disp,
     ))
+}
+
+/// Strip trailing whitespace from each line of `s`, preserving line
+/// endings (CRLF, LF, or bare CR). The model often pads lines with
+/// trailing spaces or tabs that the user does not want; stripping
+/// keeps diffs clean. Caller must skip this for Markdown where two
+/// trailing spaces is a hard-line-break.
+pub(crate) fn strip_trailing_whitespace(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut line_start = 0;
+    while i < bytes.len() {
+        // Look ahead for a line ending.
+        if bytes[i] == b'\n' {
+            let line = &s[line_start..i];
+            out.push_str(line.trim_end_matches([' ', '\t']));
+            out.push('\n');
+            i += 1;
+            line_start = i;
+        } else if bytes[i] == b'\r' {
+            // CRLF or bare CR.
+            let line = &s[line_start..i];
+            out.push_str(line.trim_end_matches([' ', '\t']));
+            if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                out.push_str("\r\n");
+                i += 2;
+            } else {
+                out.push('\r');
+                i += 1;
+            }
+            line_start = i;
+        } else {
+            i += 1;
+        }
+    }
+    // Trailing fragment with no line ending.
+    if line_start < s.len() {
+        let line = &s[line_start..];
+        out.push_str(line.trim_end_matches([' ', '\t']));
+    }
+    out
+}
+
+/// True if the file's extension indicates Markdown - we must NOT strip
+/// trailing whitespace for these because Markdown treats two trailing
+/// spaces as a hard line break.
+pub(crate) fn is_markdown_path(path: &std::path::Path) -> bool {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => {
+            let lower = ext.to_ascii_lowercase();
+            lower == "md" || lower == "mdx"
+        }
+        None => false,
+    }
 }
 
 // Curly quote constants — files often contain these (especially prose,
@@ -1082,6 +1148,68 @@ mod tests {
             "hint should include actual L3 content (the divergent line):\n{}",
             hint
         );
+    }
+
+    #[test]
+    fn strip_trailing_whitespace_removes_per_line_spaces_and_tabs() {
+        let input = "alpha   \nbeta\t\t\ngamma  \r\nzeta\r\nepsilon \t";
+        let out = strip_trailing_whitespace(input);
+        assert_eq!(out, "alpha\nbeta\ngamma\r\nzeta\r\nepsilon");
+    }
+
+    #[test]
+    fn is_markdown_path_recognises_md_and_mdx() {
+        assert!(is_markdown_path(std::path::Path::new("notes.md")));
+        assert!(is_markdown_path(std::path::Path::new("doc.MD")));
+        assert!(is_markdown_path(std::path::Path::new("page.mdx")));
+        assert!(!is_markdown_path(std::path::Path::new("a.rs")));
+        assert!(!is_markdown_path(std::path::Path::new("a")));
+    }
+
+    #[test]
+    fn edit_strips_trailing_whitespace_for_non_markdown() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-strip-{}.rs", std::process::id()));
+        std::fs::write(&p, "let x = 1;\n").unwrap();
+        let _ = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "let x = 1;",
+            // Trailing spaces in new_string should be stripped.
+            "new_string": "let x = 42;   ",
+        }))
+        .unwrap();
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            body, "let x = 42;\n",
+            "trailing spaces should be stripped: {:?}",
+            body
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn edit_preserves_trailing_whitespace_for_markdown() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-md-{}.md", std::process::id()));
+        std::fs::write(&p, "first line\nsecond line\n").unwrap();
+        // Two-trailing-spaces is a Markdown hard line break.
+        let _ = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "first line",
+            "new_string": "first line  ",
+        }))
+        .unwrap();
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            body.starts_with("first line  \n"),
+            "markdown trailing spaces lost: {:?}",
+            body
+        );
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
