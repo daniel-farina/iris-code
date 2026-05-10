@@ -148,13 +148,18 @@ async fn run(args: Value) -> Result<String> {
         (old, new)
     };
 
-    // Try exact, then whitespace-tolerant fallback. The fallback strips
-    // trailing whitespace per line on both sides — a common drift cause
-    // (file uses tabs, model emitted spaces, or model dropped a trailing
-    // space) — and on hit, uses the file's actual matched slice as
-    // `actual_old` so the diff is computed against real bytes.
+    // Try exact, then quote-normalized, then whitespace-tolerant fallback.
+    // The fallback strips trailing whitespace per line on both sides — a
+    // common drift cause (file uses tabs, model emitted spaces, or model
+    // dropped a trailing space) — and on hit, uses the file's actual
+    // matched slice as `actual_old` so the diff is computed against real bytes.
     let actual_old: String = if original.contains(old) {
         old.to_string()
+    } else if let Some(slice) = find_via_quote_normalization(&original, old) {
+        eprintln!(
+            "\x1b[2m[edit] exact match failed; matched after curly-quote normalization\x1b[0m"
+        );
+        slice
     } else if let Some((slice, occurrences)) =
         find_with_whitespace_tolerance(&original, old, replace_all)
     {
@@ -171,6 +176,16 @@ async fn run(args: Value) -> Result<String> {
             p.display(),
             hint
         ));
+    };
+
+    // If we matched via quote normalization, re-apply the file's curly
+    // style to new_string so the file's typography is preserved.
+    let new_owned_quote;
+    let new: &str = if actual_old != old {
+        new_owned_quote = preserve_quote_style(old, &actual_old, new);
+        new_owned_quote.as_str()
+    } else {
+        new
     };
 
     let count = original.matches(&actual_old).count();
@@ -226,6 +241,111 @@ async fn run(args: Value) -> Result<String> {
     ))
 }
 
+// Curly quote constants — files often contain these (especially prose,
+// docs, README). Models almost always emit straight quotes. We normalise
+// both sides for matching, then re-apply the file's curly style to the
+// new_string so the file's typography is preserved across the edit.
+pub(crate) const LSQUO: char = '\u{2018}'; // '
+pub(crate) const RSQUO: char = '\u{2019}'; // '
+pub(crate) const LDQUO: char = '\u{201C}'; // "
+pub(crate) const RDQUO: char = '\u{201D}'; // "
+
+/// Replace curly quotes with straight quotes. Used to widen match scope
+/// when the file has curly quotes but the model supplied straight ones.
+pub(crate) fn normalize_quotes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            LSQUO | RSQUO => out.push('\''),
+            LDQUO | RDQUO => out.push('"'),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+fn is_opening_context(prev: Option<char>) -> bool {
+    match prev {
+        None => true,
+        Some(c) => matches!(
+            c,
+            ' ' | '\t' | '\n' | '\r' | '(' | '[' | '{' | '\u{2014}' | '\u{2013}'
+        ),
+    }
+}
+
+/// Replace straight `"` in `s` with curly double quotes based on context.
+fn apply_curly_double(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    for (i, ch) in chars.iter().enumerate() {
+        if *ch == '"' {
+            let prev = if i == 0 { None } else { Some(chars[i - 1]) };
+            out.push(if is_opening_context(prev) {
+                LDQUO
+            } else {
+                RDQUO
+            });
+        } else {
+            out.push(*ch);
+        }
+    }
+    out
+}
+
+/// Replace straight `'` in `s` with curly single quotes based on context.
+/// Apostrophes between two letters (contractions like "don't") become
+/// RSQUO regardless.
+fn apply_curly_single(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    for (i, ch) in chars.iter().enumerate() {
+        if *ch == '\'' {
+            let prev = if i == 0 { None } else { Some(chars[i - 1]) };
+            let next = if i + 1 >= chars.len() {
+                None
+            } else {
+                Some(chars[i + 1])
+            };
+            let prev_letter = prev.map(|c| c.is_alphabetic()).unwrap_or(false);
+            let next_letter = next.map(|c| c.is_alphabetic()).unwrap_or(false);
+            if prev_letter && next_letter {
+                out.push(RSQUO);
+            } else if is_opening_context(prev) {
+                out.push(LSQUO);
+            } else {
+                out.push(RSQUO);
+            }
+        } else {
+            out.push(*ch);
+        }
+    }
+    out
+}
+
+/// If `actual_old` (the slice we matched in the file) contains curly
+/// quotes but the model's `old_string` does not, re-apply the file's
+/// curly-quote style to `new_string`. Returns the (possibly rewritten)
+/// new_string.
+pub(crate) fn preserve_quote_style(old_string: &str, actual_old: &str, new_string: &str) -> String {
+    if old_string == actual_old {
+        return new_string.to_string();
+    }
+    let has_double = actual_old.contains(LDQUO) || actual_old.contains(RDQUO);
+    let has_single = actual_old.contains(LSQUO) || actual_old.contains(RSQUO);
+    if !has_double && !has_single {
+        return new_string.to_string();
+    }
+    let mut result = new_string.to_string();
+    if has_double {
+        result = apply_curly_double(&result);
+    }
+    if has_single {
+        result = apply_curly_single(&result);
+    }
+    result
+}
+
 /// True if the buffer uses CRLF line endings (any `\r\n` and no bare `\n`
 /// outside CRLF pairs). We use a simple heuristic: if there's at least
 /// one `\r\n` and the count of `\r\n` matches the count of `\n`, the file
@@ -277,6 +397,8 @@ pub(crate) fn apply_edit_in_memory(
     };
     let actual_old: String = if original.contains(old) {
         old.to_string()
+    } else if let Some(slice) = find_via_quote_normalization(original, old) {
+        slice
     } else if let Some((slice, _occurrences)) =
         find_with_whitespace_tolerance(original, old, replace_all)
     {
@@ -284,6 +406,13 @@ pub(crate) fn apply_edit_in_memory(
     } else {
         let hint = diagnose_missing(original, old);
         return Err(anyhow!("old_string not found{}", hint));
+    };
+    let new_owned_quote;
+    let new: &str = if actual_old != old {
+        new_owned_quote = preserve_quote_style(old, &actual_old, new);
+        new_owned_quote.as_str()
+    } else {
+        new
     };
     let count = original.matches(&actual_old).count();
     if count > 1 && !replace_all {
@@ -549,6 +678,45 @@ fn closest_line_by_trigram(haystack: &str, needle: &str) -> Option<(usize, Strin
         }
     }
     best
+}
+
+/// If exact matching failed, try matching `needle` against `haystack`
+/// with curly quotes normalised to straight on both sides. On hit,
+/// returns the file's actual byte slice (containing the curly quotes)
+/// so callers can apply `preserve_quote_style` to new_string.
+fn find_via_quote_normalization(haystack: &str, needle: &str) -> Option<String> {
+    if needle.is_empty() {
+        return None;
+    }
+    let norm_h = normalize_quotes(haystack);
+    let norm_n = normalize_quotes(needle);
+    if norm_n == needle && norm_h == haystack {
+        // Neither side had any curly quotes — quote normalization can't
+        // help, and we'd otherwise return a duplicate of the failing
+        // exact match.
+        return None;
+    }
+    let idx = norm_h.find(&norm_n)?;
+    // Map char index in the normalized string back to a byte slice in
+    // the original. Since normalize_quotes is a 1-to-1 char mapping
+    // (every curly char becomes exactly one ASCII char), char-index
+    // alignment is preserved.
+    let start_chars = norm_h[..idx].chars().count();
+    let end_chars = start_chars + norm_n.chars().count();
+    let mut start_byte = None;
+    let mut end_byte = None;
+    for (i, (b, _)) in haystack.char_indices().enumerate() {
+        if i == start_chars {
+            start_byte = Some(b);
+        }
+        if i == end_chars {
+            end_byte = Some(b);
+            break;
+        }
+    }
+    let start = start_byte?;
+    let end = end_byte.unwrap_or(haystack.len());
+    Some(haystack[start..end].to_string())
 }
 
 /// Whitespace-tolerant fallback. If the exact `needle` doesn't appear in
@@ -914,6 +1082,92 @@ mod tests {
             "hint should include actual L3 content (the divergent line):\n{}",
             hint
         );
+    }
+
+    #[test]
+    fn normalize_quotes_replaces_curly_with_straight() {
+        let s = "\u{201C}hello\u{201D} and \u{2018}world\u{2019}";
+        assert_eq!(normalize_quotes(s), "\"hello\" and 'world'");
+    }
+
+    #[test]
+    fn preserve_quote_style_round_trips_double_quotes() {
+        let old = "\"hello\"";
+        let actual_old = "\u{201C}hello\u{201D}";
+        let new = "\"hi\"";
+        assert_eq!(
+            preserve_quote_style(old, actual_old, new),
+            "\u{201C}hi\u{201D}"
+        );
+    }
+
+    #[test]
+    fn preserve_quote_style_keeps_apostrophe_in_contraction() {
+        // File has a curly apostrophe inside a contraction. Edit should
+        // re-emit a curly apostrophe between two letters.
+        let old = "don't go";
+        let actual_old = "don\u{2019}t go";
+        let new = "don't stop";
+        assert_eq!(
+            preserve_quote_style(old, actual_old, new),
+            "don\u{2019}t stop"
+        );
+    }
+
+    #[test]
+    fn edit_matches_through_curly_quotes_and_preserves_them() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-curly-{}.txt", std::process::id()));
+        // File uses curly quotes in prose.
+        std::fs::write(&p, "She said \u{201C}hello\u{201D} loudly.\n").unwrap();
+        // Model supplies straight quotes.
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "She said \"hello\" loudly.",
+            "new_string": "She whispered \"goodbye\" softly.",
+        }))
+        .unwrap();
+        assert!(out.contains("edited"), "expected success: {}", out);
+        let body = std::fs::read_to_string(&p).unwrap();
+        // File should end up with curly quotes preserved around "goodbye".
+        assert!(
+            body.contains("\u{201C}goodbye\u{201D}"),
+            "expected curly quotes preserved: {:?}",
+            body
+        );
+        // No straight quote should have leaked in for that span.
+        assert!(
+            !body.contains("\"goodbye\""),
+            "straight quote leaked: {:?}",
+            body
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn edit_preserves_curly_apostrophe_in_contraction() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-apos-{}.txt", std::process::id()));
+        // File has "don't" with curly apostrophe.
+        std::fs::write(&p, "We don\u{2019}t support that.\n").unwrap();
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "We don't support that.",
+            "new_string": "We don't allow that.",
+        }))
+        .unwrap();
+        assert!(out.contains("edited"), "expected success: {}", out);
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            body.contains("don\u{2019}t allow"),
+            "curly apostrophe lost: {:?}",
+            body
+        );
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
