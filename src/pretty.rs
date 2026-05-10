@@ -202,6 +202,17 @@ fn safe_emit_len(s: &str) -> usize {
     max
 }
 
+/// Emit a one-line "the model hit max_tokens; auto-continuing" notice.
+/// Called by the agent loop when it sees finish_reason="length" without
+/// tool calls so the user understands the response is being resumed
+/// implicitly instead of looking like a stuck conversation.
+pub fn truncation_notice(cap: u32) {
+    eprintln!(
+        "\x1b[2m─ response hit max_tokens cap ({}); auto-continuing… raise with --max-tokens N if this happens often ─\x1b[0m",
+        cap
+    );
+}
+
 pub fn tool_call_header(name: &str) {
     if !is_pretty() {
         return;

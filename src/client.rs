@@ -39,7 +39,13 @@ impl Default for SamplingOpts {
             temperature: 0.6,
             top_p: 0.95,
             top_k: 20,
-            max_tokens: 16384,
+            // 32K is a comfortable default for an agent run — at 64K context
+            // the model has half the window for output if it really wants
+            // to compose a long file or multi-step plan. With 16K we were
+            // truncating mid-explanation on long file reads, which the
+            // user perceived as "the model stopped and I had to ask it to
+            // continue". --max-tokens overrides this from the CLI.
+            max_tokens: 32768,
             enable_thinking: false,
         }
     }
