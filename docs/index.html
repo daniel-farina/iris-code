@@ -13,17 +13,17 @@
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #0a0e14;
-      --term-bar: #161b22;
-      --fg: #c9d1d9;
-      --fg-dim: #6e7681;
-      --fg-faint: #4a525c;
-      --cyan: #4ec9b0;
-      --green: #7ec699;
-      --yellow: #d7c66e;
-      --magenta: #b48ead;
-      --border: #21262d;
-      --link: #4ec9b0;
+      --bg: #0a0812;
+      --term-bar: #15101f;
+      --fg: #e8def5;
+      --fg-dim: #8b7fa3;
+      --fg-faint: #5a4f73;
+      --accent:       #d7afff; /* lightest lavender */
+      --accent-soft:  #c4a9e8; /* soft violet */
+      --accent-deep:  #af92cc; /* hippo body purple */
+      --accent-pale:  #ede4ff; /* almost-white lilac */
+      --border: #2a1f48;
+      --link: #d7afff;
     }
 
     * { box-sizing: border-box; }
@@ -47,7 +47,7 @@
     }
 
     a { color: var(--link); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
-    a:hover { color: var(--cyan); text-decoration-thickness: 2px; }
+    a:hover { color: var(--accent); text-decoration-thickness: 2px; }
 
     /* fullscreen terminal */
     .term {
@@ -107,19 +107,8 @@
       user-select: none;
     }
 
-    /* boot sequence */
-    .boot {
-      color: var(--fg-dim);
-      margin: 0 0 18px;
-      font-family: inherit;
-      line-height: 1.55;
-      white-space: pre;
-    }
-    .boot .tag { color: var(--fg-faint); }
-    .boot .ok  { color: var(--green); }
-
     /* welcome line + hint */
-    .welcome   { color: var(--cyan); font-weight: 700; margin-top: 10px; }
+    .welcome   { color: var(--accent); font-weight: 700; margin-top: 10px; }
     .hint      { color: var(--fg-dim); font-style: italic; margin-bottom: 14px; }
 
     /* prompt rows (zsh-style ~ $) */
@@ -137,19 +126,19 @@
       flex-shrink: 0;
       user-select: none;
     }
-    .ps1 .tilde  { color: var(--cyan); }
+    .ps1 .tilde  { color: var(--accent); }
     .ps1 .dollar { color: var(--fg); margin-left: 2px; }
 
     .cmd     { color: var(--fg); }
     .out     { color: var(--fg); }
     .out.com { color: var(--fg-dim); font-style: italic; }
-    .out .key  { color: var(--yellow); }
+    .out .key  { color: var(--accent-deep); }
     .out .dim  { color: var(--fg-dim); }
     .out.indent { padding-left: 0; }
 
     /* ALL CAPS section heading */
     .heading {
-      color: var(--cyan);
+      color: var(--accent);
       font-weight: 700;
       letter-spacing: 0.06em;
       margin: 8px 0 4px;
@@ -192,7 +181,7 @@
       word-break: break-all;
     }
     .install .cmd-box .sigil {
-      color: var(--cyan);
+      color: var(--accent);
       user-select: none;
       margin-right: 8px;
     }
@@ -210,7 +199,7 @@
       flex-shrink: 0;
     }
     .install .btn:hover { color: var(--fg); background: #1f2733; }
-    .install .btn.copied { color: var(--green); }
+    .install .btn.copied { color: var(--accent-soft); }
     .install .expand .chev { display: inline-block; transition: transform 120ms ease; }
     .install.expanded .expand .chev { transform: rotate(180deg); }
 
@@ -236,7 +225,7 @@
       outline: none;
       color: var(--fg);
       font: inherit;
-      caret-color: var(--cyan);
+      caret-color: var(--accent);
       padding: 0;
       min-width: 0;
     }
@@ -266,7 +255,7 @@
       color: var(--fg-dim);
       flex-shrink: 0;
     }
-    .status-bar .label { color: var(--cyan); font-weight: 700; }
+    .status-bar .label { color: var(--accent); font-weight: 700; }
 
     /* responsive */
     @media (max-width: 720px) {
@@ -305,12 +294,6 @@
 
     <div class="term-body">
       <img src="hippo-logo.png" alt="hippo code" class="corner-art" width="1874" height="650" />
-
-      <pre class="boot" aria-hidden="true"><span class="tag">[BIOS]</span>  POST check .............. <span class="ok">OK</span>
-<span class="tag">[BOOT]</span>  Loading kernel .......... <span class="ok">OK</span>
-<span class="tag">[INIT]</span>  Mounting /home/mood ..... <span class="ok">OK</span>
-<span class="tag">[NET ]</span>  Connecting to MTPLX ..... <span class="ok">OK</span>
-<span class="tag">[SYS ]</span>  Starting shell .......... <span class="ok">OK</span></pre>
 
       <div class="welcome">Welcome to hippo-code</div>
       <div class="hint">Type "help" for available commands.</div>
