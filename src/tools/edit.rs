@@ -329,16 +329,15 @@ pub(crate) fn similar_paths(target: &std::path::Path) -> Vec<String> {
     };
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut scored: Vec<(usize, String)> = Vec::new();
-    let mut walked = 0usize;
-    for entry in ignore::WalkBuilder::new(&cwd)
+    for (walked, entry) in ignore::WalkBuilder::new(&cwd)
         .hidden(false)
         .git_ignore(true)
         .build()
+        .enumerate()
     {
         if walked >= 5000 {
             break;
         }
-        walked += 1;
         let Ok(entry) = entry else { continue };
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
             continue;
