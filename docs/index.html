@@ -152,6 +152,25 @@
       height: auto;
       border-radius: 12px;
     }
+    .ascii-wrap {
+      display: inline-block;
+      text-align: left;
+      margin-top: 8px;
+      padding: 14px 20px;
+      background: linear-gradient(180deg, rgba(124, 58, 237, 0.06), rgba(124, 58, 237, 0));
+      border-radius: 14px;
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    pre.logo {
+      margin: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      line-height: 1.1;
+      letter-spacing: 0;
+      white-space: pre;
+      text-shadow: 0 0 18px rgba(167, 139, 250, 0.25);
+    }
     pre.logo .row { display: block; }
     /* gradient stops mirror RIVER_GRADIENT */
     .grad-1 { color: #5f0087; }
@@ -476,7 +495,7 @@
     @media (max-width: 720px) {
       h1 { font-size: 28px; }
       h2 { font-size: 22px; }
-      pre.logo { font-size: 9px; }
+      pre.logo { font-size: 8px; }
       .alts { grid-template-columns: 1fr; }
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .stat .v { font-size: 22px; }
@@ -489,6 +508,7 @@
     }
     @media (max-width: 480px) {
       .hero-logo { max-width: 260px; }
+      pre.logo { font-size: 6.5px; }
       .stat-grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -519,8 +539,8 @@
 <section class="hero">
   <div class="container">
     <img src="hippo-logo.png" alt="mood, the hippo-code mascot" class="hippo-png" width="1060" height="650" />
-    <div class="ascii-wrap" aria-label="hip logo">
-<pre class="logo" aria-hidden="true"><span class="row"><span class="grad-1">&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;     &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="grad-2">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;    &#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span><span class="row"><span class="grad-3">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;  </span></span><span class="row"><span class="grad-4">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2551;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x255D;  </span></span><span class="row"><span class="grad-5">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2551;    &#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;&#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="grad-6">&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;  &#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;     &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span></pre>
+    <div class="ascii-wrap" aria-label="hippo code wordmark">
+<pre class="logo" aria-hidden="true"><span class="row"><span class="grad-1">dP       oo                                                       dP          </span></span><span class="row"><span class="grad-2">88                                                                88          </span></span><span class="row"><span class="grad-2">88d888b. dP 88d888b. 88d888b. .d8888b.    .d8888b. .d8888b. .d888b88 .d8888b. </span></span><span class="row"><span class="grad-3">88&#x27;  `88 88 88&#x27;  `88 88&#x27;  `88 88&#x27;  `88    88&#x27;  `&quot;&quot; 88&#x27;  `88 88&#x27;  `88 88ooood8 </span></span><span class="row"><span class="grad-4">88    88 88 88.  .88 88.  .88 88.  .88    88.  ... 88.  .88 88.  .88 88.  ... </span></span><span class="row"><span class="grad-5">dP    dP dP 88Y888P&#x27; 88Y888P&#x27; `88888P&#x27;    `88888P&#x27; `88888P&#x27; `88888P8 `88888P&#x27; </span></span><span class="row"><span class="grad-5">            88       88                                                       </span></span><span class="row"><span class="grad-6">            dP       dP                                                       </span></span></pre>
     </div>
 
     <p class="tagline">a <span class="accent">lean coding agent</span> for the local <span class="gold">MTPLX</span> model</p>
