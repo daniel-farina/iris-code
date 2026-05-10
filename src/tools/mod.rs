@@ -29,11 +29,19 @@ pub struct Tool {
 pub type ToolFn = fn(args: Value) -> futures_util::future::BoxFuture<'static, Result<String>>;
 
 pub fn registry() -> Vec<Tool> {
+    // multi_edit is intentionally NOT registered. Its `edits` parameter is
+    // an array of objects, which the qwen3 XML tool-call format used by
+    // MTPLX serialises as a JSON-blob inside `<parameter=edits>...</parameter>`.
+    // In practice the model loses format coherence on ~500-token JSON
+    // payloads (and any stray `</parameter>` substring inside an
+    // edited new_string breaks MTPLX's non-greedy parameter regex),
+    // so the call returns 422 "unsupported tool_call payload format"
+    // mid-conversation. The code stays — opt back in once we either
+    // restructure to flat parameters or harden MTPLX's parser.
     vec![
         read::tool(),
         grep::tool(),
         edit::tool(),
-        multi_edit::tool(),
         bash::tool(),
         list::tool(),
         glob::tool(),

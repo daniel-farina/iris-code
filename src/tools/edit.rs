@@ -567,6 +567,7 @@ pub(crate) fn to_crlf(s: &str) -> String {
 /// updated string + a count of how many replacements landed. Pure: does
 /// not touch disk. Used by both the single `edit` tool and `multi_edit`
 /// to share the same fallback / multi-match validation logic.
+#[allow(dead_code)]
 pub(crate) fn apply_edit_in_memory(
     original: &str,
     old: &str,

@@ -4,6 +4,14 @@
 //! edits. If ANY edit in the sequence fails, NONE land - the file is
 //! untouched. Uses the same whitespace-tolerant fallback as the single-shot
 //! `edit` tool via `apply_edit_in_memory`.
+//!
+//! Currently NOT registered in `tools::mod::registry` — its array-of-objects
+//! `edits` parameter doesn't survive the qwen3 XML tool-call format MTPLX
+//! uses (model emits ~500 tokens of nested JSON inside
+//! `<parameter=edits>...</parameter>`, parser breaks). Kept for re-enabling
+//! once we restructure to flat parameters or MTPLX hardens its parser.
+
+#![allow(dead_code)]
 
 use anyhow::{anyhow, Context, Result};
 use futures_util::future::FutureExt;
