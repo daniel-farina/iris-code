@@ -60,11 +60,17 @@ detect_arch() {
     esac
 }
 
-THIS_OS="$(detect_os)"
-THIS_ARCH="$(detect_arch)"
+# install.sh now refuses anything except darwin-arm64. Force the test to
+# present as darwin-arm64 via the HIPPO_MOCK_* hooks so this still runs on
+# Linux CI runners and Intel Macs.
+THIS_OS="darwin"
+THIS_ARCH="arm64"
 
-for OS in darwin linux; do
-    for ARCH in arm64 x86_64; do
+# Only darwin-arm64 ships pre-built; the install script rejects everything
+# else with a clear error. Build a single fake tarball + its checksum so the
+# happy-path test can succeed on a CI runner that's also darwin-arm64.
+for OS in darwin; do
+    for ARCH in arm64; do
         ARTIFACT="hip-${FAKE_VERSION}-${OS}-${ARCH}.tar.gz"
         DEST="$DOC_ROOT/daniel-farina/hippo-code/releases/download/$FAKE_VERSION/$ARTIFACT"
         tar czf "$DEST" -C "$WORK/build" hip
@@ -112,6 +118,8 @@ echo "── running install.sh ──"
 HIPPO_API_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_DOWNLOAD_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_INSTALL_DIR="$INSTALL_DIR" \
+HIPPO_MOCK_OS=darwin \
+HIPPO_MOCK_ARCH=arm64 \
 NO_COLOR=1 \
 sh "$INSTALL_SCRIPT" || { echo "FAIL: install.sh exited non-zero"; RC=1; exit 1; }
 
@@ -138,6 +146,8 @@ assert "binary is the fake we built"        "\"$INSTALL_DIR/hip\" 2>&1 | grep -q
 HIPPO_API_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_DOWNLOAD_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_INSTALL_DIR="$INSTALL_DIR" \
+HIPPO_MOCK_OS=darwin \
+HIPPO_MOCK_ARCH=arm64 \
 NO_COLOR=1 \
 sh "$INSTALL_SCRIPT" >/dev/null 2>&1 || { echo "FAIL: re-install crashed"; RC=1; exit 1; }
 assert "idempotent re-install still works"  "[ -x \"$INSTALL_DIR/hip\" ]"
@@ -147,6 +157,8 @@ HIPPO_API_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_DOWNLOAD_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_INSTALL_DIR="$INSTALL_DIR" \
 HIPPO_VERSION="$FAKE_VERSION" \
+HIPPO_MOCK_OS=darwin \
+HIPPO_MOCK_ARCH=arm64 \
 NO_COLOR=1 \
 sh "$INSTALL_SCRIPT" >/dev/null 2>&1 || { echo "FAIL: pinned-version install crashed"; RC=1; exit 1; }
 assert "HIPPO_VERSION pin path works"  "[ -x \"$INSTALL_DIR/hip\" ]"
@@ -160,6 +172,8 @@ set +e
 HIPPO_API_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_DOWNLOAD_BASE_URL="http://127.0.0.1:$PORT" \
 HIPPO_INSTALL_DIR="$INSTALL_DIR" \
+HIPPO_MOCK_OS=darwin \
+HIPPO_MOCK_ARCH=arm64 \
 NO_COLOR=1 \
 sh "$INSTALL_SCRIPT" > /tmp/install-tamper.log 2>&1
 RC_TAMPER=$?

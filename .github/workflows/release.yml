@@ -15,22 +15,20 @@ jobs:
     name: build (${{ matrix.target_os }}-${{ matrix.target_arch }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    # Single-target matrix: hip is a thin client that talks to a local MTPLX
+    # server, and MTPLX uses MLX which only runs on Apple Silicon (M1+). An
+    # Intel-Mac or Linux build of hip would have nothing to talk to. If
+    # someone needs cross-platform later (e.g. running hip on Linux against a
+    # remote Apple-Silicon MTPLX over the network), they can `cargo install`
+    # from source. Keeping the release matrix lean cuts CI time roughly 3x.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            target_os: darwin
-            target_arch: x86_64
-            sha_cmd: shasum -a 256
           - os: macos-14
             target_os: darwin
             target_arch: arm64
             sha_cmd: shasum -a 256
-          - os: ubuntu-latest
-            target_os: linux
-            target_arch: x86_64
-            sha_cmd: sha256sum
     steps:
       - name: Checkout
         uses: actions/checkout@v4

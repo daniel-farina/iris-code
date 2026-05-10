@@ -12,6 +12,10 @@ pub struct RunLog {
     pub session_id: String,
     pub model: String,
     pub prompt_first_120_chars: String,
+    /// Absolute path of cwd at run time. Surfaced in the `--resume` picker
+    /// so the user can tell which conversation belongs to which project.
+    #[serde(default)]
+    pub cwd: String,
     pub success: bool,
     pub error: Option<String>,
     pub rounds: Option<u32>,
@@ -31,12 +35,16 @@ impl RunLog {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let snippet: String = prompt.chars().take(120).collect();
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         Self {
             ts_unix: now,
             mode: mode.to_string(),
             session_id: session.to_string(),
             model: model.to_string(),
             prompt_first_120_chars: snippet,
+            cwd,
             success: true,
             error: None,
             rounds: None,

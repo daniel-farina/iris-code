@@ -164,6 +164,14 @@ struct Cli {
     #[arg(short = 'c', long)]
     continue_last: bool,
 
+    /// Resume a past conversation. With no value, opens an interactive
+    /// arrow-key picker listing recent sessions (last user prompt + cwd +
+    /// time). With an explicit `<SESSION_ID>` value, jumps straight back
+    /// into that session. Sessions live in ~/.mlx-code/logs/runs.jsonl.
+    /// Cancel the picker with ESC/q to exit cleanly.
+    #[arg(long, value_name = "SESSION_ID", num_args = 0..=1, default_missing_value = "")]
+    resume: Option<String>,
+
     /// Sampler temperature (default 0.6).
     #[arg(long)]
     temperature: Option<f32>,
@@ -305,6 +313,34 @@ async fn main() -> Result<()> {
                 eprintln!("[hip] --continue: no prior runs found in ~/.mlx-code/logs/runs.jsonl");
             }
         }
+    }
+
+    // --resume: optionally pick a past session id.
+    //   --resume                → interactive arrow-key picker
+    //   --resume <SESSION_ID>   → jump straight to that session
+    if let Some(arg) = cli.resume.clone() {
+        let sid = if arg.is_empty() {
+            // Picker. Returns None on cancel — bail without starting chat.
+            match pick_session_to_resume() {
+                Some(s) => s,
+                None => {
+                    eprintln!("[hip] resume cancelled");
+                    return Ok(());
+                }
+            }
+        } else {
+            arg
+        };
+        eprintln!(
+            "{d}[hip] resuming session {a}{}{d} (cache warm, prior conversation history won't be re-sent — model only sees new turns){r}",
+            sid,
+            d = theme::dim(),
+            a = theme::accent(),
+            r = theme::RESET,
+        );
+        cli.session = sid;
+        // Force chat mode so the resume actually does something interactive.
+        cli.chat = true;
     }
 
     // Load --system-file (overrides --system).
@@ -470,6 +506,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                         if let Some(h) = &history_path {
                             let _ = rl.save_history(h);
                         }
+                        print_resume_hint(client.session_id());
                         eprintln!("[hip] bye");
                         return Ok(());
                     }
@@ -487,7 +524,9 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                     if let Some(h) = &history_path {
                         let _ = rl.save_history(h);
                     }
-                    eprintln!("\n[hip] bye");
+                    eprintln!();
+                    print_resume_hint(client.session_id());
+                    eprintln!("[hip] bye");
                     return Ok(());
                 }
                 Err(e) => {
@@ -518,6 +557,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 if let Some(h) = &history_path {
                     let _ = rl.save_history(h);
                 }
+                print_resume_hint(client.session_id());
                 eprintln!("[hip] bye");
                 return Ok(());
             }
@@ -529,6 +569,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                     if let Some(h) = &history_path {
                         let _ = rl.save_history(h);
                     }
+                    print_resume_hint(client.session_id());
                     eprintln!("[hip] bye");
                     return Ok(());
                 }
@@ -953,6 +994,23 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
             let _ = rl.save_history(h);
         }
     }
+}
+
+/// Print a one-line resume hint when the user exits a chat session, so they
+/// know how to come back to it. The session id is included verbatim so it
+/// can be copy-pasted into the next invocation. Skipped on the
+/// rotated-id sessions if the user asked for that.
+fn print_resume_hint(session_id: &str) {
+    let d = theme::dim();
+    let a = theme::accent();
+    let r = theme::RESET;
+    eprintln!(
+        "{d}─ to resume this conversation later: {a}hip --resume {sid}{d} ─{r}",
+        d = d,
+        a = a,
+        r = r,
+        sid = session_id,
+    );
 }
 
 /// Print a one-line tip block right after the chat banner so users discover
@@ -1643,6 +1701,146 @@ fn find_last_session_id() -> Option<String> {
     v.get("session_id")
         .and_then(|s| s.as_str())
         .map(|s| s.to_string())
+}
+
+/// One row in the `--resume` picker. Built by collapsing runs.jsonl into one
+/// entry per distinct session_id, keeping the most recent metadata.
+struct ResumeEntry {
+    session_id: String,
+    last_ts: u64,
+    last_prompt: String,
+    cwd: String,
+    turns: u32,
+}
+
+/// Show an arrow-key picker of recent sessions and return the chosen
+/// session_id, or None if the user cancelled (ESC / q / Ctrl-C).
+fn pick_session_to_resume() -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let path = format!("{}/.mlx-code/logs/runs.jsonl", home);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("[hip] no run log at {} - nothing to resume yet", path);
+            return None;
+        }
+    };
+
+    // Collapse runs.jsonl into one entry per session, keeping the latest
+    // ts/prompt/cwd plus a turn count.
+    let mut by_session: std::collections::BTreeMap<String, ResumeEntry> =
+        std::collections::BTreeMap::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(sid) = v.get("session_id").and_then(|s| s.as_str()) else {
+            continue;
+        };
+        let ts = v.get("ts_unix").and_then(|t| t.as_u64()).unwrap_or(0);
+        let prompt = v
+            .get("prompt_first_120_chars")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cwd = v
+            .get("cwd")
+            .and_then(|s| s.as_str())
+            .unwrap_or("")
+            .to_string();
+        let entry = by_session
+            .entry(sid.to_string())
+            .or_insert_with(|| ResumeEntry {
+                session_id: sid.to_string(),
+                last_ts: 0,
+                last_prompt: String::new(),
+                cwd: String::new(),
+                turns: 0,
+            });
+        entry.turns = entry.turns.saturating_add(1);
+        if ts >= entry.last_ts {
+            entry.last_ts = ts;
+            entry.last_prompt = prompt;
+            entry.cwd = cwd;
+        }
+    }
+
+    let mut entries: Vec<ResumeEntry> = by_session.into_values().collect();
+    if entries.is_empty() {
+        eprintln!("[hip] no past sessions found in run log");
+        return None;
+    }
+    entries.sort_by_key(|e| std::cmp::Reverse(e.last_ts));
+    // Cap to the 30 most recent so the picker doesn't scroll forever.
+    if entries.len() > 30 {
+        entries.truncate(30);
+    }
+
+    let labels: Vec<String> = entries.iter().map(format_resume_row).collect();
+
+    use dialoguer::{theme::ColorfulTheme, Select};
+    let theme = ColorfulTheme::default();
+    let result = Select::with_theme(&theme)
+        .with_prompt("Resume which session? (Enter to select, ESC/q to cancel)")
+        .items(&labels)
+        .default(0)
+        .interact_opt();
+
+    match result {
+        Ok(Some(idx)) => Some(entries[idx].session_id.clone()),
+        _ => None,
+    }
+}
+
+/// Format one row of the `--resume` picker. Two lines per row would be
+/// nicer but dialoguer wraps each item on a single line, so we cram the
+/// useful bits in: relative time, cwd basename, last-prompt snippet,
+/// truncated session id.
+fn format_resume_row(e: &ResumeEntry) -> String {
+    // Relative time, e.g. "2m ago" / "3h ago" / "5d ago".
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let age = now.saturating_sub(e.last_ts);
+    let age_str = if age < 60 {
+        format!("{}s ago", age)
+    } else if age < 3600 {
+        format!("{}m ago", age / 60)
+    } else if age < 86400 {
+        format!("{}h ago", age / 3600)
+    } else {
+        format!("{}d ago", age / 86400)
+    };
+    let cwd_basename = e.cwd.rsplit('/').find(|s| !s.is_empty()).unwrap_or(&e.cwd);
+    let snippet: String = e
+        .last_prompt
+        .chars()
+        .take(60)
+        .collect::<String>()
+        .replace('\n', " ");
+    let snippet_display = if snippet.is_empty() {
+        "(no prompt)".to_string()
+    } else {
+        snippet
+    };
+    let sid_short = if e.session_id.len() > 24 {
+        format!("…{}", &e.session_id[e.session_id.len() - 24..])
+    } else {
+        e.session_id.clone()
+    };
+    format!(
+        "{:<9} · {:<20} · {} turn{:<3} · {}  [{}]",
+        age_str,
+        cwd_basename,
+        e.turns,
+        if e.turns == 1 { "" } else { "s" },
+        snippet_display,
+        sid_short,
+    )
 }
 
 fn run_smoke_inplace(path: &str) -> Result<()> {

@@ -158,8 +158,26 @@ main() {
 
     DOWNLOADER="$(pick_downloader)" || die "neither curl nor wget is installed. Install one and retry."
 
-    OS="$(detect_os)" || die "unsupported OS: ${HIPPO_MOCK_OS:-$(uname -s)} (only darwin and linux are supported)"
-    ARCH="$(detect_arch)" || die "unsupported arch: ${HIPPO_MOCK_ARCH:-$(uname -m)} (only arm64 and x86_64 are supported)"
+    OS="$(detect_os)" || die "unsupported OS: ${HIPPO_MOCK_OS:-$(uname -s)}"
+    ARCH="$(detect_arch)" || die "unsupported arch: ${HIPPO_MOCK_ARCH:-$(uname -m)}"
+
+    # hip only ships pre-built binaries for Apple Silicon. MTPLX (the server
+    # hip talks to) is built on MLX which is Apple-Silicon-only, so a Linux
+    # or Intel-Mac install would have nothing to chat with.
+    if [ "${OS}-${ARCH}" != "darwin-arm64" ]; then
+        printf '\n'
+        printf '%ship only ships pre-built binaries for darwin-arm64 (Apple Silicon).%s\n' "${C_RED}" "${C_RESET}" >&2
+        printf 'Detected: %s-%s\n' "${OS}" "${ARCH}" >&2
+        printf '\n'
+        printf 'Why: MTPLX (the local model server hip talks to) requires MLX,\n' >&2
+        printf 'which only runs on Apple Silicon (M1, M2, M3, ...). A non-Apple-\n' >&2
+        printf 'Silicon hip binary would have no server to connect to locally.\n' >&2
+        printf '\n'
+        printf 'If you intend to run hip against a remote MTPLX, build from source:\n' >&2
+        printf '  %scargo install --git https://github.com/%s --tag <ver>%s\n' "${C_BOLD}" "${REPO}" "${C_RESET}" >&2
+        printf '\n'
+        exit 2
+    fi
 
     info "Detected platform: ${C_BOLD}${OS}-${ARCH}${C_RESET} (using ${DOWNLOADER})"
 
