@@ -13,6 +13,7 @@ mod read_cache;
 mod repl;
 mod runlog;
 mod schema;
+mod session_store;
 mod setup;
 mod sparkline;
 mod sticky_bar;
@@ -421,6 +422,46 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
         .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
     let mut conv: Vec<ChatMessage> = vec![ChatMessage::system(system)];
 
+    // If the user passed --resume (with or without an explicit session id),
+    // try to reload the prior conversation off disk so the model actually
+    // sees the past turns instead of just inheriting a warm prefix cache.
+    // Without this the running ctx counter shows a tiny number (e.g.
+    // 1.7K/64K) on the first turn after resume because the model only sees
+    // system + new prompt.
+    let mut resumed_turns: usize = 0;
+    if cli.resume.is_some() {
+        if let Some(prev) = session_store::load(client.session_id()) {
+            if !prev.is_empty() {
+                conv = prev;
+                resumed_turns = conv
+                    .iter()
+                    .filter(|m| m.role == "user" || m.role == "assistant")
+                    .count();
+                eprintln!(
+                    "{d}  loaded {a}{n}{d} prior message{plural} for this session ({a}{tok}{d} estimated tokens){r}",
+                    d = theme::dim(),
+                    a = theme::accent(),
+                    r = theme::RESET,
+                    n = resumed_turns,
+                    plural = if resumed_turns == 1 { "" } else { "s" },
+                    tok = humanize_tokens(session_store::estimate_tokens(&conv)),
+                );
+            } else {
+                eprintln!(
+                    "{d}  session has no saved messages yet (fresh resume){r}",
+                    d = theme::dim(),
+                    r = theme::RESET,
+                );
+            }
+        } else {
+            eprintln!(
+                "{d}  no saved messages for this session id; starting fresh{r}",
+                d = theme::dim(),
+                r = theme::RESET,
+            );
+        }
+    }
+
     print_chat_banner(client, cli);
     if cli.one_shot {
         eprintln!(
@@ -475,9 +516,17 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
     //                       be folded into the next request's prompt).
     //   ctx_turns         = count of model turns in the current conversation,
     //                       resets on /new.
-    let mut ctx_input_tokens: u32 = 0;
+    // Seed the indicator from the loaded session (if any) so the first
+    // ─ ctx X/64K ─ line after resume shows a realistic number instead of
+    // 0 / 64K. After the first model turn the counter switches over to
+    // exact prompt_tokens / completion_tokens from the API response.
+    let mut ctx_input_tokens: u32 = if resumed_turns > 0 {
+        session_store::estimate_tokens(&conv)
+    } else {
+        0
+    };
     let mut ctx_output_tokens: u32 = 0;
-    let mut ctx_turns: u32 = 0;
+    let mut ctx_turns: u32 = resumed_turns as u32;
     let ctx_max_tokens: u32 = 64000; // matches the qwen3.6-27b-mtplx model's max_context_length
 
     // Inline tip block above the first prompt — shown once per chat session
@@ -583,6 +632,10 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 ctx_input_tokens = 0;
                 ctx_output_tokens = 0;
                 ctx_turns = 0;
+                // Persist the cleared conv so a subsequent --resume on this
+                // same session id doesn't bring the old messages back from
+                // disk.
+                session_store::save(client.session_id(), &conv);
                 eprintln!("[hip] conversation cleared (session_id unchanged so cache stays warm; use :new for a clean MTPLX session too)");
                 continue;
             }
@@ -606,6 +659,8 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                         .unwrap_or(0)
                 );
                 client.set_session_id(&new_sid);
+                // No save here: the new sid has no history yet. The first
+                // successful turn on this sid will write its own file.
                 eprintln!(
                     "{d}─ new conversation · session={a}{}{d} · context reset to 0 tokens ─{r}",
                     new_sid,
@@ -978,6 +1033,9 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 ctx_output_tokens = c;
             }
             ctx_turns = ctx_turns.saturating_add(1);
+            // Persist the updated conversation to disk so `hip --resume
+            // <session_id>` on next launch picks up exactly here.
+            session_store::save(client.session_id(), &conv);
             // Single-line context status printed below the response so the
             // user always knows where they sit relative to the 64K window.
             print_context_line(
