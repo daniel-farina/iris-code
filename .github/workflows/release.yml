@@ -95,6 +95,11 @@ jobs:
           name: ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
+          # Pick "latest" by semver, not by created-at timestamp. Without
+          # this, two tags pushed back-to-back can land in the wrong order
+          # (e.g. v0.3.11 published after v0.3.12 → v0.3.11 wrongly tagged
+          # latest, and `hip --update` offers the older release).
+          make_latest: legacy
           files: |
             dist/*.tar.gz
             dist/*.sha256

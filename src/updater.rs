@@ -75,20 +75,36 @@ fn cmp_version(a: &str, b: &str) -> std::cmp::Ordering {
 
 /// Fetch the latest release tag from GitHub. Short timeout; returns None
 /// on any failure so the caller doesn't have to care.
+///
+/// Picks the highest semver across `/releases`, NOT GitHub's "latest"
+/// flag — that flag is set by published-at timestamp by default, so two
+/// tags pushed back-to-back can land in the wrong order and leave older
+/// releases marked as latest. Enumerating + sorting locally is robust
+/// against that and against any maintainer who forgot `make_latest` on
+/// the release workflow.
 async fn fetch_latest_tag() -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .user_agent(format!("hip/{}", env!("CARGO_PKG_VERSION")))
         .build()
         .ok()?;
-    let url = format!("https://api.github.com/repos/{}/releases/latest", REPO);
+    let url = format!("https://api.github.com/repos/{}/releases?per_page=30", REPO);
     let resp = client.get(&url).send().await.ok()?;
     if !resp.status().is_success() {
         return None;
     }
     let body: serde_json::Value = resp.json().await.ok()?;
-    body.get("tag_name")
-        .and_then(|v| v.as_str())
+    let releases = body.as_array()?;
+    releases
+        .iter()
+        .filter(|r| !r.get("draft").and_then(|v| v.as_bool()).unwrap_or(false))
+        .filter(|r| {
+            !r.get("prerelease")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+        })
+        .filter_map(|r| r.get("tag_name").and_then(|v| v.as_str()))
+        .max_by(|a, b| cmp_version(a, b))
         .map(|s| s.to_string())
 }
 
