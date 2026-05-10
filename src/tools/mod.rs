@@ -12,6 +12,7 @@ pub mod edit;
 pub mod glob;
 pub mod grep;
 pub mod list;
+pub mod multi_edit;
 pub mod peek_log;
 pub mod read;
 pub mod search;
@@ -32,6 +33,7 @@ pub fn registry() -> Vec<Tool> {
         read::tool(),
         grep::tool(),
         edit::tool(),
+        multi_edit::tool(),
         bash::tool(),
         list::tool(),
         glob::tool(),

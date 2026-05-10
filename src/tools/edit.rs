@@ -196,6 +196,49 @@ async fn run(args: Value) -> Result<String> {
     ))
 }
 
+/// Apply a single edit to in-memory `original` content and return the
+/// updated string + a count of how many replacements landed. Pure: does
+/// not touch disk. Used by both the single `edit` tool and `multi_edit`
+/// to share the same fallback / multi-match validation logic.
+pub(crate) fn apply_edit_in_memory(
+    original: &str,
+    old: &str,
+    new: &str,
+    replace_all: bool,
+) -> Result<(String, usize)> {
+    if old.is_empty() {
+        // Caller decides whether this is create-or-overwrite; in-memory
+        // we treat an empty old_string as "replace whole content".
+        return Ok((new.to_string(), 1));
+    }
+    let actual_old: String = if original.contains(old) {
+        old.to_string()
+    } else if let Some((slice, _occurrences)) =
+        find_with_whitespace_tolerance(original, old, replace_all)
+    {
+        slice
+    } else {
+        let hint = diagnose_missing(original, old);
+        return Err(anyhow!("old_string not found{}", hint));
+    };
+    let count = original.matches(&actual_old).count();
+    if count > 1 && !replace_all {
+        let lines = locate_match_lines(original, &actual_old, 5);
+        return Err(anyhow!(
+            "old_string occurs {} times - pass replace_all=true OR include more surrounding context to disambiguate. \
+            First {} match line(s): {}",
+            count, lines.len(), lines.into_iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let updated = if replace_all {
+        original.replace(&actual_old, new)
+    } else {
+        original.replacen(&actual_old, new, 1)
+    };
+    let n_replacements = if replace_all { count } else { 1 };
+    Ok((updated, n_replacements))
+}
+
 /// Compact diff preview for `dry_run`: shows up to 8 lines of removed+added
 /// from the prefix/suffix-trimmed difference, line-numbered to where the
 /// change occurs in the original file.
