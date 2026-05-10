@@ -935,7 +935,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 }
             }
         } else {
-            match agent::run_loop(client, &mut conv, cli.max_rounds).await {
+            match agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await {
                 Ok(stats) => {
                     log.rounds = Some(stats.rounds);
                     log.tool_calls = Some(stats.total_tool_calls);
@@ -1207,7 +1207,7 @@ async fn run_chat_fallback(
             out.write_all(b"\n").await.ok();
             conv.push(ChatMessage::assistant_text(res.content.clone()));
         } else {
-            let _ = agent::run_loop(client, &mut conv, cli.max_rounds).await?;
+            let _ = agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await?;
         }
     }
 }
@@ -1288,7 +1288,7 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
     let mut conv = vec![ChatMessage::system(system), ChatMessage::user(prompt)];
     let mut log = runlog::RunLog::new("agent", client.session_id(), client.model(), prompt);
     let pre_snap = if cli.diff { Some(snap_cwd()) } else { None };
-    let stats = match agent::run_loop(client, &mut conv, cli.max_rounds).await {
+    let stats = match agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await {
         Ok(s) => s,
         Err(e) => {
             log.success = false;

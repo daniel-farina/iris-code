@@ -34,10 +34,10 @@ pub async fn run_loop(
     client: &MtplxClient,
     conv: &mut Vec<ChatMessage>,
     max_rounds: u32,
+    opts: SamplingOpts,
 ) -> Result<LoopStats> {
     let tools = tools::registry();
     let specs = tools::tool_specs(&tools);
-    let opts = SamplingOpts::default();
     let mut stats = LoopStats::default();
     let started = Instant::now();
     let mut out = stdout();
@@ -62,6 +62,30 @@ pub async fn run_loop(
             // Tail newline so subsequent tool output starts on its own line.
             out.write_all(b"\n").await.ok();
             out.flush().await.ok();
+        }
+
+        // finish_reason="length" means the model was cut off because it hit
+        // max_tokens, NOT because it considered the task done. If we let the
+        // loop exit here the user has to manually type "continue" — which
+        // they've reported is annoying. Auto-continue once by appending the
+        // partial assistant text and re-prompting. We cap at one auto-continue
+        // per round so a runaway model can't pin the loop forever.
+        let truncated_by_length = res
+            .finish_reason
+            .as_deref()
+            .map(|r| r == "length")
+            .unwrap_or(false);
+        if truncated_by_length && res.tool_calls.is_empty() {
+            // Print a visible marker so the user knows what's happening.
+            crate::pretty::truncation_notice(opts.max_tokens);
+            conv.push(ChatMessage::assistant_text(res.content.clone()));
+            // Nudge the model to keep going. A bare "continue" turns into a
+            // user message in the conversation; the assistant can then
+            // continue from where it stopped without losing context.
+            conv.push(ChatMessage::user("continue"));
+            // Loop again; if it truncates a second time we DO exit so the
+            // user can intervene.
+            continue;
         }
 
         if res.tool_calls.is_empty() {
