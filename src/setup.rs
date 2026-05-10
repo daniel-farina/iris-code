@@ -25,12 +25,17 @@ use std::time::Duration;
 use crate::theme::{self, RESET};
 
 const MARKER_PATH: &str = "~/.mlx-code/.welcomed";
-// As of 2026-05-09 evening: PRs #32, #35, #37, #33 are all merged
-// upstream. We can point installs straight at upstream main now.
-// Switch back to the daniel-farina fork only if/when we have unmerged
-// patches that need to ship to fresh installs.
-const MTPLX_REPO_URL: &str = "https://github.com/youssofal/MTPLX";
-const MTPLX_BRANCH: &str = "main";
+// We pin fresh installs to a curated share branch on the fork that has
+// every unmerged perf fix cherry-picked on top of upstream main:
+//   - #38 TurboQuant graceful fallback (vllm-metal-optional)
+//   - #39 SessionBank cache miss fix above 16K-token cliff
+//   - #40 env-overridable SessionBank.max_entries
+//   - #41 postcommit reuses bank prefix + cache_miss_reason observability
+// Plus the four already-merged PRs (#32 Metal memory caps, #33 prefill
+// chunk-size split, #35 preamble-in-stored-content, #37 postcommit-wait).
+// Switch to upstream main once all four open PRs land.
+const MTPLX_REPO_URL: &str = "https://github.com/daniel-farina/MTPLX";
+const MTPLX_BRANCH: &str = "share/install-2026-05-10-all-prs";
 const MTPLX_DEFAULT_INSTALL_DIR: &str = "~/code/MTPLX";
 const MTPLX_PID_FILE: &str = "~/.mlx-code/mtplx.pid";
 const MTPLX_LOG_FILE: &str = "~/.mlx-code/mtplx.log";
@@ -414,7 +419,14 @@ async fn start_mtplx_background_and_wait(install_dir: &Path, url: &str) -> Resul
         );
         return Ok(false);
     };
-    cmd.current_dir(install_dir)
+    // Ship the SessionBank cap overrides every fresh install needs to avoid
+    // hitting the small-default eviction wall on >16K-token agent sessions.
+    // These match the values the patched fork's run script uses (validated
+    // against >50K-token hippo-code conversations).
+    cmd.env("MTPLX_SESSION_BANK_PER_SESSION_BYTES", "16G")
+        .env("MTPLX_SESSION_BANK_MAX_BYTES", "32G")
+        .env("MTPLX_SESSION_BANK_MAX_ENTRIES", "24")
+        .current_dir(install_dir)
         .stdout(std::process::Stdio::from(log_file))
         .stderr(std::process::Stdio::from(log_err))
         .stdin(std::process::Stdio::null());

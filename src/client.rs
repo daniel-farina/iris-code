@@ -328,6 +328,14 @@ impl MtplxClient {
         &self.session_id
     }
 
+    /// Replace the active session id. Used by `/new` to start a fresh
+    /// conversation that doesn't share MTPLX's prefix cache with the prior
+    /// session — otherwise the new conversation would inherit cached
+    /// prefixes from the old one and leak partial state.
+    pub fn set_session_id(&mut self, sid: impl Into<String>) {
+        self.session_id = sid.into();
+    }
+
     /// Stream a chat-completion. `out` receives content tokens as they arrive
     /// (typically stdout). Tool-call deltas are accumulated silently.
     pub async fn stream<W: AsyncWrite + Unpin>(

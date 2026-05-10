@@ -113,8 +113,9 @@ pub fn leave() {
     let _ = err.flush();
 }
 
-/// Install Drop-style safety: panic hook + Ctrl-C handler that resets
-/// the scroll region so the user's terminal isn't left in a weird state.
+/// Install Drop-style safety: panic hook + Ctrl-C handler + SIGWINCH
+/// (terminal-resize) handler so the scroll region tracks the new geometry
+/// instead of stranding the bar at the old bottom row.
 fn install_safety_guard() {
     if GUARD_INSTALLED.swap(true, Ordering::SeqCst) {
         return;
@@ -125,17 +126,56 @@ fn install_safety_guard() {
         leave();
         prior(info);
     }));
-    // SIGINT/SIGTERM via a tokio task; falls back to no-op if reactor isn't up.
+    // SIGINT: tear down before exiting so the next shell prompt isn't trapped
+    // inside an old scroll region.
     if let Ok(mut sigint) =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
     {
         tokio::spawn(async move {
             sigint.recv().await;
             leave();
-            // Re-raise default behavior by exiting cleanly.
             std::process::exit(130);
         });
     }
+    // SIGWINCH: resize the scroll region so the bar lands on the new bottom
+    // row. Without this, after a resize the bar is painted at the old (cached)
+    // height — looks like garbage scrolling up the screen.
+    if let Ok(mut winch) =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+    {
+        tokio::spawn(async move {
+            loop {
+                winch.recv().await;
+                resize();
+            }
+        });
+    }
+}
+
+/// Re-query terminal size and re-arm the scroll region. Called from SIGWINCH.
+/// No-op if the bar isn't active or the terminal got too small to host it.
+fn resize() {
+    if !ACTIVE.load(Ordering::SeqCst) {
+        return;
+    }
+    let (_, rows) = match terminal_size::terminal_size() {
+        Some((w, h)) => (w.0, h.0),
+        None => return,
+    };
+    if rows < 5 {
+        // Terminal too small for a sticky bar; pull it down rather than leave
+        // a stale region pinned at an out-of-bounds row.
+        leave();
+        return;
+    }
+    *HEIGHT.lock().unwrap() = rows;
+    let mut err = std::io::stderr();
+    // Re-issue the DECSTBM region for the new height. The cursor may already
+    // be inside the new viewport; force it back inside the new region so the
+    // next print doesn't overwrite the bar row.
+    let _ = write!(err, "\x1b[1;{};r", rows - 1);
+    let _ = write!(err, "\x1b[{};1H", rows - 1);
+    let _ = err.flush();
 }
 
 #[cfg(test)]

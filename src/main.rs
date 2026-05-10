@@ -340,14 +340,14 @@ async fn main() -> Result<()> {
     }
 
     let prompt = cli.prompt.join(" ");
-    let client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
+    let mut client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
 
     // Interactive chat: explicit --chat flag, or no prompt and stdin is a TTY.
     if cli.chat || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin()))
     {
         return run_chat(
             &cli,
-            &client,
+            &mut client,
             if prompt.trim().is_empty() {
                 None
             } else {
@@ -374,7 +374,7 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Result<()> {
+async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) -> Result<()> {
     use rustyline::error::ReadlineError;
     use rustyline::history::DefaultHistory;
     use rustyline::{Cmd, Editor, Event, KeyEvent, Modifiers, Result as RLResult};
@@ -430,6 +430,24 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
     // consecutive Ctrl-C exits, matching how python REPL / node / deno behave.
     // Reset by any non-Ctrl-C event (line submitted, Ctrl-D, etc).
     let mut ctrl_c_armed = false;
+    // Running token usage for the active conversation. Updated after each
+    // successful turn from the streaming response's `usage` block.
+    //   ctx_input_tokens  = prompt_tokens of the most recent turn (this is
+    //                       what the next request will see as its base, plus
+    //                       the upcoming user turn + the previous response).
+    //   ctx_output_tokens = completion_tokens of the most recent turn (will
+    //                       be folded into the next request's prompt).
+    //   ctx_turns         = count of model turns in the current conversation,
+    //                       resets on /new.
+    let mut ctx_input_tokens: u32 = 0;
+    let mut ctx_output_tokens: u32 = 0;
+    let mut ctx_turns: u32 = 0;
+    let ctx_max_tokens: u32 = 64000; // matches the qwen3.6-27b-mtplx model's max_context_length
+
+    // Inline tip block above the first prompt — shown once per chat session
+    // so users discover slash commands and shortcuts without `/help`.
+    print_chat_tips();
+
     loop {
         let user_msg = if let Some(p) = pending.take() {
             eprintln!("[hip] (using initial prompt as first turn)");
@@ -479,10 +497,20 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
             }
         };
 
-        let trimmed = user_msg.trim();
-        if trimmed.is_empty() {
+        let trimmed_raw = user_msg.trim();
+        if trimmed_raw.is_empty() {
             continue;
         }
+
+        // Accept both `/cmd` and `:cmd` as command prefixes. Translate to the
+        // colon form for matching so we don't have to duplicate every arm.
+        let canon_owned: String;
+        let trimmed: &str = if let Some(rest) = trimmed_raw.strip_prefix('/') {
+            canon_owned = format!(":{}", rest);
+            canon_owned.as_str()
+        } else {
+            trimmed_raw
+        };
 
         // meta-commands
         match trimmed {
@@ -511,7 +539,49 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                     ChatMessage::system(agent::DEFAULT_SYSTEM_PROMPT.to_string())
                 });
                 conv = vec![sys];
-                eprintln!("[hip] conversation cleared (session_id unchanged so cache stays warm)");
+                ctx_input_tokens = 0;
+                ctx_output_tokens = 0;
+                ctx_turns = 0;
+                eprintln!("[hip] conversation cleared (session_id unchanged so cache stays warm; use :new for a clean MTPLX session too)");
+                continue;
+            }
+            ":new" => {
+                // Clear conversation AND rotate the MTPLX session id so the
+                // server's prefix cache for the old conversation is no longer
+                // attached. Use a timestamp-based id so reruns don't collide.
+                let sys = conv.first().cloned().unwrap_or_else(|| {
+                    ChatMessage::system(agent::DEFAULT_SYSTEM_PROMPT.to_string())
+                });
+                conv = vec![sys];
+                ctx_input_tokens = 0;
+                ctx_output_tokens = 0;
+                ctx_turns = 0;
+                let new_sid = format!(
+                    "{}-{}",
+                    cli.session,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0)
+                );
+                client.set_session_id(&new_sid);
+                eprintln!(
+                    "{d}─ new conversation · session={a}{}{d} · context reset to 0 tokens ─{r}",
+                    new_sid,
+                    d = theme::dim(),
+                    a = theme::accent(),
+                    r = theme::RESET,
+                );
+                continue;
+            }
+            ":context" => {
+                print_context_status(
+                    &conv,
+                    ctx_input_tokens,
+                    ctx_output_tokens,
+                    ctx_turns,
+                    ctx_max_tokens,
+                );
                 continue;
             }
             ":stats" => {
@@ -744,30 +814,42 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 continue;
             }
             ":help" => {
-                eprintln!("─ chat commands ─");
-                eprintln!("  :reset             clear conversation history");
-                eprintln!("  :quit / :exit /:q  exit");
-                eprintln!("  exit / quit / bye  exit (with confirmation)");
-                eprintln!("  Ctrl-C twice       exit");
-                eprintln!("  :stats             show recent run stats");
-                eprintln!("  :history           re-print conversation");
-                eprintln!("  :cwd <path>        change working directory");
-                eprintln!("  :show-thinking on|off");
-                eprintln!("  :full-output on|off");
-                eprintln!("  :smoke [path]      run smoke harness in cwd or path");
-                eprintln!("  :tools             list registered agent tools");
-                eprintln!("  :overhead          show current prompt overhead size");
-                eprintln!("  :diff <a> <b>      run the diff tool inline on two files");
-                eprintln!("  :peek [N] [failed] show last N runs.jsonl entries (default 10)");
-                eprintln!("  :dry-run [on|off]  toggle agent-loop dry-run mode (no writes/exec)");
-                eprintln!("  :cache             show read-cache stats");
-                eprintln!("  :cache clear       drop all cached file contents");
-                eprintln!("  :tps [N]           Unicode sparkline of last N runs' decode rate (default 20)");
-                eprintln!("  :theme [dark|light|mono]  switch color theme at runtime");
+                let d = theme::dim();
+                let a = theme::accent();
+                let r = theme::RESET;
+                eprintln!("{d}─ chat commands ─{r} (every command works with both {a}/{d} and {a}:{d} prefix){r}");
+                eprintln!("  {a}/help{r}             show this help");
+                eprintln!("  {a}/new{r}              fresh conversation (clears context, rotates session id)");
+                eprintln!("  {a}/reset{r}            clear conversation but keep session id (cache stays warm)");
+                eprintln!(
+                    "  {a}/context{r}          show context size: tokens used vs max + turn count"
+                );
+                eprintln!("  {a}/quit{r} / {a}/exit{r} / {a}/q{r}  exit");
+                eprintln!("  {d}exit / quit / bye{r}  exit (bare word, asks confirmation)");
+                eprintln!("  {d}Ctrl-C twice{r}       exit immediately");
+                eprintln!("  {d}Alt-Enter{r}          insert a newline (multi-line prompt)");
+                eprintln!("  {a}/stats{r}            recent run stats (turns, session, cwd)");
+                eprintln!("  {a}/history{r}          show history file path");
+                eprintln!("  {a}/cwd <path>{r}       change working directory");
+                eprintln!("  {a}/show-thinking{r} on|off  toggle <think>...</think> display");
+                eprintln!("  {a}/full-output{r} on|off    toggle full (untruncated) tool output");
+                eprintln!("  {a}/smoke{r} [path]     run smoke harness in cwd or path");
+                eprintln!("  {a}/tools{r}            list registered agent tools");
+                eprintln!("  {a}/overhead{r}         show current prompt overhead size");
+                eprintln!("  {a}/diff <a> <b>{r}     run the diff tool inline on two files");
+                eprintln!("  {a}/peek{r} [N] [failed]  last N runs.jsonl entries (default 10)");
+                eprintln!("  {a}/dry-run{r} [on|off] toggle agent-loop dry-run mode");
+                eprintln!("  {a}/cache{r}            show read-cache stats");
+                eprintln!("  {a}/cache clear{r}      drop all cached file contents");
+                eprintln!(
+                    "  {a}/tps{r} [N]          decode-rate sparkline of last N runs (default 20)"
+                );
+                eprintln!("  {a}/theme{r} dark|light|mono  switch color theme at runtime");
+                eprintln!("{d}  Tip: tab-complete after typing {a}/{d} or {a}:{d} for the available list.{r}");
                 continue;
             }
             cmd if cmd.starts_with(':') => {
-                eprintln!("[hip] unknown command: {} (try :help)", cmd);
+                eprintln!("[hip] unknown command: {} (try /help)", cmd);
                 continue;
             }
             _ => {}
@@ -841,12 +923,148 @@ async fn run_chat(cli: &Cli, client: &MtplxClient, first: Option<String>) -> Res
                 }
             }
         }
+        // Roll the running context counters from whichever path the turn took.
+        // Both `log.prompt_tokens` and `log.completion_tokens` were just set
+        // above (one-shot or agent loop). prompt_tokens of the LAST turn is
+        // what the model just saw as input; completion_tokens is the response
+        // we'll fold into next turn's prompt — so the running window is
+        // prompt + completion.
+        if log.success {
+            if let Some(p) = log.prompt_tokens {
+                ctx_input_tokens = p;
+            }
+            if let Some(c) = log.completion_tokens {
+                ctx_output_tokens = c;
+            }
+            ctx_turns = ctx_turns.saturating_add(1);
+            // Single-line context status printed below the response so the
+            // user always knows where they sit relative to the 64K window.
+            print_context_line(
+                ctx_input_tokens,
+                ctx_output_tokens,
+                ctx_turns,
+                ctx_max_tokens,
+            );
+        }
         if cli.log_runs {
             log.write();
         }
         if let Some(h) = &history_path {
             let _ = rl.save_history(h);
         }
+    }
+}
+
+/// Print a one-line tip block right after the chat banner so users discover
+/// slash commands without having to read documentation. Shown once per session.
+fn print_chat_tips() {
+    let d = theme::dim();
+    let a = theme::accent();
+    let r = theme::RESET;
+    eprintln!(
+        "{d}  tips: {a}/help{d} for all commands · {a}/new{d} for fresh context · {a}/context{d} shows token usage{r}"
+    );
+    eprintln!(
+        "{d}        tab-completes after {a}/{d} or {a}:{d} · {a}Alt-Enter{d} for newline · {a}Ctrl-C{d} twice to exit{r}"
+    );
+    eprintln!();
+}
+
+/// Compact one-line context-usage indicator printed after each successful turn.
+/// Format: `─ ctx 12.4K/64K (19%) · 3 turns ─`
+fn print_context_line(input: u32, output: u32, turns: u32, max: u32) {
+    let used = input.saturating_add(output);
+    let pct = if max > 0 {
+        (used as f64 / max as f64 * 100.0) as u32
+    } else {
+        0
+    };
+    // Color the percentage warn-yellow once we cross 75% so the user sees the
+    // wall coming.
+    let pct_color = if pct >= 90 {
+        theme::bad()
+    } else if pct >= 75 {
+        theme::warn()
+    } else {
+        theme::good()
+    };
+    eprintln!(
+        "{d}─ ctx {a}{used_h}{d}/{a}{max_h}{d} ({pcc}{pct}%{d}) · {turns} turn{plural} ─{r}",
+        d = theme::dim(),
+        a = theme::accent(),
+        r = theme::RESET,
+        pcc = pct_color,
+        used_h = humanize_tokens(used),
+        max_h = humanize_tokens(max),
+        pct = pct,
+        turns = turns,
+        plural = if turns == 1 { "" } else { "s" },
+    );
+}
+
+/// `:context` command output — verbose multi-line breakdown.
+fn print_context_status(conv: &[ChatMessage], input: u32, output: u32, turns: u32, max: u32) {
+    let d = theme::dim();
+    let a = theme::accent();
+    let g = theme::good();
+    let w = theme::warn();
+    let r = theme::RESET;
+    let used = input.saturating_add(output);
+    let pct = if max > 0 {
+        (used as f64 / max as f64 * 100.0) as u32
+    } else {
+        0
+    };
+    let user_msgs = conv.iter().filter(|m| m.role == "user").count();
+    let assistant_msgs = conv.iter().filter(|m| m.role == "assistant").count();
+    let pct_color = if pct >= 75 { w } else { g };
+    eprintln!("{d}─ context status ─{r}", d = d, r = r);
+    eprintln!(
+        "  {a}{used}{r} / {a}{max}{r} tokens used ({pc}{pct}%{r})",
+        a = a,
+        r = r,
+        used = humanize_tokens(used),
+        max = humanize_tokens(max),
+        pct = pct,
+        pc = pct_color,
+    );
+    eprintln!(
+        "    {d}prompt (input):     {r}{a}{}{r}",
+        humanize_tokens(input),
+        a = a,
+        r = r
+    );
+    eprintln!(
+        "    {d}completion (output):{r}{a}{}{r}",
+        humanize_tokens(output),
+        a = a,
+        r = r
+    );
+    eprintln!(
+        "  {a}{turns}{r} model turn{plural} · {a}{user_msgs}{r} user / {a}{assistant_msgs}{r} assistant message{plural2} in conv buffer",
+        a = a,
+        r = r,
+        turns = turns,
+        plural = if turns == 1 { "" } else { "s" },
+        plural2 = if user_msgs + assistant_msgs == 1 { "" } else { "s" },
+        user_msgs = user_msgs,
+        assistant_msgs = assistant_msgs,
+    );
+    eprintln!(
+        "  {d}/new clears all of this and rotates the MTPLX session id.{r}",
+        d = d,
+        r = r,
+    );
+}
+
+/// Render a token count as `1234 → "1234"`, `12345 → "12.3K"`, `123456 → "123K"`.
+fn humanize_tokens(n: u32) -> String {
+    if n < 1000 {
+        format!("{}", n)
+    } else if n < 10_000 {
+        format!("{:.1}K", n as f64 / 1000.0)
+    } else {
+        format!("{}K", n / 1000)
     }
 }
 
@@ -890,7 +1108,7 @@ fn apply_pretty_env(show_thinking: bool, full_output: bool) {
 /// shape but with raw stdin readline. Kept simple intentionally.
 async fn run_chat_fallback(
     cli: &Cli,
-    client: &MtplxClient,
+    client: &mut MtplxClient,
     first: Option<String>,
     mut conv: Vec<ChatMessage>,
     _show_thinking: bool,
@@ -916,7 +1134,10 @@ async fn run_chat_fallback(
         if trimmed.is_empty() {
             continue;
         }
-        if matches!(trimmed, ":quit" | ":exit" | ":q" | "exit" | "quit" | "bye") {
+        if matches!(
+            trimmed,
+            ":quit" | ":exit" | ":q" | "/quit" | "/exit" | "/q" | "exit" | "quit" | "bye"
+        ) {
             eprintln!("[hip] bye");
             return Ok(());
         }
@@ -1719,7 +1940,7 @@ fn print_chat_banner(client: &MtplxClient, cli: &Cli) {
         sess = client.session_id(),
         dry = dry,
     );
-    eprintln!("{d}╰─ cwd {a}{cwd}{d} ─ type {a}:help{d} for commands · Alt-Enter for newline · {a}:quit{d} to exit{r}",
+    eprintln!("{d}╰─ cwd {a}{cwd}{d} ─ type {a}/help{d} for commands · Alt-Enter for newline · {a}/quit{d} to exit{r}",
         d = d, a = a, r = r, cwd = cwd,
     );
 }
