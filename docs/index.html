@@ -126,8 +126,11 @@
       flex-shrink: 0;
       user-select: none;
     }
-    .ps1 .tilde  { color: var(--accent); }
-    .ps1 .dollar { color: var(--fg); margin-left: 2px; }
+    .ps1 .user  { color: var(--accent-soft); }
+    .ps1 .at    { color: var(--fg-dim); }
+    .ps1 .host  { color: var(--accent); }
+    .ps1 .path  { color: var(--accent-deep); margin-left: 4px; }
+    .ps1 .pct   { color: var(--fg); margin-left: 4px; }
 
     .cmd     { color: var(--fg); }
     .out     { color: var(--fg); }
@@ -288,7 +291,7 @@
       <div class="dots" aria-hidden="true">
         <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
       </div>
-      <div class="title">mood@hippo &mdash; zsh</div>
+      <div class="title">mood@hippo-code: ~ &mdash; -zsh &mdash; 80&times;24</div>
       <div class="spacer"></div>
     </header>
 
@@ -300,7 +303,7 @@
 
       <div class="group">
         <div class="row">
-          <span class="ps1"><span class="tilde">~</span> <span class="dollar">$</span></span>
+          <span class="ps1"><span class="user">mood</span><span class="at">@</span><span class="host">hippo-code</span><span class="path">~</span><span class="pct">%</span></span>
           <span class="cmd">whoami</span>
         </div>
         <div class="row">
@@ -310,7 +313,7 @@
 
       <div class="group">
         <div class="row">
-          <span class="ps1"><span class="tilde">~</span> <span class="dollar">$</span></span>
+          <span class="ps1"><span class="user">mood</span><span class="at">@</span><span class="host">hippo-code</span><span class="path">~</span><span class="pct">%</span></span>
           <span class="cmd">cat models.txt</span>
         </div>
         <div class="row">
@@ -323,7 +326,7 @@
 
       <div class="group">
         <div class="row">
-          <span class="ps1"><span class="tilde">~</span> <span class="dollar">$</span></span>
+          <span class="ps1"><span class="user">mood</span><span class="at">@</span><span class="host">hippo-code</span><span class="path">~</span><span class="pct">%</span></span>
           <span class="cmd">cat install.sh</span>
         </div>
         <div class="row">
@@ -337,7 +340,7 @@
 
       <div class="group">
         <div class="row">
-          <span class="ps1"><span class="tilde">~</span> <span class="dollar">$</span></span>
+          <span class="ps1"><span class="user">mood</span><span class="at">@</span><span class="host">hippo-code</span><span class="path">~</span><span class="pct">%</span></span>
           <span class="cmd">ls source/</span>
         </div>
         <div class="heading">SOURCE CODE</div>
@@ -349,7 +352,7 @@
 
       <form class="group ask-form" id="askForm" autocomplete="off">
         <div class="row ask">
-          <span class="ps1"><span class="tilde">~</span> <span class="dollar">$</span></span>
+          <span class="ps1"><span class="user">mood</span><span class="at">@</span><span class="host">hippo-code</span><span class="path">~</span><span class="pct">%</span></span>
           <input
             type="text"
             id="askInput"
