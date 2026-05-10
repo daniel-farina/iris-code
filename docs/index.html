@@ -4,10 +4,10 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>hip - a lean coding agent for the local MTPLX model</title>
-  <meta name="description" content="hip: a tiny Rust CLI coding agent (hippo-code) for a local MTPLX server. 10 tools, ~1.35K token prompt overhead, ~9.6x lighter than opencode." />
+  <meta name="description" content="hip: a tiny Rust CLI coding agent (hippo-code) for a local MTPLX server. 10 tools, ~1.35K token prompt overhead, ~9.6x lighter than opencode. Slash-command REPL, first-run setup wizard, in-place self-updater." />
   <meta name="color-scheme" content="dark light" />
   <meta property="og:title" content="hip" />
-  <meta property="og:description" content="A lean coding agent for the local MTPLX model. 10 tools, ~1.35K token prompt overhead." />
+  <meta property="og:description" content="A lean coding agent for the local MTPLX model. 10 tools, ~1.35K token prompt overhead. Slash-command REPL with /new, /context, sticky bar, and a one-shot setup wizard." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -510,11 +510,13 @@
       <span>hip</span>
     </div>
     <div class="links">
+      <a href="#whats-new">What's new</a>
       <a href="#install">Install</a>
       <a href="#what">What it does</a>
       <a href="#quickstart">Quickstart</a>
       <a href="#architecture">Architecture</a>
       <a href="#performance">Performance</a>
+      <a class="gh" href="https://github.com/daniel-farina/hippo-code/releases/latest" target="_blank" rel="noopener">Releases</a>
       <a class="gh" href="https://github.com/daniel-farina/hippo-code" target="_blank" rel="noopener">GitHub</a>
       <button class="theme-toggle" id="themeBtn" aria-label="Toggle theme" title="Toggle light/dark">&#9789;</button>
     </div>
@@ -530,12 +532,32 @@
 
     <p class="tagline">a <span class="accent">lean coding agent</span> for the local <span class="gold">MTPLX</span> model</p>
     <p class="hero-sub">Rust CLI <span class="dot">&middot;</span> 10 tools <span class="dot">&middot;</span> ~1.35K token prompt overhead <span class="dot">&middot;</span> qwen3.6-27b</p>
+    <p class="hero-sub"><a href="https://github.com/daniel-farina/hippo-code/releases/latest" target="_blank" rel="noopener" style="color: var(--accent-gold); font-weight: 600;">latest release</a> <span class="dot">&middot;</span> slash-command REPL <span class="dot">&middot;</span> first-run setup wizard <span class="dot">&middot;</span> <code style="background: var(--bg-term); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--accent-soft); font-size: 12.5px;">hip --update</code> in place</p>
 
     <div class="copybox">
       <span class="prompt">$</span>
-      <span class="cmd" id="installCmd"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh</span> | sh</span>
+      <span class="cmd" id="installCmd"><span class="bin">curl</span> -sSL <span class="url">https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh</span> | sh</span>
       <button class="copy-btn" data-copy="installCmd">COPY</button>
     </div>
+  </div>
+</section>
+
+<!-- ─────────── WHAT'S NEW ─────────── -->
+<section id="whats-new">
+  <div class="container">
+    <h2><span class="num">&#x2605;</span>What's new</h2>
+    <p class="subtitle">The <a href="https://github.com/daniel-farina/hippo-code/releases/latest" target="_blank" rel="noopener">latest release</a> ships a redesigned chat REPL, a one-shot setup wizard, and an MTPLX fork pre-loaded with four still-open performance PRs.</p>
+
+    <ul class="bullets">
+      <li><b>Slash &amp; colon commands.</b> Both <code>/help</code> and <code>:help</code> work; tab-completes after typing <code>/</code> or <code>:</code>; the empty buffer shows an inline hint of the most useful next move.</li>
+      <li><b><code>/new</code> vs <code>/reset</code>.</b> <code>/new</code> starts a fresh conversation - clears history <em>and</em> rotates the MTPLX session id so the prefix cache resets. <code>/reset</code> keeps the session id so you stay on a warm cache.</li>
+      <li><b><code>/context</code> usage tracker.</b> Shows current tokens vs the 64K window with input/completion split and turn count. After every response a one-line bar prints inline: <code>&#x2500; ctx 12.4K/64K (19%) &middot; 3 turns &#x2500;</code>, colored green &rarr; warn &rarr; bad past 75% / 90%.</li>
+      <li><b>Sticky bottom bar, resize-aware.</b> The live <code>tok / lines / tok-s / ttft</code> bar survives terminal resizes (SIGWINCH-aware) and falls back gracefully on dumb terminals.</li>
+      <li><b>Hippo-purple truecolor theme.</b> New default theme + bundled hippo logo. Double-Ctrl-C exits; bare <code>exit</code>, <code>quit</code>, <code>bye</code> exit with confirmation.</li>
+      <li><b>First-run setup wizard.</b> Probes for MTPLX, offers to clone &amp; install, downloads the model, starts the server in the background, then drops you straight into chat. Auto-detects Python &lt; 3.11 and offers <code>brew install python@3.12</code>; recreates stale <code>.venv</code> built with old Python; surfaces real pip errors inline.</li>
+      <li><b>Fork-pinned MTPLX with perf PRs.</b> The wizard now clones <code>daniel-farina/MTPLX#share/install-2026-05-10-all-prs</code>, which cherry-picks four still-open upstream PRs: <a href="https://github.com/youssofal/MTPLX/pull/38" target="_blank" rel="noopener">#38 TurboQuant fallback</a>, <a href="https://github.com/youssofal/MTPLX/pull/39" target="_blank" rel="noopener">#39 16K cliff fix</a>, <a href="https://github.com/youssofal/MTPLX/pull/40" target="_blank" rel="noopener">#40 entry-cap env</a>, <a href="https://github.com/youssofal/MTPLX/pull/41" target="_blank" rel="noopener">#41 postcommit prefix-reuse</a>. Sets <code>MTPLX_SESSION_BANK_PER_SESSION_BYTES=16G</code>, <code>_MAX_BYTES=32G</code>, <code>_MAX_ENTRIES=24</code> before spawn.</li>
+      <li><b>In-place self-update.</b> <code>hip --update</code> downloads and replaces the binary from the latest GitHub release - no curl pipe, no Cargo rebuild.</li>
+    </ul>
   </div>
 </section>
 
@@ -547,7 +569,7 @@
 
     <div class="copybox">
       <span class="prompt">$</span>
-      <span class="cmd" id="installCmd2"><span class="bin">curl</span> -fsSL <span class="url">https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh</span> | sh</span>
+      <span class="cmd" id="installCmd2"><span class="bin">curl</span> -sSL <span class="url">https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh</span> | sh</span>
       <button class="copy-btn" data-copy="installCmd2">COPY</button>
     </div>
 
@@ -565,16 +587,29 @@ cargo build --release
       </div>
       <div class="card">
         <h4>Manual download</h4>
-        <pre><span class="t-cmd"># grab a release binary
+        <pre><span class="t-cmd"># grab the latest release binary
 curl -LO https://github.com/daniel-farina/\
-hippo-code/releases/latest/download/hippo-code
-chmod +x hippo-code &amp;&amp; mv hippo-code /usr/local/bin/</span></pre>
+hippo-code/releases/latest/download/hip
+chmod +x hip &amp;&amp; mv hip /usr/local/bin/</span></pre>
+      </div>
+      <div class="card">
+        <h4>Upgrade in place</h4>
+        <pre><span class="t-cmd"># self-updater: pulls the latest
+# release binary and replaces yours
+hip --update</span></pre>
       </div>
       <div class="card">
         <h4>Point at your MTPLX server</h4>
-        <pre><span class="t-cmd">export MLX_CODE_URL=http://localhost:8088/v1
+        <pre><span class="t-cmd">export MLX_CODE_URL=http://127.0.0.1:8088/v1
 export MLX_CODE_MODEL=mtplx-qwen36-27b-optimized-speed
-hippo-code</span></pre>
+hip</span></pre>
+      </div>
+      <div class="card">
+        <h4>First run? Let the wizard do it</h4>
+        <pre><span class="t-cmd"># no MTPLX yet? hip will offer to
+# clone, install, download the model,
+# start the server, then drop into chat
+hip</span></pre>
       </div>
     </div>
   </div>
@@ -600,45 +635,46 @@ hippo-code</span></pre>
 <section id="quickstart">
   <div class="container">
     <h2><span class="num">3</span>Quickstart</h2>
-    <p class="subtitle">Launch into chat, list commands, swap themes, watch tokens fly.</p>
+    <p class="subtitle">Launch into chat. Slash or colon both work. Tab-completes after <code>/</code> or <code>:</code>.</p>
 
     <div class="term">
       <div class="titlebar">
         <span class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></span>
-        <span>~/code &mdash; hippo-code</span>
+        <span>~/code &mdash; hip</span>
       </div>
-<pre><span class="t-prompt">$</span> <span class="t-cmd">hippo-code</span>
+<pre><span class="t-prompt">$</span> <span class="t-cmd">hip</span>
 <span class="t-dim">                  &mdash; a lean coding agent &middot; <span class="t-warn">MTPLX</span> &middot; qwen3.6-27b &mdash;</span>
 
-<span class="t-accent">hip&gt;</span> <span class="t-cmd">:help</span>
-  <span class="t-key">:help</span>            show this help
-  <span class="t-key">:tools</span>           list registered tools and their schemas
-  <span class="t-key">:theme</span> <span class="t-flag">[name]</span>    river &middot; light &middot; mono   (current: <span class="t-accent">river</span>)
-  <span class="t-key">:tps</span> <span class="t-flag">[N]</span>         tok/s sparkline for last N runs
-  <span class="t-key">:overhead</span>        prompt-overhead breakdown (system + 10 tools)
-  <span class="t-key">:dry-run</span> <span class="t-flag">on|off</span>  preview edits/bash without writing
-  <span class="t-key">:peek</span> <span class="t-flag">[N]</span>        last N runs from runs.jsonl
-  <span class="t-key">:reset</span> <span class="t-key">:quit</span>     conversation controls
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">/help</span>
+  <span class="t-key">/help</span>            show this help (or <span class="t-key">:help</span>)
+  <span class="t-key">/tools</span>           list registered tools and their schemas
+  <span class="t-key">/context</span>         token usage vs the 64K window (input/completion split)
+  <span class="t-key">/new</span>             new conversation - clears history &amp; rotates session id
+  <span class="t-key">/reset</span>           clear history but keep session id (warm prefix cache)
+  <span class="t-key">/theme</span> <span class="t-flag">[name]</span>    hippo &middot; river &middot; light &middot; mono   (current: <span class="t-accent">hippo</span>)
+  <span class="t-key">/tps</span> <span class="t-flag">[N]</span>         tok/s sparkline for last N runs
+  <span class="t-key">/overhead</span>        prompt-overhead breakdown (system + 10 tools)
+  <span class="t-key">/dry-run</span> <span class="t-flag">on|off</span>  preview edits/bash without writing
+  <span class="t-key">/peek</span> <span class="t-flag">[N]</span>        last N runs from runs.jsonl
+  <span class="t-key">/quit</span>            exit (also: <span class="t-key">exit</span>, <span class="t-key">quit</span>, <span class="t-key">bye</span>, double Ctrl-C)
 
-<span class="t-accent">hip&gt;</span> <span class="t-cmd">:tools</span>
-  <span class="t-good">read</span>      <span class="t-dim">text-file slice (offset/limit/around+context)</span>
-  <span class="t-good">grep</span>      <span class="t-dim">regex search via the ignore crate</span>
-  <span class="t-good">edit</span>      <span class="t-dim">exact-match replace (dry_run supported)</span>
-  <span class="t-good">bash</span>      <span class="t-dim">zsh -lc, 30s default timeout, 16 KB cap</span>
-  <span class="t-good">list</span>      <span class="t-dim">directory listing</span>
-  <span class="t-good">glob</span>      <span class="t-dim">file globbing, gitignore-aware, 200 cap</span>
-  <span class="t-good">search</span>    <span class="t-dim">query-expanded search (definitions/files-only modes)</span>
-  <span class="t-good">diff</span>     <span class="t-dim">LCS unified diff between two files</span>
-  <span class="t-good">tree</span>      <span class="t-dim">recursive view, gitignore-aware, 500 entries</span>
-  <span class="t-good">peek_log</span>  <span class="t-dim">last N entries from runs.jsonl</span>
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">/context</span>
+  <span class="t-dim">context window:</span> <span class="t-num">12,398</span> / <span class="t-num">65,536</span> tokens (<span class="t-good">19%</span>)
+    input:       <span class="t-num">9,217</span> tok
+    completion:  <span class="t-num">3,181</span> tok
+    turns:       <span class="t-num">3</span>
 
-<span class="t-accent">hip&gt;</span> <span class="t-cmd">:theme</span> <span class="t-str">light</span>
-  theme: <span class="t-accent">river</span> &rarr; <span class="t-accent">light</span>
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">refactor src/agent.rs to extract the tool dispatcher</span>
+<span class="t-dim">[ &hellip; streamed thinking + edits &hellip; ]</span>
+<span class="t-bar">&mdash; ctx <span class="t-num">14.8K</span>/<span class="t-num">64K</span> (<span class="t-good">23%</span>) &middot; <span class="t-num">4</span> turns &mdash;</span>
 
-<span class="t-accent">hip&gt;</span> <span class="t-cmd">:tps</span> <span class="t-num">10</span>
-  last 10 runs &nbsp;<span class="t-accent">&#x2581;&#x2583;&#x2585;&#x2587;&#x2587;&#x2585;&#x2583;&#x2585;&#x2587;&#x2588;</span>&nbsp; <span class="t-num">42.7</span> tok/s avg
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">/new</span>
+  <span class="t-dim">new conversation. session id rotated; prefix cache reset.</span>
 
-<span class="t-bar">&mdash;[hippo-code]&mdash; <span class="t-num">247</span> tok &mdash; <span class="t-num">18</span> lines &mdash; <span class="t-num">102.9</span> tok/s &mdash; ttft <span class="t-num">0.6</span>s &mdash; total <span class="t-num">3.0</span>s</span></pre>
+<span class="t-accent">hip&gt;</span> <span class="t-cmd">/theme</span> <span class="t-str">light</span>
+  theme: <span class="t-accent">hippo</span> &rarr; <span class="t-accent">light</span>
+
+<span class="t-bar">&mdash;[hip]&mdash; <span class="t-num">247</span> tok &mdash; <span class="t-num">18</span> lines &mdash; <span class="t-num">102.9</span> tok/s &mdash; ttft <span class="t-num">0.6</span>s &mdash; total <span class="t-num">3.0</span>s</span></pre>
     </div>
   </div>
 </section>
@@ -667,6 +703,8 @@ hippo-code</span></pre>
           <tr><td class="mod">runlog.rs</td><td>Append-only JSONL run log at <code>~/.mlx-code/logs/runs.jsonl</code>.</td></tr>
           <tr><td class="mod">read_cache.rs</td><td>Process-global content cache for the <code>read</code> tool within one run.</td></tr>
           <tr><td class="mod">dry_run_log.rs</td><td>Accumulator of paths a dry run would have mutated; printed at end-of-run.</td></tr>
+          <tr><td class="mod">setup.rs</td><td>First-run wizard: probes for MTPLX, clones the perf-PR fork, installs deps, downloads the model, spawns the server, then drops into chat.</td></tr>
+          <tr><td class="mod">updater.rs</td><td><code>hip --update</code>: fetches the latest GitHub release binary and replaces the running executable in place.</td></tr>
         </tbody>
       </table>
     </div>
