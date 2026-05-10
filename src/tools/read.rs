@@ -109,6 +109,9 @@ async fn run(args: Value) -> Result<String> {
         crate::read_cache::put(&p, mtime, size, s.clone());
         s
     };
+    // Record that the agent has just looked at this file with this mtime,
+    // so the edit tool can detect external modifications between reads.
+    crate::read_cache::mark_read(&p, mtime);
 
     let mut out = String::new();
     let mut total_lines = 0usize;

@@ -8,6 +8,11 @@
 //!
 //! When `edit` writes to a path it explicitly invalidates so the next read
 //! goes through to disk.
+//!
+//! In addition to the content cache, this module tracks *when* the agent
+//! last read a path (wall-clock unix-seconds at read time). The `edit`
+//! tool consults this to refuse edits when the file has been mutated
+//! externally since the agent's last read.
 
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -22,6 +27,20 @@ struct Entry {
 }
 
 static CACHE: Lazy<Mutex<HashMap<PathBuf, Entry>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// When the agent last looked at a path, keyed by absolute path. Two
+/// pieces are tracked: `read_at` (wall-clock unix seconds when the read
+/// happened) and `seen_mtime` (the file's mtime at that moment). The
+/// edit tool uses these to detect external modifications since the
+/// agent's last read - i.e. `current_mtime > seen_mtime` means
+/// something else touched the file.
+#[derive(Clone, Copy, Debug)]
+pub struct ReadStamp {
+    pub read_at: u64,
+    pub seen_mtime: u64,
+}
+
+static READS: Lazy<Mutex<HashMap<PathBuf, ReadStamp>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Hits, misses, invalidations. Useful for `--inspect-prompt`-style introspection.
 #[derive(Default, Debug, Clone, Copy)]
@@ -76,6 +95,62 @@ pub fn invalidate(path: &Path) {
                 s.invalidations += 1;
             }
         }
+    }
+}
+
+/// Record that the agent has read this path at the current wall-clock time.
+/// `seen_mtime` is the file's mtime as observed by the read tool. Both fields
+/// are unix seconds. Called by the read tool after a successful read.
+pub fn mark_read(path: &Path, seen_mtime: u64) {
+    let key = path.to_path_buf();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut reads) = READS.lock() {
+        reads.insert(
+            key,
+            ReadStamp {
+                read_at: now,
+                seen_mtime,
+            },
+        );
+    }
+}
+
+/// Return the agent's last read stamp for `path`, or `None` if never read
+/// in this process.
+pub fn last_read(path: &Path) -> Option<ReadStamp> {
+    let key = path.to_path_buf();
+    READS.lock().ok().and_then(|r| r.get(&key).copied())
+}
+
+/// Mark a path as "seen" by a tool other than read (glob, grep, search).
+/// We treat seen-by-search as equivalent to read for the purposes of the
+/// read-before-edit gate, but we DO NOT use it for the staleness check
+/// because we never had the contents to compare against. Stored as a
+/// stamp with `seen_mtime = 0` so callers can distinguish.
+#[allow(dead_code)]
+pub fn mark_seen_by_search(path: &Path) {
+    let key = path.to_path_buf();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(mut reads) = READS.lock() {
+        // Don't clobber a real read stamp; only fill in if absent.
+        reads.entry(key).or_insert(ReadStamp {
+            read_at: now,
+            seen_mtime: 0,
+        });
+    }
+}
+
+/// Test-only: drop all read stamps so tests don't leak across each other.
+#[allow(dead_code)]
+pub fn clear_reads() {
+    if let Ok(mut r) = READS.lock() {
+        r.clear();
     }
 }
 

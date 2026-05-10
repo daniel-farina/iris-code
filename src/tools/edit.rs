@@ -92,6 +92,30 @@ async fn run(args: Value) -> Result<String> {
         return Ok(format!("wrote {} ({} bytes)\n", p.display(), new.len()));
     }
 
+    // Read-staleness gate: if the agent already read this file in this
+    // session (we have a stamp with a real seen_mtime), refuse the edit
+    // when the file's current mtime is later. The agent must re-read.
+    if let Some(stamp) = crate::read_cache::last_read(&p) {
+        if stamp.seen_mtime != 0 {
+            if let Ok(meta) = std::fs::metadata(&p) {
+                let cur_mtime = meta
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                if cur_mtime > stamp.seen_mtime {
+                    return Err(anyhow!(
+                        "edit: {} changed since last read at {} (now mtime {}); read it again before editing",
+                        p.display(),
+                        stamp.read_at,
+                        cur_mtime
+                    ));
+                }
+            }
+        }
+    }
+
     let original = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
 
     // Try exact, then whitespace-tolerant fallback. The fallback strips
@@ -783,6 +807,52 @@ mod tests {
             "hint should include actual L3 content (the divergent line):\n{}",
             hint
         );
+    }
+
+    #[test]
+    fn staleness_check_blocks_edit_when_file_modified_since_read() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        let p = std::env::temp_dir().join(format!("mlx-edit-stale-{}.txt", std::process::id()));
+        std::fs::write(&p, "alpha\n").unwrap();
+        // Stamp a "read" at a mtime in the distant past so any current mtime is newer.
+        crate::read_cache::mark_read(&p, 1);
+
+        let res = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "alpha",
+            "new_string": "beta",
+        }));
+        assert!(res.is_err(), "expected staleness error, got: {:?}", res);
+        let msg = format!("{}", res.unwrap_err());
+        assert!(
+            msg.contains("changed since last read"),
+            "expected staleness wording, got: {}",
+            msg
+        );
+        // File should be untouched.
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "alpha\n");
+        crate::read_cache::clear_reads();
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn staleness_check_allows_edit_when_no_prior_read() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-noread-{}.txt", std::process::id()));
+        std::fs::write(&p, "alpha\n").unwrap();
+        // No prior read stamp -> staleness check should not fire.
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "alpha",
+            "new_string": "beta",
+        }))
+        .unwrap();
+        assert!(out.contains("edited"), "expected success: {}", out);
+        crate::read_cache::clear_reads();
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
