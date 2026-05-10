@@ -356,8 +356,13 @@ async fn main() -> Result<()> {
             r = theme::RESET,
         );
         cli.session = sid;
-        // Force chat mode so the resume actually does something interactive.
-        cli.chat = true;
+        // Force chat mode so the resume actually does something interactive
+        // — UNLESS scripted --turn flags are set, in which case the resume
+        // is feeding into the multi-turn driver and chat would short-circuit
+        // it back to the REPL.
+        if cli.turn.is_empty() {
+            cli.chat = true;
+        }
     }
 
     // Load --system-file (overrides --system).
@@ -401,8 +406,12 @@ async fn main() -> Result<()> {
     // tokens (observed running 21+ iters of a self-paced game-build loop).
     // Interactive --chat runs and explicit --session / --continue-last
     // still keep their stable id so warm-cache-on-purpose still works.
+    // Scripted --turn mode is non-interactive even on a TTY with no
+    // positional prompt; the turns ARE the prompts.
     let going_interactive = cli.chat
-        || (prompt.trim().is_empty() && std::io::IsTerminal::is_terminal(&std::io::stdin()));
+        || (prompt.trim().is_empty()
+            && cli.turn.is_empty()
+            && std::io::IsTerminal::is_terminal(&std::io::stdin()));
     let on_default_session = cli.session == "mlx-code-default";
     let resume_explicitly = cli.continue_last || cli.resume.is_some();
     if !going_interactive && on_default_session && !resume_explicitly {
