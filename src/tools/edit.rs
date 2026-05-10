@@ -115,7 +115,7 @@ async fn run(args: Value) -> Result<String> {
                     .with_context(|| format!("mkdir -p {}", parent.display()))?;
             }
         }
-        std::fs::write(&p, new).with_context(|| format!("write {}", p.display()))?;
+        atomic_write(&p, new.as_bytes()).with_context(|| format!("write {}", p.display()))?;
         crate::read_cache::invalidate(&p);
         return Ok(format!("wrote {} ({} bytes)\n", p.display(), new.len()));
     }
@@ -274,7 +274,7 @@ async fn run(args: Value) -> Result<String> {
             preview,
         ));
     }
-    std::fs::write(&p, &updated).with_context(|| format!("write {}", p.display()))?;
+    atomic_write(&p, updated.as_bytes()).with_context(|| format!("write {}", p.display()))?;
     crate::read_cache::invalidate(&p);
     Ok(format!(
         "edited {} ({} replacement{}, net {} line(s))\n",
@@ -283,6 +283,38 @@ async fn run(args: Value) -> Result<String> {
         plural,
         net_disp,
     ))
+}
+
+/// Atomic write: stream `bytes` into a sibling temp file in the same
+/// directory, then `rename` over the destination. Survives partial-write
+/// on crash because either the rename completes (new content) or never
+/// fires (old content). The temp filename includes the pid + a counter
+/// to keep concurrent edits from clashing.
+pub(crate) fn atomic_write(dest: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = dest.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let dest_name = dest
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("hip-write");
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_name = format!(".{}.{}.{}.tmp", dest_name, std::process::id(), n);
+    let tmp = parent.join(tmp_name);
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    // Best-effort: clean up temp on rename failure.
+    if let Err(e) = std::fs::rename(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Walk the user's CWD (gitignore-aware) and return up to 3 paths whose
@@ -1246,6 +1278,36 @@ mod tests {
             "hint should include actual L3 content (the divergent line):\n{}",
             hint
         );
+    }
+
+    #[test]
+    fn atomic_write_creates_file_and_overwrites_existing() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        let p = std::env::temp_dir().join(format!("mlx-edit-atomic-{}.txt", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+
+        atomic_write(&p, b"first\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "first\n");
+
+        atomic_write(&p, b"second\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "second\n");
+
+        // No `.tmp` files should be left behind in the parent directory
+        // for our pid (best-effort: scan the file's parent).
+        let parent = p.parent().unwrap();
+        let pid = format!("{}", std::process::id());
+        for entry in std::fs::read_dir(parent).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            assert!(
+                !(name.starts_with(".")
+                    && name.contains(&pid)
+                    && name.ends_with(".tmp")
+                    && name.contains("mlx-edit-atomic")),
+                "leftover temp file: {}",
+                name
+            );
+        }
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]

@@ -185,15 +185,14 @@ async fn run(args: Value) -> Result<String> {
         ));
     }
 
-    // Atomic write happens later in feature 8; for now use direct write
-    // to keep this commit surgical.
     if let Some(parent) = p.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("mkdir -p {}", parent.display()))?;
         }
     }
-    std::fs::write(&p, &buf).with_context(|| format!("write {}", p.display()))?;
+    super::edit::atomic_write(&p, buf.as_bytes())
+        .with_context(|| format!("write {}", p.display()))?;
     crate::read_cache::invalidate(&p);
 
     Ok(format!(
