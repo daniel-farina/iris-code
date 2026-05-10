@@ -69,7 +69,24 @@ async fn run(args: Value) -> Result<String> {
     let p = PathBuf::from(shellexpand::tilde(&path).into_owned());
 
     if old.is_empty() {
-        // create or overwrite
+        // create or overwrite. If overwriting an existing CRLF file with an
+        // LF-only payload, re-encode to CRLF so the file's typography is
+        // preserved across the rewrite.
+        let new_owned;
+        let new: &str = if p.exists() {
+            if let Ok(existing) = std::fs::read_to_string(&p) {
+                if is_crlf(&existing) && !new.contains("\r\n") && new.contains('\n') {
+                    new_owned = to_crlf(new);
+                    new_owned.as_str()
+                } else {
+                    new
+                }
+            } else {
+                new
+            }
+        } else {
+            new
+        };
         if dry_run {
             let exists = p.exists();
             let kind: &'static str = if exists { "overwrite" } else { "create" };
@@ -117,6 +134,19 @@ async fn run(args: Value) -> Result<String> {
     }
 
     let original = std::fs::read_to_string(&p).with_context(|| format!("read {}", p.display()))?;
+
+    // Line-ending preservation: if the file uses CRLF and the model
+    // supplied LF strings, transparently re-encode old/new so matching
+    // works AND the splice keeps CRLF on disk.
+    let file_crlf = is_crlf(&original);
+    let (old_owned, new_owned);
+    let (old, new): (&str, &str) = if file_crlf && !old.contains("\r\n") && old.contains('\n') {
+        old_owned = to_crlf(old);
+        new_owned = to_crlf(new);
+        (old_owned.as_str(), new_owned.as_str())
+    } else {
+        (old, new)
+    };
 
     // Try exact, then whitespace-tolerant fallback. The fallback strips
     // trailing whitespace per line on both sides — a common drift cause
@@ -196,6 +226,28 @@ async fn run(args: Value) -> Result<String> {
     ))
 }
 
+/// True if the buffer uses CRLF line endings (any `\r\n` and no bare `\n`
+/// outside CRLF pairs). We use a simple heuristic: if there's at least
+/// one `\r\n` and the count of `\r\n` matches the count of `\n`, the file
+/// is CRLF-dominant.
+pub(crate) fn is_crlf(s: &str) -> bool {
+    let crlf = s.matches("\r\n").count();
+    if crlf == 0 {
+        return false;
+    }
+    let total_lf = s.matches('\n').count();
+    crlf == total_lf
+}
+
+/// Re-encode bare LF in `s` to CRLF without touching existing CRLF.
+/// Used to align an `old_string`/`new_string` from the model (which
+/// almost always uses LF) with a CRLF-on-disk file.
+pub(crate) fn to_crlf(s: &str) -> String {
+    // First normalise CRLF -> LF, then expand all LF to CRLF.
+    let normalized = s.replace("\r\n", "\n");
+    normalized.replace('\n', "\r\n")
+}
+
 /// Apply a single edit to in-memory `original` content and return the
 /// updated string + a count of how many replacements landed. Pure: does
 /// not touch disk. Used by both the single `edit` tool and `multi_edit`
@@ -211,6 +263,18 @@ pub(crate) fn apply_edit_in_memory(
         // we treat an empty old_string as "replace whole content".
         return Ok((new.to_string(), 1));
     }
+    // Line-ending preservation: if the file is CRLF and the model gave
+    // us LF-encoded strings, re-encode to CRLF so matching works AND the
+    // splice keeps CRLF on disk.
+    let file_crlf = is_crlf(original);
+    let (old_owned, new_owned);
+    let (old, new): (&str, &str) = if file_crlf && !old.contains("\r\n") && old.contains('\n') {
+        old_owned = to_crlf(old);
+        new_owned = to_crlf(new);
+        (old_owned.as_str(), new_owned.as_str())
+    } else {
+        (old, new)
+    };
     let actual_old: String = if original.contains(old) {
         old.to_string()
     } else if let Some((slice, _occurrences)) =
@@ -850,6 +914,75 @@ mod tests {
             "hint should include actual L3 content (the divergent line):\n{}",
             hint
         );
+    }
+
+    #[test]
+    fn is_crlf_detects_crlf_dominant_files() {
+        assert!(is_crlf("a\r\nb\r\n"));
+        assert!(!is_crlf("a\nb\n"));
+        assert!(!is_crlf("a\r\nb\n"), "mixed should not be classified CRLF");
+        assert!(!is_crlf(""));
+    }
+
+    #[test]
+    fn to_crlf_round_trips_lf_only_input() {
+        assert_eq!(to_crlf("a\nb\n"), "a\r\nb\r\n");
+        // Already-CRLF input should be unchanged.
+        assert_eq!(to_crlf("a\r\nb\r\n"), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn edit_preserves_crlf_line_endings_when_model_supplies_lf() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-crlf-{}.txt", std::process::id()));
+        // CRLF on disk.
+        std::fs::write(&p, "fn main() {\r\n    let x = 1;\r\n}\r\n").unwrap();
+
+        // Model supplies LF strings (typical).
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "    let x = 1;",
+            "new_string": "    let x = 42;",
+        }))
+        .unwrap();
+        assert!(out.contains("edited"), "expected success: {}", out);
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            body.contains("\r\n"),
+            "file should still be CRLF: {:?}",
+            body
+        );
+        assert!(body.contains("let x = 42;"));
+        // No bare LF should have leaked in.
+        let bare_lf = body.matches('\n').count();
+        let crlf = body.matches("\r\n").count();
+        assert_eq!(bare_lf, crlf, "no bare LF allowed: {:?}", body);
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn edit_preserves_crlf_on_overwrite() {
+        let _guard = crate::dry_run_log::ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MLX_CODE_DRY_RUN");
+        crate::read_cache::clear_reads();
+        let p = std::env::temp_dir().join(format!("mlx-edit-crlf-ow-{}.txt", std::process::id()));
+        std::fs::write(&p, "alpha\r\nbeta\r\n").unwrap();
+        // Overwrite with empty old_string; new_string is LF-only.
+        let _ = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "old_string": "",
+            "new_string": "one\ntwo\nthree\n",
+        }))
+        .unwrap();
+        let body = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            body.contains("\r\n"),
+            "overwrite should preserve CRLF: {:?}",
+            body
+        );
+        let _ = std::fs::remove_file(&p);
     }
 
     #[test]
