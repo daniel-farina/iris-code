@@ -165,7 +165,6 @@
       text-shadow: 0 0 18px rgba(167, 139, 250, 0.25);
     }
     pre.logo .row { display: block; }
-    pre.logo .flower { display: inline-block; padding-right: 16px; }
     /* gradient stops mirror RIVER_GRADIENT */
     .grad-1 { color: #5f0087; }
     .grad-2 { color: #8700af; }
@@ -173,12 +172,18 @@
     .grad-4 { color: #af87ff; }
     .grad-5 { color: #d787ff; }
     .grad-6 { color: #d7afff; }
-    .f-lavender   { color: #d7afff; }
-    .f-violet-top { color: #af87ff; }
-    .f-gold       { color: #ffd700; }
-    .f-violet-bot { color: #8700af; }
-    .f-stem       { color: #87af87; }
-    .f-stem-dim   { color: #5e7e5e; }
+
+    /* hippo (mood) PNG, rendered from the CLI's truecolor banner */
+    .hippo-png {
+      display: block;
+      max-width: min(420px, 80vw);
+      height: auto;
+      margin: 0 auto 24px;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      filter: drop-shadow(0 12px 28px rgba(124, 58, 237, 0.25));
+    }
+    @media (max-width: 640px) { .hippo-png { max-width: 280px; } }
 
     .tagline {
       margin-top: 22px;
@@ -484,7 +489,6 @@
       h1 { font-size: 28px; }
       h2 { font-size: 22px; }
       pre.logo { font-size: 9px; }
-      pre.logo .flower { display: none; }
       .alts { grid-template-columns: 1fr; }
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .stat .v { font-size: 22px; }
@@ -526,8 +530,9 @@
 <!-- ─────────── HERO ─────────── -->
 <section class="hero">
   <div class="container">
+    <img src="hippo-logo.png" alt="mood, the hippo-code mascot" class="hippo-png" width="1060" height="650" />
     <div class="ascii-wrap" aria-label="hip logo">
-<pre class="logo" aria-hidden="true"><span class="row"><span class="flower f-lavender"> &#x2572;&#x258E;&#x2502;&#x258E;&#x2571; </span><span class="grad-1">&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;     &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="flower f-violet-top"> &#x258E;&#x258E;&#x2502;&#x258E;&#x258E; </span><span class="grad-2">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;    &#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span><span class="row"><span class="flower f-gold">&#x2500;&#x25C6;&#x2500;&#x25C6;&#x2500;&#x25C6;&#x2500;</span><span class="grad-3">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;  </span></span><span class="row"><span class="flower f-violet-bot"> &#x2571;&#x258E;&#x2502;&#x258E;&#x2572; </span><span class="grad-4">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2551;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x255D;  </span></span><span class="row"><span class="flower f-stem">   &#x2502;   </span><span class="grad-5">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2551;    &#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;&#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="flower f-stem-dim">  &#x2500;&#x2534;&#x2500;  </span><span class="grad-6">&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;  &#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;     &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span></pre>
+<pre class="logo" aria-hidden="true"><span class="row"><span class="grad-1">&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;     &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="grad-2">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;    &#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span><span class="row"><span class="grad-3">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;  </span></span><span class="row"><span class="grad-4">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2551;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x255D;  </span></span><span class="row"><span class="grad-5">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2551;    &#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;&#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="grad-6">&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;  &#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;     &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span></pre>
     </div>
 
     <p class="tagline">a <span class="accent">lean coding agent</span> for the local <span class="gold">MTPLX</span> model</p>
