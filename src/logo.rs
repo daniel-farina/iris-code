@@ -9,9 +9,19 @@
 
 use crate::theme::{self, RESET};
 
-/// Pre-rendered hippo silhouette with embedded truecolor ANSI escapes.
-/// Source: assets/hippo-logo.txt (originally from silica/game/iris-recreation).
-const HIPPO_LOGO: &str = include_str!("../assets/hippo-logo.txt");
+/// Full banner: hippo silhouette + "hippo / code" wordmark to the right.
+/// Max visible width: ~83 cols. Used when the terminal is wide enough.
+const HIPPO_LOGO_FULL: &str = include_str!("../assets/hippo-logo.txt");
+
+/// Compact banner: hippo silhouette only, no wordmark.
+/// Max visible width: ~46 cols. Used when the terminal is too narrow for
+/// the full banner but still wide enough for the art alone.
+const HIPPO_LOGO_COMPACT: &str = include_str!("../assets/hippo-only.txt");
+
+/// Minimum visible width (in cols) for the full banner.
+const FULL_MIN_COLS: u16 = 83;
+/// Minimum visible width (in cols) for the compact (art-only) banner.
+const COMPACT_MIN_COLS: u16 = 46;
 
 /// Returns true when the logo should be rendered. False on non-TTY,
 /// `--quiet` / `MLX_CODE_NO_PRETTY=1`, or explicit `HIPPO_NO_LOGO=1` /
@@ -42,6 +52,24 @@ pub fn enabled() -> bool {
     true
 }
 
+/// Pick the banner variant for the current terminal width. Returns `None`
+/// when the terminal is too narrow for either variant (caller should skip
+/// rendering the silhouette and just emit the tagline). When width detection
+/// fails, defaults to the compact variant — safer than gambling that the
+/// terminal is wide enough for the full banner.
+fn pick_variant() -> Option<&'static str> {
+    let cols = terminal_size::terminal_size()
+        .map(|(terminal_size::Width(w), _)| w)
+        .unwrap_or(COMPACT_MIN_COLS);
+    if cols >= FULL_MIN_COLS {
+        Some(HIPPO_LOGO_FULL)
+    } else if cols >= COMPACT_MIN_COLS {
+        Some(HIPPO_LOGO_COMPACT)
+    } else {
+        None
+    }
+}
+
 /// Print the logo to stderr.
 pub fn print() {
     if !enabled() {
@@ -54,9 +82,10 @@ pub fn print() {
     eprintln!();
     // The asset already ends each row with a reset, but trim trailing
     // blank lines so we own the spacing around the tagline.
-    let trimmed = HIPPO_LOGO.trim_end_matches('\n');
-    eprintln!("{}", trimmed);
-    eprintln!();
+    if let Some(art) = pick_variant() {
+        eprintln!("{}", art.trim_end_matches('\n'));
+        eprintln!();
+    }
     eprintln!(
         "          {dim}─ a lean coding agent · {a}MTPLX{dim} · qwen3.6-27b ─{r}",
         dim = dim,
@@ -71,20 +100,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn logo_asset_is_nonempty() {
+    fn logo_assets_are_nonempty() {
         assert!(
-            !HIPPO_LOGO.is_empty(),
+            !HIPPO_LOGO_FULL.is_empty(),
             "hippo-logo.txt must ship with the binary"
+        );
+        assert!(
+            !HIPPO_LOGO_COMPACT.is_empty(),
+            "hippo-only.txt must ship with the binary"
         );
     }
 
     #[test]
-    fn logo_asset_contains_ansi_escapes() {
-        // Sanity: the asset is supposed to be pre-colored. If somebody
+    fn logo_assets_contain_ansi_escapes() {
+        // Sanity: both assets are supposed to be pre-colored. If somebody
         // accidentally strips the escapes during a copy, fail loudly.
         assert!(
-            HIPPO_LOGO.contains('\x1b'),
+            HIPPO_LOGO_FULL.contains('\x1b'),
             "hippo-logo.txt should contain raw ANSI escape codes"
+        );
+        assert!(
+            HIPPO_LOGO_COMPACT.contains('\x1b'),
+            "hippo-only.txt should contain raw ANSI escape codes"
         );
     }
 

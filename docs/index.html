@@ -180,17 +180,17 @@
     .grad-5 { color: #d787ff; }
     .grad-6 { color: #d7afff; }
 
-    /* hippo (mood) PNG, rendered from the CLI's truecolor banner */
+    /* hippo + wordmark PNG, rendered from the CLI's truecolor banner */
     .hippo-png {
       display: block;
-      max-width: min(420px, 80vw);
+      max-width: min(720px, 90vw);
       height: auto;
       margin: 0 auto 24px;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       filter: drop-shadow(0 12px 28px rgba(124, 58, 237, 0.25));
     }
-    @media (max-width: 640px) { .hippo-png { max-width: 280px; } }
+    @media (max-width: 640px) { .hippo-png { max-width: 92vw; } }
 
     .tagline {
       margin-top: 22px;
@@ -538,10 +538,7 @@
 <!-- ─────────── HERO ─────────── -->
 <section class="hero">
   <div class="container">
-    <img src="mood-eng.png" alt="mood, the hippo-code mascot" class="hippo-png" width="900" height="576" />
-    <div class="ascii-wrap" aria-label="hippo code wordmark">
-<pre class="logo" aria-hidden="true"><span class="row"><span class="grad-1"> █        ▀                                                  █       </span></span><span class="row"><span class="grad-2"> █ ▄▄   ▄▄▄    ▄▄▄▄   ▄▄▄▄    ▄▄▄           ▄▄▄    ▄▄▄    ▄▄▄█   ▄▄▄ </span></span><span class="row"><span class="grad-3"> █▀  █    █    █▀ ▀█  █▀ ▀█  █▀ ▀█         █▀  ▀  █▀ ▀█  █▀ ▀█  █▀  █</span></span><span class="row"><span class="grad-4"> █   █    █    █   █  █   █  █   █         █      █   █  █   █  █▀▀▀▀</span></span><span class="row"><span class="grad-4"> █   █  ▄▄█▄▄  ██▄█▀  ██▄█▀  ▀█▄█▀         ▀█▄▄▀  ▀█▄█▀  ▀█▄██  ▀█▄▄▀</span></span><span class="row"><span class="grad-5">               █      █                                              </span></span><span class="row"><span class="grad-6">               ▀      ▀                                              </span></span></pre>
-    </div>
+    <img src="hippo-logo.png" alt="hippo code — the mood mascot with the wordmark" class="hippo-png" width="1874" height="650" />
 
     <p class="tagline">a <span class="accent">lean coding agent</span> for the local <span class="gold">MTPLX</span> model</p>
     <p class="hero-sub">Rust CLI <span class="dot">&middot;</span> 10 tools <span class="dot">&middot;</span> ~1.35K token prompt overhead <span class="dot">&middot;</span> qwen3.6-27b</p>
