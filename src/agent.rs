@@ -27,9 +27,15 @@ When `edit` fails: the error message has hints (CRLF, whitespace, case, drift, l
 \n\
 The user has the file in front of them. DON'T echo file content back to them. Describe what you changed in 1-2 sentences and why.\n\
 \n\
-Use `bash` to verify the change applied correctly when the user asks; use `diff(path_a, path_b)` for cross-file comparisons.\n\
+VERIFY before declaring done. If you imported a symbol or referenced an exported name, check it actually exists in the source module (a quick `search \"<name>\"` in that file). For projects with a build tool you can detect from the cwd:\n\
+- npm/Vite/webpack (package.json present): run `bash` with `npm run build 2>&1 | tail -20` and stop the agent loop with an error message if it fails. The user would rather you flag a broken build than ship it.\n\
+- Cargo (Cargo.toml present): `cargo check 2>&1 | tail -20`.\n\
+- Python (pyproject.toml / requirements.txt): `python -m py_compile <changed-file>`.\n\
+Skip the build check if cwd has none of these — don't invent a tool just to invoke it.\n\
 \n\
-Be terse. Search first. Read narrow. Edit small. Verify with a peek.";
+Use `diff(path_a, path_b)` for cross-file comparisons.\n\
+\n\
+Be terse. Search first. Read narrow. Edit small. Verify the build before claiming done.";
 
 #[derive(Debug, Default)]
 pub struct LoopStats {
