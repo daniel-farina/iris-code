@@ -28,6 +28,7 @@ pub const COMMANDS_COLON: &[&str] = &[
     ":q",
     ":stats",
     ":context",
+    ":queue",
     ":history",
     ":cwd",
     ":show-thinking",

@@ -19,6 +19,7 @@ mod sparkline;
 mod sticky_bar;
 mod theme;
 mod tools;
+mod typeahead;
 mod updater;
 
 use anyhow::{Context, Result};
@@ -529,14 +530,36 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
     let mut ctx_turns: u32 = resumed_turns as u32;
     let ctx_max_tokens: u32 = 64000; // matches the qwen3.6-27b-mtplx model's max_context_length
 
+    // Pending-message queue. Users can stage follow-up prompts via
+    // `/queue add <msg>` between turns; the loop will dequeue them as
+    // the next prompts automatically. Phase 2 will replace this with
+    // type-ahead capture during streaming.
+    let queue = typeahead::PendingQueue::new();
+
     // Inline tip block above the first prompt — shown once per chat session
     // so users discover slash commands and shortcuts without `/help`.
     print_chat_tips();
 
     loop {
+        // Source priority for the next user message:
+        //   1. Initial --prompt (one-time, on first iteration).
+        //   2. Pending queue (drained one item at a time across turns —
+        //      the user pre-staged these via /queue add or /queue <msg>).
+        //   3. Interactive readline.
         let user_msg = if let Some(p) = pending.take() {
             eprintln!("[hip] (using initial prompt as first turn)");
             p
+        } else if let Some(q) = queue.pop_front() {
+            // Show what we're auto-sending so the user sees turn-chaining.
+            eprintln!(
+                "{d}─ from queue ({n} remaining): {a}{q}{r}",
+                d = theme::dim(),
+                a = theme::accent(),
+                r = theme::RESET,
+                n = queue.len(),
+                q = q,
+            );
+            q
         } else {
             let prompt = "\x1b[1;36m> \x1b[0m";
             let line: RLResult<String> = rl.readline(prompt);
@@ -678,6 +701,56 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                     ctx_turns,
                     ctx_max_tokens,
                 );
+                continue;
+            }
+            ":queue" => {
+                let pending_items = queue.peek_all();
+                if pending_items.is_empty() {
+                    eprintln!(
+                        "{d}─ queue empty ─ stage messages with {a}/queue add <message>{d} (auto-sent before next prompt){r}",
+                        d = theme::dim(),
+                        a = theme::accent(),
+                        r = theme::RESET,
+                    );
+                } else {
+                    eprintln!(
+                        "{d}─ queue ({n} pending) ─{r}",
+                        d = theme::dim(),
+                        r = theme::RESET,
+                        n = pending_items.len(),
+                    );
+                    for (i, m) in pending_items.iter().enumerate() {
+                        let preview: String = m.chars().take(80).collect();
+                        eprintln!(
+                            "  {a}{n:>2}.{r} {p}",
+                            a = theme::accent(),
+                            r = theme::RESET,
+                            n = i + 1,
+                            p = preview,
+                        );
+                    }
+                }
+                continue;
+            }
+            ":queue clear" => {
+                let n = queue.len();
+                queue.clear();
+                eprintln!("[hip] cleared {n} queued message(s)");
+                continue;
+            }
+            cmd if cmd.starts_with(":queue add ") => {
+                let msg = cmd[":queue add ".len()..].trim();
+                if msg.is_empty() {
+                    eprintln!("[hip] usage: /queue add <message>");
+                } else {
+                    queue.push(msg);
+                    eprintln!(
+                        "{d}─ queued ({n} pending now) ─{r}",
+                        d = theme::dim(),
+                        r = theme::RESET,
+                        n = queue.len(),
+                    );
+                }
                 continue;
             }
             ":stats" => {
@@ -920,6 +993,11 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 eprintln!(
                     "  {a}/context{r}          show context size: tokens used vs max + turn count"
                 );
+                eprintln!("  {a}/queue{r}            list pending queued messages");
+                eprintln!(
+                    "  {a}/queue add <msg>{r}  stage a message — auto-sent as the next prompt"
+                );
+                eprintln!("  {a}/queue clear{r}      drop all queued messages");
                 eprintln!("  {a}/quit{r} / {a}/exit{r} / {a}/q{r}  exit");
                 eprintln!("  {d}exit / quit / bye{r}  exit (bare word, asks confirmation)");
                 eprintln!("  {d}Ctrl-C twice{r}       exit immediately");
