@@ -509,13 +509,10 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
         }
     };
     rl.set_helper(Some(repl::MlxHelper::new()));
-    // Multi-line newline bindings. Plain Enter still submits.
-    //   Alt+Enter   -> insert newline (universal, terminal sends \x1b\r)
-    //   Shift+Enter -> insert newline (modern terminals: csi-u / modifyOtherKeys)
-    //   Ctrl+J      -> insert newline (universal: ASCII 0x0A; works in every terminal)
-    // For Cmd+Enter on macOS: configure your terminal to send `\x1ba` on Cmd+Enter
-    // (iTerm2: Prefs > Keys > +, key Cmd+Enter, action "Send Escape Sequence: a Return").
-    // That makes Cmd+Enter behave identically to Alt+Enter.
+    // Multi-line newline bindings (plain Enter still submits):
+    //   Alt+Enter   — works on every terminal that sends ESC+CR for Alt
+    //   Shift+Enter — modern terminals with csi-u / modifyOtherKeys
+    //   Ctrl+J      — universal fallback (ASCII 0x0A)
     for ev in [
         KeyEvent::new('\r', Modifiers::ALT),
         KeyEvent::new('\r', Modifiers::SHIFT),
