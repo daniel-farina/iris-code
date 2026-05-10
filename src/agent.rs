@@ -86,18 +86,49 @@ pub async fn run_loop(
         // tiny ctok" symptom — finish_reason="stop" with empty content
         // means the model itself decided to end; "length" means we hit
         // max_tokens; missing means the server didn't send one.
+        //
+        // For "error" specifically, MTPLX ships a structured error payload
+        // alongside the chunk (see openai.py error_chunk). Surface it so the
+        // user sees the real server-side exception instead of an opaque
+        // "finish_reason=error" with no diagnosis hook.
         if let Some(reason) = res.finish_reason.as_deref() {
             if reason != "tool_calls" {
-                eprintln!(
-                    "\x1b[2m[hip] round {} finish_reason={} ctok={}\x1b[0m",
-                    round + 1,
-                    reason,
-                    res
-                        .usage
-                        .as_ref()
-                        .and_then(|u| u.completion_tokens)
-                        .unwrap_or(0),
-                );
+                let ctok = res
+                    .usage
+                    .as_ref()
+                    .and_then(|u| u.completion_tokens)
+                    .unwrap_or(0);
+                if reason == "error" {
+                    if let Some(err) = res.error.as_ref() {
+                        let msg = err.message.as_deref().unwrap_or("(no message)");
+                        let kind = err.kind.as_deref().unwrap_or("?");
+                        let status = err
+                            .status_code
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "?".to_string());
+                        eprintln!(
+                            "\x1b[2m[hip] round {} finish_reason=error ctok={} \x1b[31m{}/{}: {}\x1b[0m",
+                            round + 1,
+                            ctok,
+                            kind,
+                            status,
+                            msg,
+                        );
+                    } else {
+                        eprintln!(
+                            "\x1b[2m[hip] round {} finish_reason=error ctok={} \x1b[31m(server sent no error payload — likely upstream cutoff)\x1b[0m",
+                            round + 1,
+                            ctok,
+                        );
+                    }
+                } else {
+                    eprintln!(
+                        "\x1b[2m[hip] round {} finish_reason={} ctok={}\x1b[0m",
+                        round + 1,
+                        reason,
+                        ctok,
+                    );
+                }
             }
         }
 
