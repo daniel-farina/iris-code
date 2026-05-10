@@ -152,6 +152,25 @@
       height: auto;
       border-radius: 12px;
     }
+    .ascii-wrap {
+      display: inline-block;
+      text-align: left;
+      margin-top: 8px;
+      padding: 14px 20px;
+      background: linear-gradient(180deg, rgba(124, 58, 237, 0.06), rgba(124, 58, 237, 0));
+      border-radius: 14px;
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    pre.logo {
+      margin: 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      line-height: 1.1;
+      letter-spacing: 0;
+      white-space: pre;
+      text-shadow: 0 0 18px rgba(167, 139, 250, 0.25);
+    }
     pre.logo .row { display: block; }
     /* gradient stops mirror RIVER_GRADIENT */
     .grad-1 { color: #5f0087; }
@@ -161,17 +180,17 @@
     .grad-5 { color: #d787ff; }
     .grad-6 { color: #d7afff; }
 
-    /* hippo (mood) PNG, rendered from the CLI's truecolor banner */
+    /* hippo + wordmark PNG, rendered from the CLI's truecolor banner */
     .hippo-png {
       display: block;
-      max-width: min(420px, 80vw);
+      max-width: min(720px, 90vw);
       height: auto;
       margin: 0 auto 24px;
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       filter: drop-shadow(0 12px 28px rgba(124, 58, 237, 0.25));
     }
-    @media (max-width: 640px) { .hippo-png { max-width: 280px; } }
+    @media (max-width: 640px) { .hippo-png { max-width: 92vw; } }
 
     .tagline {
       margin-top: 22px;
@@ -476,7 +495,7 @@
     @media (max-width: 720px) {
       h1 { font-size: 28px; }
       h2 { font-size: 22px; }
-      pre.logo { font-size: 9px; }
+      pre.logo { font-size: 8px; }
       .alts { grid-template-columns: 1fr; }
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .stat .v { font-size: 22px; }
@@ -489,6 +508,7 @@
     }
     @media (max-width: 480px) {
       .hero-logo { max-width: 260px; }
+      pre.logo { font-size: 6.5px; }
       .stat-grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -518,10 +538,7 @@
 <!-- ─────────── HERO ─────────── -->
 <section class="hero">
   <div class="container">
-    <img src="mood.png" alt="mood, the hippo-code mascot" class="hippo-png" width="900" height="576" />
-    <div class="ascii-wrap" aria-label="hip logo">
-<pre class="logo" aria-hidden="true"><span class="row"><span class="grad-1">&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;     &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557; &#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="grad-2">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;    &#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span><span class="row"><span class="grad-3">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;  </span></span><span class="row"><span class="grad-4">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x2588;&#x2588;&#x2557;&#x2588;&#x2588;&#x2551;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2588;&#x2588;&#x2551;    &#x2588;&#x2588;&#x2551;     &#x2588;&#x2588;&#x2551;   &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2554;&#x2550;&#x2550;&#x255D;  </span></span><span class="row"><span class="grad-5">&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;  &#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2551;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2551;    &#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;&#x255A;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2554;&#x255D;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2588;&#x2557;</span></span><span class="row"><span class="grad-6">&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;  &#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x255D;&#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;     &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D; &#x255A;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x2550;&#x255D;</span></span></pre>
-    </div>
+    <img src="hippo-logo.png" alt="hippo code — the mood mascot with the wordmark" class="hippo-png" width="1874" height="650" />
 
     <p class="tagline">a <span class="accent">lean coding agent</span> for the local <span class="gold">MTPLX</span> model</p>
     <p class="hero-sub">Rust CLI <span class="dot">&middot;</span> 10 tools <span class="dot">&middot;</span> ~1.35K token prompt overhead <span class="dot">&middot;</span> qwen3.6-27b</p>

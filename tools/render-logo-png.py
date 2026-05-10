@@ -12,6 +12,15 @@ PAD = 24
 
 ANSI_RE = re.compile(r"\x1b\[([0-9;]*)m")
 
+# Quadrant-block characters: bits TL=8, TR=4, BL=2, BR=1.
+BLOCK_BITS = {
+    "▘": 8, "▝": 4, "▖": 2, "▗": 1,
+    "▀": 12, "▄": 3, "▌": 10, "▐": 5,
+    "▚": 9, "▞": 6,
+    "▙": 11, "▛": 14, "▜": 13, "▟": 7,
+    "█": 15,
+}
+
 
 def parse_segments(line: str):
     """Yield (text, fg, bg) tuples for the line. fg/bg are (r,g,b) or None."""
@@ -77,13 +86,22 @@ def main():
                 if ch == " ":
                     x += cell_w
                     continue
-                # For full-block characters, fill the cell directly with the
-                # fg color so adjacent block cells join seamlessly without
-                # antialiased glyph seams.
-                if ch == "█" and fg is not None:
-                    draw.rectangle(
-                        [x, y, x + cell_w, y + cell_h], fill=fg + (255,)
-                    )
+                # Block & half-block / quadrant chars: fill quadrants directly
+                # so adjacent cells join seamlessly without glyph antialiasing
+                # seams. Bits: TL=8, TR=4, BL=2, BR=1.
+                bits = BLOCK_BITS.get(ch)
+                if bits is not None and fg is not None:
+                    mx = x + cell_w // 2
+                    my = y + cell_h // 2
+                    color = fg + (255,)
+                    if bits & 8:  # TL
+                        draw.rectangle([x, y, mx, my], fill=color)
+                    if bits & 4:  # TR
+                        draw.rectangle([mx, y, x + cell_w, my], fill=color)
+                    if bits & 2:  # BL
+                        draw.rectangle([x, my, mx, y + cell_h], fill=color)
+                    if bits & 1:  # BR
+                        draw.rectangle([mx, my, x + cell_w, y + cell_h], fill=color)
                 else:
                     draw.text(
                         (x, y),
