@@ -92,15 +92,6 @@ struct Cli {
     #[arg(long, env = "MLX_CODE_SESSION", default_value = "mlx-code-default")]
     session: String,
 
-    /// Force a unique per-invocation session id for --print/agent runs
-    /// instead of the cwd-stable default. Use when a single project's session
-    /// has accumulated enough state that the MTPLX server is returning
-    /// finish_reason=error with 0 completion tokens (cache-bloat bug seen in
-    /// long cron loops on older MTPLX). Aliased as `--no-warm` for symmetry
-    /// with the prior `--warm-cache` opt-in.
-    #[arg(long, alias = "no-warm", env = "MLX_CODE_FRESH_SESSION")]
-    fresh_session: bool,
-
     /// MTPLX base URL.
     #[arg(long, env = "MLX_CODE_URL", default_value = "http://127.0.0.1:8088/v1")]
     url: String,
@@ -429,32 +420,37 @@ async fn main() -> Result<()> {
     let on_default_session = cli.session == "mlx-code-default";
     let resume_explicitly = cli.continue_last || cli.resume.is_some();
     if !going_interactive && on_default_session && !resume_explicitly {
-        if cli.fresh_session {
-            // Opt-out: per-invocation unique session id. Mostly here for
-            // long cron loops that ran into an old MTPLX cache-bloat bug
-            // where a single session returning finish_reason=error with 0
-            // completion tokens after ~20+ iters. If you're not in that
-            // scenario you almost certainly want the default warm path.
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            cli.session = format!("hip-print-{}-{}", now, std::process::id());
-        } else {
-            // Default: stable per-cwd session id so back-to-back hip --print
-            // invocations in the same project share the MTPLX prefix cache.
-            // The cwd hash keeps unrelated projects on independent sessions
-            // so cross-project work doesn't poison each other's KV cache.
-            use std::hash::{Hash, Hasher};
-            let cwd = std::env::current_dir()
-                .ok()
-                .and_then(|p| p.canonicalize().ok())
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "unknown".to_string());
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            cwd.hash(&mut hasher);
-            cli.session = format!("hip-warm-{:016x}", hasher.finish());
-        }
+        // Stable session id derived from (user@host, abs_cwd, model, tool-schema
+        // hash). Repeated hip invocations in the same project share MTPLX prefix
+        // cache; changing model or tool registry rotates the session so a stale
+        // cache built against a different schema can't silently poison results.
+        // Pattern lifted from opencode-context-cache.
+        use std::hash::{Hash, Hasher};
+        let cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unknown".to_string());
+        let user = std::env::var("USER").unwrap_or_else(|_| "anon".to_string());
+        let host = std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("HOST"))
+            .unwrap_or_else(|_| {
+                std::process::Command::new("hostname")
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "localhost".to_string())
+            });
+        let tools_fingerprint = serde_json::to_string(&tools::tool_specs(&tools::registry()))
+            .unwrap_or_default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        user.hash(&mut hasher);
+        host.hash(&mut hasher);
+        cwd.hash(&mut hasher);
+        cli.model.hash(&mut hasher);
+        tools_fingerprint.hash(&mut hasher);
+        cli.session = format!("hip-warm-{:016x}", hasher.finish());
     }
 
     let mut client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
