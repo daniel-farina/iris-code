@@ -32,13 +32,13 @@ const MARKER_PATH: &str = "~/.mlx-code/.welcomed";
 // directly. The runtime env vars below (MTPLX_SESSION_BANK_*) still need
 // to be set per-instance because they're env-overridable, not baked-in
 // defaults.
-// MTPLX repo + branch defaults. Override via env vars to test against
-// a fork or feature branch:
+// MTPLX repo + branch defaults — points at upstream main, which now
+// carries the fixes we cared about (sustained-profile abort relax,
+// env-override-on-auto, env-precedence, plus a recent qwen tool-call
+// contract fix). Override via env vars when validating a feature
+// branch or fork:
 //   HIP_MTPLX_REPO=https://github.com/me/MTPLX.git hip --setup
-//   HIP_MTPLX_BRANCH=daniel/dev-stack hip --setup
-// Useful when validating local fixes (e.g. our daniel-farina/MTPLX
-// daniel/dev-stack branch carries fixes that aren't merged upstream
-// yet) without committing to upstream main as the only install path.
+//   HIP_MTPLX_BRANCH=feature/foo hip --setup
 const MTPLX_REPO_URL_DEFAULT: &str = "https://github.com/youssofal/MTPLX";
 const MTPLX_BRANCH_DEFAULT: &str = "main";
 
