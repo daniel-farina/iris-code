@@ -356,28 +356,44 @@
     .t-bar    { color: #5b21b6; }
     .t-flag   { color: #f0abfc; }
 
-    /* ─────────── alternates (install) ─────────── */
-    .alts {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 14px;
-      margin-top: 16px;
+    /* ─────────── install tabs ─────────── */
+    .install-tabs {
+      margin-top: 24px;
     }
-    .alts .card {
+    .install-tabs .tab-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 14px;
+    }
+    .install-tabs .tab {
+      background: transparent;
+      border: 0;
+      border-bottom: 2px solid transparent;
+      color: var(--text-dim);
+      padding: 9px 14px;
+      font-family: 'Inter', sans-serif;
+      font-size: 13px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: color 120ms ease, border-color 120ms ease;
+      margin-bottom: -1px; /* overlap parent border so the active underline meets it */
+    }
+    .install-tabs .tab:hover { color: var(--accent); }
+    .install-tabs .tab[aria-selected="true"] {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .install-tabs .tab-panel {
       background: var(--bg-card);
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 14px 16px;
     }
-    .alts .card h4 {
-      margin: 0 0 8px;
-      font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--accent-gold);
-      font-weight: 700;
-    }
-    .alts .card pre {
+    .install-tabs .tab-panel[hidden] { display: none; }
+    .install-tabs .tab-panel pre {
       margin: 0;
       background: var(--bg-term);
       border: 1px solid var(--border);
@@ -496,7 +512,7 @@
       h1 { font-size: 28px; }
       h2 { font-size: 22px; }
       pre.logo { font-size: 8px; }
-      .alts { grid-template-columns: 1fr; }
+      .install-tabs .tab { padding: 8px 10px; font-size: 12.5px; }
       .stat-grid { grid-template-columns: repeat(2, 1fr); }
       .stat .v { font-size: 22px; }
       nav.top .links a:not(.theme-toggle):not(.gh) { display: none; }
@@ -522,12 +538,9 @@
       <span>hip</span>
     </div>
     <div class="links">
-      <a href="#whats-new">What's new</a>
       <a href="#install">Install</a>
       <a href="#what">What it does</a>
       <a href="#quickstart">Quickstart</a>
-      <a href="#architecture">Architecture</a>
-      <a href="#performance">Performance</a>
       <a class="gh" href="https://github.com/daniel-farina/hippo-code/releases/latest" target="_blank" rel="noopener">Releases</a>
       <a class="gh" href="https://github.com/daniel-farina/hippo-code" target="_blank" rel="noopener">GitHub</a>
       <button class="theme-toggle" id="themeBtn" aria-label="Toggle theme" title="Toggle light/dark">&#9789;</button>
@@ -540,40 +553,13 @@
   <div class="container">
     <img src="hippo-logo.png" alt="hippo code — the mood mascot with the wordmark" class="hippo-png" width="1874" height="650" />
 
-    <p class="tagline">a <span class="accent">lean coding agent</span> for the local <span class="gold">MTPLX</span> model</p>
-    <p class="hero-sub">Rust CLI <span class="dot">&middot;</span> 10 tools <span class="dot">&middot;</span> ~1.35K token prompt overhead <span class="dot">&middot;</span> qwen3.6-27b</p>
-    <p class="hero-sub"><a href="https://github.com/daniel-farina/hippo-code/releases/latest" target="_blank" rel="noopener" style="color: var(--accent-gold); font-weight: 600;">latest release</a> <span class="dot">&middot;</span> slash-command REPL <span class="dot">&middot;</span> first-run setup wizard <span class="dot">&middot;</span> <code style="background: var(--bg-term); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); color: var(--accent-soft); font-size: 12.5px;">hip --update</code> in place</p>
+    <p class="hero-sub">a <span class="accent">lean coding agent</span> <span class="dot">&middot;</span> experimental <span class="accent">MTPLX</span> for <span class="gold">Qwen3.6-27B-MTPLX-Optimized-Speed</span> <span class="dot">&middot;</span> built with Rust <span class="dot">&middot;</span> <a href="https://github.com/daniel-farina/hippo-code/releases/latest" target="_blank" rel="noopener" style="color: var(--accent-gold); font-weight: 600;">latest release</a></p>
 
     <div class="copybox">
       <span class="prompt">$</span>
       <span class="cmd" id="installCmd"><span class="bin">curl</span> -sSL <span class="url">https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh</span> | sh</span>
       <button class="copy-btn" data-copy="installCmd">COPY</button>
     </div>
-  </div>
-</section>
-
-<!-- ─────────── WHAT'S NEW ─────────── -->
-<section id="whats-new">
-  <div class="container">
-    <h2><span class="num">&#x2605;</span>What's new</h2>
-    <p class="subtitle">v0.3.8 brings a search-first agent prompt, a 4000-line <code>read</code> default, 128K-token context, persisted resume, and a refreshed mood-pigmy launch banner. The setup wizard now clones MTPLX upstream <code>main</code> directly &mdash; all eight perf PRs landed.</p>
-
-    <ul class="bullets">
-      <li><b><code>hip --resume</code> picker.</b> Arrow-key list of recent sessions (cap 100, 10-row scroll window, two-line entries with full cwd path). Selecting a row reloads its full conversation history &mdash; not just the session id, so the model picks up where it left off.</li>
-      <li><b>Queued follow-ups.</b> Press Enter while a turn is streaming to stage a follow-up message; the agent auto-chains through the queue between turns instead of dropping it.</li>
-      <li><b>Effectively uncapped <code>--max-tokens</code>.</b> Default raised to 128K to match the new 128K context window; the agent auto-continues on <code>finish_reason=length</code> truncation so long generations resume seamlessly.</li>
-      <li><b>Search-first system prompt.</b> Rewritten DEFAULT_SYSTEM_PROMPT around an explicit search-first playbook. A/B against an open-ended task: 2&times; faster wall time, 2.7&times; fewer output tokens, 4&times; more surgical edits &mdash; with no regression on targeted edits.</li>
-      <li><b>4000-line <code>read</code> default.</b> Was 200; bumped so the model gets the whole file on a typical 3500-line source instead of a truncated head + an early give-up. MAX_BYTES=1MiB still bounds the absolute worst case.</li>
-      <li><b>Mood-pigmy launch banner.</b> Refined truecolor mascot art (mascot name: <i>mood</i>) replaces the prior pigmy iteration. Same 14-line ANSI-truecolor format.</li>
-      <li><b>MTPLX upstream main.</b> The first-run wizard now clones <code>youssofal/MTPLX#main</code> directly &mdash; all eight perf PRs we were carrying landed. <code>MTPLX_SESSION_BANK_*</code> env vars (per_session 16G, max 32G, max_entries 24) are still set before spawn as per-instance tuning.</li>
-      <li><b>Slash &amp; colon commands.</b> Both <code>/help</code> and <code>:help</code> work; tab-completes after typing <code>/</code> or <code>:</code>; the empty buffer shows an inline hint of the most useful next move.</li>
-      <li><b><code>/new</code> vs <code>/reset</code>.</b> <code>/new</code> starts a fresh conversation - clears history <em>and</em> rotates the MTPLX session id so the prefix cache resets. <code>/reset</code> keeps the session id so you stay on a warm cache.</li>
-      <li><b><code>/context</code> usage tracker.</b> Shows current tokens vs the 128K window with input/completion split and turn count. After every response a one-line bar prints inline: <code>&#x2500; ctx 12.4K/128K (10%) &middot; 3 turns &#x2500;</code>, colored green &rarr; warn &rarr; bad past 75% / 90%.</li>
-      <li><b>Sticky bottom bar, resize-aware.</b> The live <code>tok / lines / tok-s / ttft</code> bar survives terminal resizes (SIGWINCH-aware) and falls back gracefully on dumb terminals.</li>
-      <li><b>Hippo-purple truecolor theme.</b> Default theme + bundled hippo logo. Double-Ctrl-C exits; bare <code>exit</code>, <code>quit</code>, <code>bye</code> exit with confirmation.</li>
-      <li><b>First-run setup wizard.</b> Probes for MTPLX, offers to clone &amp; install, downloads the model, starts the server in the background, then drops you straight into chat. Auto-detects Python &lt; 3.11 and offers <code>brew install python@3.12</code>; recreates stale <code>.venv</code> built with old Python; surfaces real pip errors inline.</li>
-      <li><b>In-place self-update.</b> <code>hip --update</code> downloads and replaces the binary from the latest GitHub release - no curl pipe, no Cargo rebuild.</li>
-    </ul>
   </div>
 </section>
 
@@ -589,39 +575,41 @@
       <button class="copy-btn" data-copy="installCmd2">COPY</button>
     </div>
 
-    <div class="alts">
-      <div class="card">
-        <h4>Cargo install (from git)</h4>
+    <div class="install-tabs">
+      <div class="tab-list" role="tablist" aria-label="Alternative install methods">
+        <button class="tab" role="tab" aria-selected="true"  data-tab="cargo">cargo</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="source">build from source</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="manual">manual download</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="upgrade">upgrade in place</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="configure">configure</button>
+        <button class="tab" role="tab" aria-selected="false" data-tab="wizard">first run</button>
+      </div>
+      <div class="tab-panel active" role="tabpanel" data-panel="cargo">
         <pre><span class="t-cmd">cargo install --git https://github.com/daniel-farina/hippo-code</span></pre>
       </div>
-      <div class="card">
-        <h4>Build from source</h4>
+      <div class="tab-panel" role="tabpanel" data-panel="source" hidden>
         <pre><span class="t-cmd">git clone https://github.com/daniel-farina/hippo-code
 cd hippo-code
 cargo build --release
 ./target/release/hip --help</span></pre>
       </div>
-      <div class="card">
-        <h4>Manual download</h4>
+      <div class="tab-panel" role="tabpanel" data-panel="manual" hidden>
         <pre><span class="t-cmd"># grab the latest release binary
 curl -LO https://github.com/daniel-farina/\
 hippo-code/releases/latest/download/hip
 chmod +x hip &amp;&amp; mv hip /usr/local/bin/</span></pre>
       </div>
-      <div class="card">
-        <h4>Upgrade in place</h4>
+      <div class="tab-panel" role="tabpanel" data-panel="upgrade" hidden>
         <pre><span class="t-cmd"># self-updater: pulls the latest
 # release binary and replaces yours
 hip --update</span></pre>
       </div>
-      <div class="card">
-        <h4>Point at your MTPLX server</h4>
+      <div class="tab-panel" role="tabpanel" data-panel="configure" hidden>
         <pre><span class="t-cmd">export MLX_CODE_URL=http://127.0.0.1:8088/v1
 export MLX_CODE_MODEL=mtplx-qwen36-27b-optimized-speed
 hip</span></pre>
       </div>
-      <div class="card">
-        <h4>First run? Let the wizard do it</h4>
+      <div class="tab-panel" role="tabpanel" data-panel="wizard" hidden>
         <pre><span class="t-cmd"># no MTPLX yet? hip will offer to
 # clone, install, download the model,
 # start the server, then drop into chat
@@ -691,103 +679,6 @@ hip</span></pre>
   theme: <span class="t-accent">hippo</span> &rarr; <span class="t-accent">light</span>
 
 <span class="t-bar">&mdash;[hip]&mdash; <span class="t-num">247</span> tok &mdash; <span class="t-num">18</span> lines &mdash; <span class="t-num">102.9</span> tok/s &mdash; ttft <span class="t-num">0.6</span>s &mdash; total <span class="t-num">3.0</span>s</span></pre>
-    </div>
-  </div>
-</section>
-
-<!-- ─────────── ARCHITECTURE ─────────── -->
-<section id="architecture">
-  <div class="container">
-    <h2><span class="num">4</span>Architecture</h2>
-    <p class="subtitle">No daemon, no TUI framework, no MCP. Just modules.</p>
-
-    <h3>Core (src/*.rs)</h3>
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>Module</th><th>Responsibility</th></tr></thead>
-        <tbody>
-          <tr><td class="mod">main.rs</td><td>CLI flag parsing, mode dispatch (one-shot, agent, chat, smoke, summary).</td></tr>
-          <tr><td class="mod">agent.rs</td><td>Tool-using agent loop &mdash; up to 30 rounds of stream &rarr; tool_calls &rarr; tool results.</td></tr>
-          <tr><td class="mod">client.rs</td><td>Thin HTTP/SSE client for the OpenAI-compatible MTPLX endpoint.</td></tr>
-          <tr><td class="mod">schema.rs</td><td>Serde types for the chat-completions wire shape (only fields we use).</td></tr>
-          <tr><td class="mod">repl.rs</td><td>rustyline Helper: <code>:command</code> completion, path completion, history.</td></tr>
-          <tr><td class="mod">pretty.rs</td><td>Pretty-print streamed think blocks, content, tool calls, tool results.</td></tr>
-          <tr><td class="mod">theme.rs</td><td>river / light / mono color themes &mdash; named accessors over 256-color ANSI.</td></tr>
-          <tr><td class="mod">logo.rs</td><td>Startup ASCII logo: 6-row "HIPPO" with hippo glyph + river-blue gradient.</td></tr>
-          <tr><td class="mod">sticky_bar.rs</td><td>Sticky bottom status bar via DECSTBM scroll regions, with safe fallback.</td></tr>
-          <tr><td class="mod">sparkline.rs</td><td>Tiny Unicode-block sparkline + small formatting helpers.</td></tr>
-          <tr><td class="mod">runlog.rs</td><td>Append-only JSONL run log at <code>~/.mlx-code/logs/runs.jsonl</code>.</td></tr>
-          <tr><td class="mod">read_cache.rs</td><td>Process-global content cache for the <code>read</code> tool within one run.</td></tr>
-          <tr><td class="mod">dry_run_log.rs</td><td>Accumulator of paths a dry run would have mutated; printed at end-of-run.</td></tr>
-          <tr><td class="mod">setup.rs</td><td>First-run wizard: probes for MTPLX, clones <code>youssofal/MTPLX#main</code>, installs deps, downloads the model, spawns the server, then drops into chat.</td></tr>
-          <tr><td class="mod">session_store.rs</td><td>Persists conversation history per session id and reloads it on <code>--resume</code>; not just rotating the session id.</td></tr>
-          <tr><td class="mod">typeahead.rs</td><td>Pending-message queue: <code>/queue add &lt;msg&gt;</code> stages follow-ups; the chat loop auto-dequeues each as the next prompt.</td></tr>
-          <tr><td class="mod">updater.rs</td><td><code>hip --update</code>: fetches the latest GitHub release binary and replaces the running executable in place.</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <h3>Tools (src/tools/*.rs)</h3>
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>Module</th><th>Tool</th></tr></thead>
-        <tbody>
-          <tr><td class="mod">tools/mod.rs</td><td>Tool registry &mdash; JSON-schema specs + dispatch to local executors.</td></tr>
-          <tr><td class="mod">tools/read.rs</td><td><code>read(path, offset?, limit?, around?, context=20)</code>; refuses &gt;1MB.</td></tr>
-          <tr><td class="mod">tools/grep.rs</td><td><code>grep(pattern, path?, glob?)</code> via the <code>ignore</code> crate, 50-hit cap.</td></tr>
-          <tr><td class="mod">tools/edit.rs</td><td><code>edit(path, old, new, replace_all?, dry_run?)</code>; empty <code>old</code> creates.</td></tr>
-          <tr><td class="mod">tools/bash.rs</td><td><code>bash(command, timeout_s?)</code> in <code>zsh -lc</code>, 16 KB output cap.</td></tr>
-          <tr><td class="mod">tools/list.rs</td><td><code>list(path)</code> directory listing.</td></tr>
-          <tr><td class="mod">tools/glob.rs</td><td><code>glob(pattern, path?)</code>, gitignore-aware, 200-path cap.</td></tr>
-          <tr><td class="mod">tools/search.rs</td><td><code>search(query, &hellip;)</code> with query expansion + definitions/files-only modes.</td></tr>
-          <tr><td class="mod">tools/diff.rs</td><td><code>diff(a, b, context=3)</code> LCS unified diff with <code>@@</code> hunks.</td></tr>
-          <tr><td class="mod">tools/tree.rs</td><td><code>tree(path?, depth=2, show_hidden?)</code>, gitignore-aware, 500 entries.</td></tr>
-          <tr><td class="mod">tools/peek_log.rs</td><td><code>peek_log(n=10, failed_only?)</code> &mdash; last N rows from runs.jsonl.</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-</section>
-
-<!-- ─────────── PERFORMANCE ─────────── -->
-<section id="performance">
-  <div class="container">
-    <h2><span class="num">5</span>Performance</h2>
-    <p class="subtitle">Measured on Apple Silicon M5 Max 128 GB against local MTPLX serving Qwen3.6-27B.</p>
-
-    <div class="stat-grid">
-      <div class="stat">
-        <div class="v">1353<span class="unit">tok</span></div>
-        <div class="l">prompt overhead</div>
-      </div>
-      <div class="stat gold">
-        <div class="v">9.6&times;</div>
-        <div class="l">lighter than opencode</div>
-      </div>
-      <div class="stat">
-        <div class="v">69</div>
-        <div class="l">tests passing</div>
-      </div>
-      <div class="stat gold">
-        <div class="v">943</div>
-        <div class="l">cumulative smoke passes / 0 fail</div>
-      </div>
-    </div>
-
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>Metric</th><th>Typical</th></tr></thead>
-        <tbody>
-          <tr><td>Prompt overhead (system + 10 tool specs)</td><td class="metric">~1.35K tokens</td></tr>
-          <tr><td>vs opencode parent-agent prompt</td><td class="metric">~13K tokens (9.6&times; heavier)</td></tr>
-          <tr><td>Cold one-shot TTFT (~250 input tokens)</td><td class="metric">15-30 s</td></tr>
-          <tr><td>Warm <code>--continue</code> TTFT</td><td class="metric">1-3 s (3-4&times; speedup)</td></tr>
-          <tr><td>Sustained decode rate</td><td class="metric">35-50 tok/s</td></tr>
-          <tr><td>Prefill rate at 80K context</td><td class="metric">565 tok/s</td></tr>
-          <tr><td>Test suite</td><td class="metric">69 tests, 0 failures</td></tr>
-          <tr><td>Smoke harness (cumulative)</td><td class="metric">943 passes, 0 failures</td></tr>
-        </tbody>
-      </table>
     </div>
   </div>
 </section>
@@ -866,6 +757,25 @@ hip</span></pre>
     try { document.execCommand('copy'); ok(); } catch (_) {}
     document.body.removeChild(ta);
   }
+
+  // ─── install tabs ────────────────────────────────────────────────────
+  document.querySelectorAll('.install-tabs').forEach(function (root) {
+    var tabs = root.querySelectorAll('.tab');
+    var panels = root.querySelectorAll('.tab-panel');
+    tabs.forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        var name = tab.getAttribute('data-tab');
+        tabs.forEach(function (t) {
+          t.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+        });
+        panels.forEach(function (p) {
+          var match = p.getAttribute('data-panel') === name;
+          p.classList.toggle('active', match);
+          if (match) { p.removeAttribute('hidden'); } else { p.setAttribute('hidden', ''); }
+        });
+      });
+    });
+  });
 </script>
 
 </body>
