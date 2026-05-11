@@ -9,15 +9,19 @@ use super::Tool;
 
 const MAX_BYTES: u64 = 1_048_576; // 1 MiB
 
-// Default line cap when the caller doesn't specify a `limit`. Was 200 — too
-// conservative for our 64K-context model. A 200-line cap means files like
-// the user's 3500-line index.html return only the first 200 lines + a
-// "[truncated]" marker, which trips the model into either re-reading in
-// chunks (slow) or giving up. Bumping to 4000 lines comfortably covers
-// most files in one shot (4000 lines ≈ 30K tokens, well within 64K) while
-// `MAX_BYTES` (1 MiB) still bounds the absolute worst case. Callers can
-// still pass a smaller `limit` for narrow reads.
-const DEFAULT_LIMIT: usize = 4000;
+// Default line cap when the caller doesn't specify a `limit`. Set low so the
+// model's reflex `read(path)` (no offset/limit) does not blow the prompt budget
+// on a multi-thousand-line file. The quadratic prefill on qwen3's global-
+// attention layers makes a single careless 30K-token read cost ~70s of TTFT,
+// and the bank then has no chance of serving subsequent rounds cheaply because
+// every read shifts the prefix.
+//
+// 200 lines comfortably covers most narrowly-scoped files (entry points, small
+// modules, configs). Larger reads must be explicit: pass `around=<line>` after
+// a search hit, or `offset` + `limit` for a known window. The result includes
+// a `[truncated at 200/<total>]` marker telling the model how much it's not
+// seeing, so it can re-request a wider window when warranted.
+const DEFAULT_LIMIT: usize = 200;
 
 pub fn tool() -> Tool {
     Tool {
@@ -26,7 +30,7 @@ pub fn tool() -> Tool {
             "type": "function",
             "function": {
                 "name": "read",
-                "description": "Read a UTF-8 text file slice. Default: up to 4000 lines from start. Use `around` for symmetric context around a target line, `offset`+`limit` for an explicit window. Refuses files >1MB.",
+                "description": "Read a UTF-8 text file slice. Default: 200 lines from start (small on purpose - large blind reads blow the prompt budget). After a search hit, use `around=<line>` with `context` for a symmetric window. For a known section, use `offset`+`limit`. Output shows `[truncated at N/<total>]` when the file extends beyond what you asked for, so you know to request more if needed. Refuses files >1MB.",
                 "parameters": {
                     "type": "object",
                     "properties": {
