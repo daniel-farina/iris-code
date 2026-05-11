@@ -373,6 +373,22 @@ impl MtplxClient {
             ),
         };
 
+        // Optional request-body dump for cache diagnostics. Set MLX_CODE_DUMP_REQ
+        // to a directory path to write each /v1/chat/completions body as JSON.
+        // Off unless the env var is set, so zero overhead in normal use.
+        if let Ok(dir) = std::env::var("MLX_CODE_DUMP_REQ") {
+            let _ = std::fs::create_dir_all(&dir);
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            let path = std::path::PathBuf::from(&dir)
+                .join(format!("req-{}-{}.json", stamp, std::process::id()));
+            if let Ok(json) = serde_json::to_string_pretty(&body) {
+                let _ = std::fs::write(&path, json);
+            }
+        }
+
         let started = Instant::now();
         let resp = self
             .http
