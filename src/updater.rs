@@ -275,6 +275,58 @@ fn check_mtplx_updates() {
     eprintln!();
     eprintln!("{d}─ checking MTPLX at {a}{}{d} ─{r}", install_dir.display());
 
+    // If hippo-code is currently configured to track a non-upstream
+    // MTPLX branch (i.e. a temporary fix branch), surface that to the
+    // user up front. They might be on plain upstream main and not
+    // realize hip has rolled the default to a fork.
+    if crate::setup::mtplx_is_on_fork_branch() {
+        let expected_repo = crate::setup::mtplx_repo_url();
+        let expected_branch = crate::setup::mtplx_branch();
+        eprintln!(
+            "{w}!{r} hip is tracking a non-upstream MTPLX branch: {a}{}{r} @ {a}{}{r}",
+            expected_repo, expected_branch
+        );
+        eprintln!("  {d}{}{r}", crate::setup::MTPLX_TRACKING_NOTE);
+
+        // If their actual checkout is still on upstream main, tell them
+        // how to align with hip's tracked branch. Don't auto-rewrite
+        // remotes — that's user-visible state change.
+        let remote_url = Command::new("git")
+            .args(["-C", &dir_str, "remote", "get-url", "origin"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().trim_end_matches(".git").to_string())
+            .unwrap_or_default();
+        let current_branch_for_notice = Command::new("git")
+            .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let expected_repo_norm = expected_repo.trim_end_matches(".git");
+        if remote_url != expected_repo_norm || current_branch_for_notice != expected_branch {
+            eprintln!(
+                "  {d}your local checkout is on {a}{}{d} @ {a}{}{d}.{r}",
+                if remote_url.is_empty() { "<no-remote>" } else { remote_url.as_str() },
+                if current_branch_for_notice.is_empty() {
+                    "<detached>"
+                } else {
+                    current_branch_for_notice.as_str()
+                }
+            );
+            eprintln!(
+                "  {d}to align, run inside the MTPLX checkout:{r}\n    \
+                 {a}git remote set-url origin {}{r}\n    \
+                 {a}git fetch origin{r}\n    \
+                 {a}git checkout {}{r}",
+                expected_repo, expected_branch
+            );
+            eprintln!();
+        }
+    }
+
     let fetch = Command::new("git")
         .args(["-C", &dir_str, "fetch", "origin", "--quiet"])
         .status();
