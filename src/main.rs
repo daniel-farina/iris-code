@@ -8,6 +8,7 @@ mod agent;
 mod client;
 mod dry_run_log;
 mod logo;
+mod mtplx_runner;
 mod pretty;
 mod prune;
 mod read_cache;
@@ -259,6 +260,20 @@ struct Cli {
     /// the swap; restart iris to use the new version.
     #[arg(long)]
     update: bool,
+
+    /// Spawn the MTPLX server in the background with the validated
+    /// optimal config (Qwen3.6-27B, MTP depth 3, sustained profile,
+    /// 128K context). Requires the brew install of MTPLX and the
+    /// model already downloaded under ~/.mtplx/models/. Exits after
+    /// the server binds :8088 (or after 5 min timeout).
+    #[arg(long = "start-mtplx")]
+    start_mtplx: bool,
+
+    /// Stop the running MTPLX server (if any) and respawn it with the
+    /// validated optimal config. Use this after `brew upgrade mtplx` or
+    /// when you've drifted from the canonical config.
+    #[arg(long = "restart-mtplx")]
+    restart_mtplx: bool,
 }
 
 impl Cli {
@@ -369,6 +384,47 @@ async fn main() -> Result<()> {
     // --update: download + install latest release, exit.
     if cli.update {
         updater::do_update().await?;
+        return Ok(());
+    }
+
+    // --start-mtplx / --restart-mtplx: spawn (or respawn) the MTPLX server
+    // with the validated optimal config and exit. Both go through the same
+    // path; --restart additionally tears down anything currently on :8088.
+    if cli.start_mtplx || cli.restart_mtplx {
+        if cli.restart_mtplx {
+            if let Some(pid) = mtplx_runner::running_pid() {
+                eprintln!("\x1b[2mstopping running MTPLX (pid {})...\x1b[0m", pid);
+                mtplx_runner::stop_running_mtplx(Duration::from_secs(15));
+            }
+        } else if mtplx_runner::running_pid().is_some() {
+            eprintln!(
+                "\x1b[33m!\x1b[0m MTPLX is already running on :{}. Use \x1b[36m--restart-mtplx\x1b[0m to replace it.",
+                mtplx_runner::OPTIMAL_PORT
+            );
+            return Ok(());
+        }
+        let pid = mtplx_runner::start_mtplx_optimal_background()
+            .context("failed to spawn MTPLX with optimal config")?;
+        eprintln!(
+            "\x1b[32m✓\x1b[0m MTPLX spawned (pid {}); waiting for model load...",
+            pid
+        );
+        eprintln!(
+            "\x1b[2m  log: tail -f {}\x1b[0m",
+            mtplx_runner::log_file().display()
+        );
+        let up = mtplx_runner::wait_until_listening(Duration::from_secs(300)).await;
+        if up {
+            eprintln!(
+                "\x1b[32m✓\x1b[0m MTPLX is listening on :{}",
+                mtplx_runner::OPTIMAL_PORT
+            );
+        } else {
+            eprintln!(
+                "\x1b[33m!\x1b[0m MTPLX didn't bind within 5 min; tail {} for diagnostics",
+                mtplx_runner::log_file().display()
+            );
+        }
         return Ok(());
     }
 

@@ -175,7 +175,7 @@ pub async fn do_update() -> Result<()> {
 
     if !cmp_version(&latest, current).is_gt() {
         eprintln!("{g}✓{r} already on the latest version ({current})");
-        check_mtplx_updates();
+        check_mtplx_updates().await;
         return Ok(());
     }
 
@@ -236,7 +236,7 @@ pub async fn do_update() -> Result<()> {
 
     eprintln!("{g}✓{r} installed {a}{}{r} at {}", latest, dest.display());
     eprintln!("{d}restart hip to use the new version{r}");
-    check_mtplx_updates();
+    check_mtplx_updates().await;
     Ok(())
 }
 
@@ -244,7 +244,7 @@ pub async fn do_update() -> Result<()> {
 /// local MTPLX checkout for upstream commits and offer to pull. Silent
 /// no-op when MTPLX isn't installed or the checkout isn't a git repo,
 /// so it can't make `hip --update` worse than it was.
-fn check_mtplx_updates() {
+async fn check_mtplx_updates() {
     use crate::setup::{prompt_mtplx_source, MtplxSource};
     use crate::theme::{accent, dim, good, warn, RESET};
     use std::process::Command;
@@ -274,6 +274,34 @@ fn check_mtplx_updates() {
         MtplxInstall::Brew { formula, version } => {
             eprintln!("  {d}install{r}: {a}{}{r} {d}(Homebrew){r}", formula);
             eprintln!("  {d}version{r}: {a}{}{r}", version);
+
+            // Compare the running command line against our canonical
+            // optimal config and surface any deltas. Done BEFORE the
+            // upgrade check so the user sees config status even when
+            // they're already up to date.
+            let server_running = crate::mtplx_runner::running_pid().is_some();
+            if server_running {
+                let cmd = crate::mtplx_runner::running_command_line().unwrap_or_default();
+                let delta = crate::mtplx_runner::config_deltas(&cmd);
+                if delta.is_optimal() {
+                    eprintln!("  {d}config{r}:  {g}optimal{r}");
+                } else {
+                    eprintln!(
+                        "  {d}config{r}:  {w}suboptimal{r} {d}({} delta(s)){r}",
+                        delta.missing_or_wrong.len()
+                    );
+                    for missing in &delta.missing_or_wrong {
+                        eprintln!("    {w}-{r} missing/wrong: {a}{}{r}", missing);
+                    }
+                    eprintln!(
+                        "  {d}fix{r}: run {a}hip --restart-mtplx{r} to relaunch with optimal config"
+                    );
+                }
+            } else {
+                eprintln!("  {d}config{r}:  {w}not running{r}");
+                eprintln!("  {d}fix{r}: run {a}hip --start-mtplx{r} to launch with optimal config");
+            }
+
             match brew_mtplx_latest_available() {
                 Some(latest) => {
                     eprintln!("  {w}!{r} a newer MTPLX is available: {a}{}{r}", latest);
@@ -283,7 +311,48 @@ fn check_mtplx_updates() {
                         .status();
                     if matches!(status, Ok(s) if s.success()) {
                         eprintln!("{g}✓{r} MTPLX upgraded via Homebrew");
-                        flag_running_server();
+
+                        // brew upgrade replaced the venv on disk but the
+                        // running process still has the old code mapped.
+                        // Stop it and respawn with optimal config so the
+                        // user lands on the new binaries immediately.
+                        if server_running {
+                            eprintln!(
+                                "  {d}stopping old MTPLX server (pid {}) and starting new one with optimal config...{r}",
+                                crate::mtplx_runner::running_pid().unwrap_or(0)
+                            );
+                            crate::mtplx_runner::stop_running_mtplx(
+                                std::time::Duration::from_secs(15),
+                            );
+                            match crate::mtplx_runner::start_mtplx_optimal_background() {
+                                Ok(pid) => {
+                                    eprintln!(
+                                        "  {g}✓{r} new MTPLX spawned (pid {a}{}{r}), waiting for model load...",
+                                        pid
+                                    );
+                                    let up = crate::mtplx_runner::wait_until_listening(
+                                        std::time::Duration::from_secs(300),
+                                    )
+                                    .await;
+                                    if up {
+                                        eprintln!(
+                                            "  {g}✓{r} MTPLX is listening on :{}",
+                                            crate::mtplx_runner::OPTIMAL_PORT
+                                        );
+                                    } else {
+                                        eprintln!(
+                                            "  {w}!{r} MTPLX didn't bind within 5 min; tail {a}{}{r} for diagnostics",
+                                            crate::mtplx_runner::log_file().display()
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
+                                }
+                            }
+                        } else {
+                            flag_running_server();
+                        }
                     } else {
                         eprintln!(
                             "  {w}!{r} `brew upgrade mtplx` failed; run it manually to diagnose."
