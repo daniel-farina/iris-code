@@ -266,21 +266,29 @@ fn check_mtplx_updates() {
             std::path::PathBuf::from(shellexpand::tilde("~/code/MTPLX").into_owned())
         });
 
-    if !install_dir.exists() || !install_dir.join(".git").exists() {
-        // Either MTPLX isn't installed via git, or it lives somewhere
-        // exotic and the user can update it themselves. Don't be noisy.
-        return;
-    }
-
-    let dir_str = install_dir.to_string_lossy().to_string();
     eprintln!();
     eprintln!(
         "{d}─ checking MTPLX at {a}{}{d} ─{r}",
         install_dir.display()
     );
 
-    // Detect current remote + branch so we can show them what's there now
-    // and default the picker to "keep current source".
+    if !install_dir.exists() {
+        eprintln!("  {w}!{r} no MTPLX checkout found. Run {a}hip --setup{r} to install one.");
+        return;
+    }
+    if !install_dir.join(".git").exists() {
+        eprintln!(
+            "  {w}!{r} {} exists but is not a git checkout; cannot check version.",
+            install_dir.display()
+        );
+        return;
+    }
+
+    let dir_str = install_dir.to_string_lossy().to_string();
+
+    // Detect current remote + branch + local HEAD so we can show them
+    // exactly what version they have and default the picker to "keep
+    // current source".
     let current_remote = Command::new("git")
         .args(["-C", &dir_str, "remote", "get-url", "origin"])
         .output()
@@ -295,21 +303,55 @@ fn check_mtplx_updates() {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
+    let head_short = Command::new("git")
+        .args(["-C", &dir_str, "rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let head_date = Command::new("git")
+        .args(["-C", &dir_str, "log", "-1", "--format=%cs", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
 
-    if current_branch.is_empty() || current_branch == "HEAD" {
-        eprintln!("{w}!{r} MTPLX checkout has no branch (detached HEAD); leaving it alone.");
-        return;
-    }
-
+    // Print the version banner BEFORE any branching / prompts so the
+    // user always sees what they currently have, even if the rest of
+    // the function bails out for some reason.
+    let label_hint = MtplxSource::classify(&current_remote, &current_branch);
     eprintln!(
-        "  {d}current{r}: {a}{}{r} @ {a}{}{r}",
+        "  {d}current{r}: {a}{}{r} @ {a}{}{r}  {d}[{}]{r}",
         if current_remote.is_empty() {
             "<no-remote>"
         } else {
             current_remote.as_str()
         },
-        current_branch
+        if current_branch.is_empty() {
+            "<unknown>"
+        } else {
+            current_branch.as_str()
+        },
+        label_hint
     );
+    if !head_short.is_empty() {
+        eprintln!(
+            "  {d}version{r}: {a}{}{r}{}",
+            head_short,
+            if head_date.is_empty() {
+                String::new()
+            } else {
+                format!(" {d}({}){r}", head_date)
+            }
+        );
+    }
+
+    if current_branch.is_empty() || current_branch == "HEAD" {
+        eprintln!("  {w}!{r} MTPLX checkout has no branch (detached HEAD); leaving it alone.");
+        return;
+    }
 
     // Default the picker to whatever the checkout is on (so "just hit
     // enter" keeps it on the same source). Falls back to upstream when
