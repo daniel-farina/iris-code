@@ -452,8 +452,8 @@ async fn main() -> Result<()> {
                     .map(|s| s.trim().to_string())
                     .unwrap_or_else(|| "localhost".to_string())
             });
-        let tools_fingerprint = serde_json::to_string(&tools::tool_specs(&tools::registry()))
-            .unwrap_or_default();
+        let tools_fingerprint =
+            serde_json::to_string(&tools::tool_specs(&tools::registry())).unwrap_or_default();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         user.hash(&mut hasher);
         host.hash(&mut hasher);
@@ -1182,7 +1182,15 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 }
             }
         } else {
-            match agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, sampler_opts(cli), cli.no_auto_prune).await {
+            match agent::run_loop_with_prune(
+                client,
+                &mut conv,
+                cli.max_rounds,
+                sampler_opts(cli),
+                cli.no_auto_prune,
+            )
+            .await
+            {
                 Ok(stats) => {
                     log.rounds = Some(stats.rounds);
                     log.tool_calls = Some(stats.total_tool_calls);
@@ -1457,7 +1465,14 @@ async fn run_chat_fallback(
             out.write_all(b"\n").await.ok();
             conv.push(ChatMessage::assistant_text(res.content.clone()));
         } else {
-            let _ = agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, sampler_opts(cli), cli.no_auto_prune).await?;
+            let _ = agent::run_loop_with_prune(
+                client,
+                &mut conv,
+                cli.max_rounds,
+                sampler_opts(cli),
+                cli.no_auto_prune,
+            )
+            .await?;
         }
     }
 }
@@ -1500,7 +1515,14 @@ async fn run_turns(cli: &Cli, client: &mut MtplxClient, turns: &[String]) -> Res
             out.flush().await.ok();
             conv.push(ChatMessage::assistant_text(res.content.clone()));
         } else {
-            let _ = agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, opts, cli.no_auto_prune).await?;
+            let _ = agent::run_loop_with_prune(
+                client,
+                &mut conv,
+                cli.max_rounds,
+                opts,
+                cli.no_auto_prune,
+            )
+            .await?;
         }
         // Persist between turns so the prefix cache extends naturally.
         session_store::save(client.session_id(), &conv);
@@ -1606,7 +1628,15 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
     };
     let mut log = runlog::RunLog::new("agent", client.session_id(), client.model(), prompt);
     let pre_snap = if cli.diff { Some(snap_cwd()) } else { None };
-    let stats = match agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, sampler_opts(cli), cli.no_auto_prune).await {
+    let stats = match agent::run_loop_with_prune(
+        client,
+        &mut conv,
+        cli.max_rounds,
+        sampler_opts(cli),
+        cli.no_auto_prune,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => {
             log.success = false;

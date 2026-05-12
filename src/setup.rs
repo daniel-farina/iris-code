@@ -173,7 +173,8 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
     eprintln!("  {a}hippo-code{r} talks to a local MTPLX server. We can install our fork");
     eprintln!(
         "  ({a}{}{r}, branch {a}{}{r})",
-        mtplx_repo_url(), mtplx_branch()
+        mtplx_repo_url(),
+        mtplx_branch()
     );
     eprintln!("  and have it ready in a few steps.");
     eprintln!();

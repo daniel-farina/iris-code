@@ -273,7 +273,10 @@ fn check_mtplx_updates() {
 
     let dir_str = install_dir.to_string_lossy().to_string();
     eprintln!();
-    eprintln!("{d}─ checking MTPLX at {a}{}{d} ─{r}", install_dir.display());
+    eprintln!(
+        "{d}─ checking MTPLX at {a}{}{d} ─{r}",
+        install_dir.display()
+    );
 
     // If hippo-code is currently configured to track a non-upstream
     // MTPLX branch (i.e. a temporary fix branch), surface that to the
@@ -309,7 +312,11 @@ fn check_mtplx_updates() {
         if remote_url != expected_repo_norm || current_branch_for_notice != expected_branch {
             eprintln!(
                 "  {d}your local checkout is on {a}{}{d} @ {a}{}{d}.{r}",
-                if remote_url.is_empty() { "<no-remote>" } else { remote_url.as_str() },
+                if remote_url.is_empty() {
+                    "<no-remote>"
+                } else {
+                    remote_url.as_str()
+                },
                 if current_branch_for_notice.is_empty() {
                     "<detached>"
                 } else {

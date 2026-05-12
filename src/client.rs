@@ -382,8 +382,11 @@ impl MtplxClient {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            let path = std::path::PathBuf::from(&dir)
-                .join(format!("req-{}-{}.json", stamp, std::process::id()));
+            let path = std::path::PathBuf::from(&dir).join(format!(
+                "req-{}-{}.json",
+                stamp,
+                std::process::id()
+            ));
             if let Ok(json) = serde_json::to_string_pretty(&body) {
                 let _ = std::fs::write(&path, json);
             }
