@@ -6,16 +6,20 @@
 //!       yes -> check for loaded model
 //!         yes -> proceed
 //!         no  -> print model-pull hint, exit
-//!       no  -> ask: install MTPLX from daniel-farina/MTPLX fork? (Y/n)
-//!         yes -> git clone + pip install -e .
-//!                ask: start in background or new terminal? (B/n/skip)
-//!                  bg     -> spawn detached, write PID + log paths
-//!                  new    -> print exact command and exit
-//!                  skip   -> print command for later
-//!         no  -> print manual setup instructions, exit
+//!       no  -> ask: which MTPLX source? (upstream youssofal/MTPLX -- recommended,
+//!              or daniel-farina/MTPLX fork for experimentation)
+//!         then ask: install MTPLX now? (Y/n)
+//!           yes -> git clone + pip install -e .
+//!                  ask: start in background or new terminal? (B/n/skip)
+//!                    bg     -> spawn detached, write PID + log paths
+//!                    new    -> print exact command and exit
+//!                    skip   -> print command for later
+//!           no  -> print manual setup instructions, exit
 //!
 //! State: marker file at `~/.mlx-code/.welcomed` suppresses the wizard on
 //! subsequent runs. `iris --setup` re-runs it regardless.
+//! Picked MTPLX source persisted to `~/.mlx-code/mtplx-source.json` so the
+//! updater knows which remote to point a fresh checkout at.
 
 use anyhow::{anyhow, Result};
 use std::io::Write;
@@ -32,33 +36,188 @@ const MARKER_PATH: &str = "~/.mlx-code/.welcomed";
 // directly. The runtime env vars below (MTPLX_SESSION_BANK_*) still need
 // to be set per-instance because they're env-overridable, not baked-in
 // defaults.
-// MTPLX repo + branch defaults — upstream main carries the SessionBank
-// commit-tokens fix (upstream commit f1cbd97, equivalent to closed
-// PR #55 / issue #54). No fork needed.
-//
-// Override via env vars when validating a feature branch or fork:
-//   HIP_MTPLX_REPO=https://github.com/me/MTPLX.git hip --setup
-//   HIP_MTPLX_BRANCH=feature/foo hip --setup
-const MTPLX_REPO_URL_DEFAULT: &str = "https://github.com/youssofal/MTPLX";
-const MTPLX_BRANCH_DEFAULT: &str = "main";
-pub const MTPLX_REPO_URL_UPSTREAM: &str = "https://github.com/youssofal/MTPLX";
-pub const MTPLX_TRACKING_NOTE: &str =
-    "tracking the upstream `main` branch. Override with HIP_MTPLX_REPO / \
-     HIP_MTPLX_BRANCH to test a fork or feature branch.";
+// MTPLX has two well-known sources:
+//   * upstream            — youssofal/MTPLX main: stable, recommended.
+//   * daniel-farina fork  — daniel-farina/MTPLX main: experimentation
+//                           (perf branches, in-flight fixes that haven't
+//                           landed upstream yet).
+// The user picks one in the setup wizard and at `hip --update`. The picked
+// source is persisted to `~/.mlx-code/mtplx-source.json`; env vars
+// HIP_MTPLX_REPO / HIP_MTPLX_BRANCH still override everything for one-off
+// experiments. Resolution order: env > persisted > upstream default.
+pub const MTPLX_UPSTREAM_REPO: &str = "https://github.com/youssofal/MTPLX";
+pub const MTPLX_UPSTREAM_BRANCH: &str = "main";
+pub const MTPLX_FORK_REPO: &str = "https://github.com/daniel-farina/MTPLX";
+pub const MTPLX_FORK_BRANCH: &str = "main";
+
+const MTPLX_SOURCE_CONFIG_PATH: &str = "~/.mlx-code/mtplx-source.json";
+
+/// Which of the two well-known MTPLX sources the user picked, plus the
+/// resolved repo+branch. `label` is the stable string written to the
+/// config file ("upstream" | "fork" | "custom").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MtplxSource {
+    pub label: &'static str,
+    pub repo: String,
+    pub branch: String,
+}
+
+impl MtplxSource {
+    pub fn upstream() -> Self {
+        Self {
+            label: "upstream",
+            repo: MTPLX_UPSTREAM_REPO.to_string(),
+            branch: MTPLX_UPSTREAM_BRANCH.to_string(),
+        }
+    }
+    pub fn fork() -> Self {
+        Self {
+            label: "fork",
+            repo: MTPLX_FORK_REPO.to_string(),
+            branch: MTPLX_FORK_BRANCH.to_string(),
+        }
+    }
+    /// Best-effort label inference from a repo URL + branch (handles
+    /// trailing `.git`, both http/https). Returns "custom" if nothing
+    /// matches.
+    pub fn classify(repo: &str, branch: &str) -> &'static str {
+        let norm = repo.trim_end_matches('/').trim_end_matches(".git");
+        if (norm == MTPLX_UPSTREAM_REPO || norm == MTPLX_UPSTREAM_REPO.trim_end_matches(".git"))
+            && branch == MTPLX_UPSTREAM_BRANCH
+        {
+            "upstream"
+        } else if (norm == MTPLX_FORK_REPO || norm == MTPLX_FORK_REPO.trim_end_matches(".git"))
+            && branch == MTPLX_FORK_BRANCH
+        {
+            "fork"
+        } else {
+            "custom"
+        }
+    }
+}
+
+/// Read the persisted source choice from disk. Returns None on missing /
+/// unreadable / malformed file - callers fall back to upstream.
+pub fn read_persisted_source() -> Option<MtplxSource> {
+    let p = expand(MTPLX_SOURCE_CONFIG_PATH);
+    let body = std::fs::read_to_string(&p).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let repo = v.get("repo").and_then(|x| x.as_str())?.to_string();
+    let branch = v.get("branch").and_then(|x| x.as_str())?.to_string();
+    let label = MtplxSource::classify(&repo, &branch);
+    Some(MtplxSource {
+        label,
+        repo,
+        branch,
+    })
+}
+
+/// Persist the user's source choice so future invocations (and the
+/// updater) remember which remote to track.
+pub fn persist_source(src: &MtplxSource) {
+    let p = expand(MTPLX_SOURCE_CONFIG_PATH);
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let body = serde_json::json!({
+        "label": src.label,
+        "repo": src.repo,
+        "branch": src.branch,
+    });
+    let _ = std::fs::write(&p, body.to_string());
+}
 
 pub fn mtplx_repo_url() -> String {
-    std::env::var("HIP_MTPLX_REPO").unwrap_or_else(|_| MTPLX_REPO_URL_DEFAULT.to_string())
+    if let Ok(v) = std::env::var("HIP_MTPLX_REPO") {
+        return v;
+    }
+    if let Some(s) = read_persisted_source() {
+        return s.repo;
+    }
+    MTPLX_UPSTREAM_REPO.to_string()
 }
 pub fn mtplx_branch() -> String {
-    std::env::var("HIP_MTPLX_BRANCH").unwrap_or_else(|_| MTPLX_BRANCH_DEFAULT.to_string())
+    if let Ok(v) = std::env::var("HIP_MTPLX_BRANCH") {
+        return v;
+    }
+    if let Some(s) = read_persisted_source() {
+        return s.branch;
+    }
+    MTPLX_UPSTREAM_BRANCH.to_string()
 }
 
-/// True when hip is currently tracking a non-upstream MTPLX repo/branch
-/// (i.e. a temporary fix branch in our fork waiting on an upstream merge).
-/// Surfacing this to users so they understand what `hip --update` is
-/// pulling and why.
-pub fn mtplx_is_on_fork_branch() -> bool {
-    mtplx_repo_url() != MTPLX_REPO_URL_UPSTREAM || mtplx_branch() != "main"
+/// Interactive picker for the MTPLX source. Shows both well-known sources
+/// with a "(recommended)" tag on upstream, accepts u/f/c (custom is held
+/// open for users with env-var overrides). On non-TTY, returns the
+/// `default` source unchanged so CI / piped invocations stay deterministic.
+pub fn prompt_mtplx_source(default: MtplxSource) -> MtplxSource {
+    use std::io::IsTerminal;
+    let d = theme::dim();
+    let a = theme::accent();
+    let g = theme::good();
+    let r = RESET;
+
+    let default_char = match default.label {
+        "fork" => 'f',
+        _ => 'u',
+    };
+
+    // Env-var override short-circuits the prompt entirely so power users
+    // aren't pestered.
+    if std::env::var("HIP_MTPLX_REPO").is_ok() || std::env::var("HIP_MTPLX_BRANCH").is_ok() {
+        let repo = std::env::var("HIP_MTPLX_REPO").unwrap_or_else(|_| default.repo.clone());
+        let branch = std::env::var("HIP_MTPLX_BRANCH").unwrap_or_else(|_| default.branch.clone());
+        let label = MtplxSource::classify(&repo, &branch);
+        eprintln!(
+            "  {d}MTPLX source pinned by env vars: {a}{}{d} @ {a}{}{r}",
+            repo, branch
+        );
+        return MtplxSource {
+            label,
+            repo,
+            branch,
+        };
+    }
+
+    eprintln!();
+    eprintln!("  {a}?{r} pick MTPLX source:");
+    let mark_u = if default_char == 'u' {
+        format!("{g}*{r}")
+    } else {
+        " ".to_string()
+    };
+    let mark_f = if default_char == 'f' {
+        format!("{g}*{r}")
+    } else {
+        " ".to_string()
+    };
+    eprintln!(
+        "     {mark_u} {a}u{r}  upstream {d}({} @ {}){r}  {g}recommended (stable){r}",
+        MTPLX_UPSTREAM_REPO, MTPLX_UPSTREAM_BRANCH
+    );
+    eprintln!(
+        "     {mark_f} {a}f{r}  daniel-farina fork {d}({} @ {}){r}  {d}experimentation{r}",
+        MTPLX_FORK_REPO, MTPLX_FORK_BRANCH
+    );
+    eprint!("  {a}>{r} [u/f, default {}] ", default_char);
+    let _ = std::io::stderr().flush();
+
+    if !std::io::stdin().is_terminal() {
+        eprintln!("{}", default_char);
+        return default;
+    }
+    let mut s = String::new();
+    if std::io::stdin().read_line(&mut s).is_err() {
+        return default;
+    }
+    let t = s.trim().to_ascii_lowercase();
+    let chosen = match t.chars().next().unwrap_or(default_char) {
+        'f' => MtplxSource::fork(),
+        'u' => MtplxSource::upstream(),
+        _ => default,
+    };
+    persist_source(&chosen);
+    chosen
 }
 const MTPLX_DEFAULT_INSTALL_DIR: &str = "~/code/MTPLX";
 const MTPLX_PID_FILE: &str = "~/.mlx-code/mtplx.pid";
@@ -170,15 +329,16 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
 
     eprintln!("  {w}MTPLX server isn't running.{r}");
     eprintln!();
-    eprintln!("  {a}hippo-code{r} talks to a local MTPLX server. We can install our fork");
-    eprintln!(
-        "  ({a}{}{r}, branch {a}{}{r})",
-        mtplx_repo_url(),
-        mtplx_branch()
-    );
-    eprintln!("  and have it ready in a few steps.");
-    eprintln!();
+    eprintln!("  {a}hippo-code{r} talks to a local MTPLX server. Pick which source to clone,");
+    eprintln!("  then we'll have it ready in a few steps.");
 
+    // Default the picker to whatever was persisted (or upstream if this is
+    // the first install). The picker writes the choice to disk and returns
+    // it for use here.
+    let default_src = read_persisted_source().unwrap_or_else(MtplxSource::upstream);
+    let source = prompt_mtplx_source(default_src);
+
+    eprintln!();
     if !ask_yes_no("install MTPLX now?", true) {
         print_manual_setup();
         return Ok(false);
@@ -194,14 +354,10 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
     let install_dir = expand(MTPLX_DEFAULT_INSTALL_DIR);
     eprintln!();
     eprintln!("  {a}install dir{r}: {}", install_dir.display());
-    if mtplx_is_on_fork_branch() {
-        eprintln!(
-            "  {a}MTPLX source{r}: {} @ {}",
-            mtplx_repo_url(),
-            mtplx_branch()
-        );
-        eprintln!("  {d}({}){r}", MTPLX_TRACKING_NOTE);
-    }
+    eprintln!(
+        "  {a}MTPLX source{r}: {} @ {} {d}({}){r}",
+        source.repo, source.branch, source.label
+    );
     if install_dir.exists() {
         eprintln!(
             "  {w}!{r} {} already exists; will skip clone and reuse.",
@@ -213,16 +369,14 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
         }
         eprintln!();
         eprintln!("  {d}cloning...{r}");
-        let repo_url = mtplx_repo_url();
-        let branch = mtplx_branch();
         let status = std::process::Command::new("git")
             .args([
                 "clone",
                 "--depth",
                 "1",
                 "--branch",
-                &branch,
-                &repo_url,
+                &source.branch,
+                &source.repo,
                 install_dir.to_string_lossy().as_ref(),
             ])
             .status();
@@ -1421,5 +1575,73 @@ mod tests {
     fn ask_yes_no_falls_back_to_default_when_stdin_not_tty() {
         assert!(ask_yes_no("?", true));
         assert!(!ask_yes_no("?", false));
+    }
+
+    #[test]
+    fn classify_handles_well_known_sources_and_dotgit_suffix() {
+        assert_eq!(
+            MtplxSource::classify(MTPLX_UPSTREAM_REPO, MTPLX_UPSTREAM_BRANCH),
+            "upstream"
+        );
+        assert_eq!(
+            MtplxSource::classify("https://github.com/youssofal/MTPLX.git", "main"),
+            "upstream"
+        );
+        assert_eq!(
+            MtplxSource::classify(MTPLX_FORK_REPO, MTPLX_FORK_BRANCH),
+            "fork"
+        );
+        assert_eq!(
+            MtplxSource::classify("https://github.com/daniel-farina/MTPLX.git", "main"),
+            "fork"
+        );
+        // Wrong branch on a known repo -> custom.
+        assert_eq!(
+            MtplxSource::classify(MTPLX_UPSTREAM_REPO, "feature/foo"),
+            "custom"
+        );
+        // Unknown repo -> custom.
+        assert_eq!(
+            MtplxSource::classify("https://example.com/other/MTPLX", "main"),
+            "custom"
+        );
+    }
+
+    #[test]
+    fn persisted_source_json_roundtrips_through_serde() {
+        // Verify the JSON shape that read_persisted_source consumes. Use
+        // a tmp file so we don't touch the real ~/.mlx-code/.
+        let dir = std::env::temp_dir().join(format!("hip-source-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("mtplx-source.json");
+        let body = serde_json::json!({
+            "label": "fork",
+            "repo": MTPLX_FORK_REPO,
+            "branch": MTPLX_FORK_BRANCH,
+        });
+        std::fs::write(&p, body.to_string()).unwrap();
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        let repo = parsed.get("repo").and_then(|x| x.as_str()).unwrap();
+        let branch = parsed.get("branch").and_then(|x| x.as_str()).unwrap();
+        assert_eq!(repo, MTPLX_FORK_REPO);
+        assert_eq!(branch, MTPLX_FORK_BRANCH);
+        assert_eq!(MtplxSource::classify(repo, branch), "fork");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mtplx_repo_url_env_var_takes_precedence() {
+        // Snapshot any existing value so concurrent tests don't see a
+        // stale override after we're done.
+        let prev = std::env::var("HIP_MTPLX_REPO").ok();
+        std::env::set_var("HIP_MTPLX_REPO", "https://example.com/me/MTPLX");
+        assert_eq!(mtplx_repo_url(), "https://example.com/me/MTPLX");
+        match prev {
+            Some(v) => std::env::set_var("HIP_MTPLX_REPO", v),
+            None => std::env::remove_var("HIP_MTPLX_REPO"),
+        }
     }
 }

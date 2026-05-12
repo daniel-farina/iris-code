@@ -245,6 +245,7 @@ pub async fn do_update() -> Result<()> {
 /// no-op when MTPLX isn't installed or the checkout isn't a git repo,
 /// so it can't make `hip --update` worse than it was.
 fn check_mtplx_updates() {
+    use crate::setup::{prompt_mtplx_source, MtplxSource};
     use crate::theme::{accent, dim, good, warn, RESET};
     use std::process::Command;
 
@@ -278,81 +279,148 @@ fn check_mtplx_updates() {
         install_dir.display()
     );
 
-    // If hippo-code is currently configured to track a non-upstream
-    // MTPLX branch (i.e. a temporary fix branch), surface that to the
-    // user up front. They might be on plain upstream main and not
-    // realize hip has rolled the default to a fork.
-    if crate::setup::mtplx_is_on_fork_branch() {
-        let expected_repo = crate::setup::mtplx_repo_url();
-        let expected_branch = crate::setup::mtplx_branch();
-        eprintln!(
-            "{w}!{r} hip is tracking a non-upstream MTPLX branch: {a}{}{r} @ {a}{}{r}",
-            expected_repo, expected_branch
-        );
-        eprintln!("  {d}{}{r}", crate::setup::MTPLX_TRACKING_NOTE);
+    // Detect current remote + branch so we can show them what's there now
+    // and default the picker to "keep current source".
+    let current_remote = Command::new("git")
+        .args(["-C", &dir_str, "remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let current_branch = Command::new("git")
+        .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
 
-        // If their actual checkout is still on upstream main, tell them
-        // how to align with hip's tracked branch. Don't auto-rewrite
-        // remotes — that's user-visible state change.
-        let remote_url = Command::new("git")
-            .args(["-C", &dir_str, "remote", "get-url", "origin"])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().trim_end_matches(".git").to_string())
-            .unwrap_or_default();
-        let current_branch_for_notice = Command::new("git")
-            .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string())
-            .unwrap_or_default();
-        let expected_repo_norm = expected_repo.trim_end_matches(".git");
-        if remote_url != expected_repo_norm || current_branch_for_notice != expected_branch {
-            eprintln!(
-                "  {d}your local checkout is on {a}{}{d} @ {a}{}{d}.{r}",
-                if remote_url.is_empty() {
-                    "<no-remote>"
-                } else {
-                    remote_url.as_str()
-                },
-                if current_branch_for_notice.is_empty() {
-                    "<detached>"
-                } else {
-                    current_branch_for_notice.as_str()
-                }
-            );
-            eprintln!(
-                "  {d}to align, run inside the MTPLX checkout:{r}\n    \
-                 {a}git remote set-url origin {}{r}\n    \
-                 {a}git fetch origin{r}\n    \
-                 {a}git checkout {}{r}",
-                expected_repo, expected_branch
-            );
-            eprintln!();
-        }
+    if current_branch.is_empty() || current_branch == "HEAD" {
+        eprintln!("{w}!{r} MTPLX checkout has no branch (detached HEAD); leaving it alone.");
+        return;
     }
 
+    eprintln!(
+        "  {d}current{r}: {a}{}{r} @ {a}{}{r}",
+        if current_remote.is_empty() {
+            "<no-remote>"
+        } else {
+            current_remote.as_str()
+        },
+        current_branch
+    );
+
+    // Default the picker to whatever the checkout is on (so "just hit
+    // enter" keeps it on the same source). Falls back to upstream when
+    // the current remote doesn't match either well-known source.
+    let default_src = match MtplxSource::classify(&current_remote, &current_branch) {
+        "fork" => MtplxSource::fork(),
+        "upstream" => MtplxSource::upstream(),
+        _ => MtplxSource::upstream(),
+    };
+    let chosen = prompt_mtplx_source(default_src);
+
+    // If the picked source differs from what the checkout points at, we
+    // need to switch remotes + branches before fetching. This is the
+    // "overwrite current MTPLX with the latest from upstream / fork" path.
+    let current_norm = current_remote
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
+    let chosen_norm = chosen.repo.trim_end_matches('/').trim_end_matches(".git");
+    let switching = current_norm != chosen_norm || current_branch != chosen.branch;
+
+    if switching {
+        // Refuse to clobber uncommitted work — the user can clean up and
+        // re-run.
+        let dirty = Command::new("git")
+            .args(["-C", &dir_str, "status", "--porcelain"])
+            .output()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false);
+        if dirty {
+            eprintln!("{w}!{r} MTPLX checkout has uncommitted changes; refusing to switch source.");
+            eprintln!(
+                "  {d}commit or stash inside {} and re-run `hip --update` to switch.{r}",
+                install_dir.display()
+            );
+            return;
+        }
+
+        eprintln!();
+        eprintln!(
+            "{w}!{r} switching MTPLX source: {a}{}{r} @ {a}{}{r}",
+            chosen.repo, chosen.branch
+        );
+        eprintln!(
+            "  {d}this will run `git remote set-url`, fetch, and reset the working tree \
+             to the chosen source's HEAD.{r}"
+        );
+        eprint!("  {d}proceed? [Y/n] {r}");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            return;
+        }
+        let answer = input.trim().to_lowercase();
+        if !answer.is_empty() && !answer.starts_with('y') {
+            eprintln!("{d}skipped{r}");
+            return;
+        }
+
+        // Rewrite origin -> chosen.repo so subsequent fetches go to the
+        // new source.
+        let set_url = Command::new("git")
+            .args(["-C", &dir_str, "remote", "set-url", "origin", &chosen.repo])
+            .status();
+        if !matches!(set_url, Ok(s) if s.success()) {
+            eprintln!("{w}!{r} `git remote set-url` failed; aborting source switch");
+            return;
+        }
+
+        let fetch = Command::new("git")
+            .args(["-C", &dir_str, "fetch", "origin", "--quiet"])
+            .status();
+        if !matches!(fetch, Ok(s) if s.success()) {
+            eprintln!("{w}!{r} could not fetch from {}", chosen.repo);
+            return;
+        }
+
+        // Force the local branch to the chosen source's HEAD. Two repos
+        // may not share history, so a normal merge would fail -- we
+        // commit to overwrite the working tree (the dirty-check above
+        // guards against losing user work).
+        let checkout = Command::new("git")
+            .args([
+                "-C",
+                &dir_str,
+                "checkout",
+                "-B",
+                &chosen.branch,
+                &format!("origin/{}", chosen.branch),
+            ])
+            .status();
+        if !matches!(checkout, Ok(s) if s.success()) {
+            eprintln!(
+                "{w}!{r} could not check out {} from {}",
+                chosen.branch, chosen.repo
+            );
+            return;
+        }
+        eprintln!(
+            "{g}✓{r} switched MTPLX to {} @ {}",
+            chosen.repo, chosen.branch
+        );
+        flag_running_server();
+        return;
+    }
+
+    // Same source as before: just fetch + offer a fast-forward pull.
     let fetch = Command::new("git")
         .args(["-C", &dir_str, "fetch", "origin", "--quiet"])
         .status();
     if !matches!(fetch, Ok(s) if s.success()) {
         eprintln!("{w}!{r} could not fetch MTPLX updates");
-        return;
-    }
-
-    // Current branch is whatever the user has checked out; we want to
-    // compare against `origin/<that-branch>`, not assume `main`.
-    let branch_out = Command::new("git")
-        .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
-        .output();
-    let branch = match branch_out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
-        _ => return,
-    };
-    if branch.is_empty() || branch == "HEAD" {
-        // Detached HEAD or similar; don't try to update.
         return;
     }
 
@@ -362,7 +430,7 @@ fn check_mtplx_updates() {
             &dir_str,
             "rev-list",
             "--count",
-            &format!("HEAD..origin/{}", branch),
+            &format!("HEAD..origin/{}", chosen.branch),
         ])
         .output();
     let behind: u32 = match behind_out {
@@ -374,7 +442,7 @@ fn check_mtplx_updates() {
     };
 
     if behind == 0 {
-        eprintln!("{g}✓{r} MTPLX is up to date ({branch})");
+        eprintln!("{g}✓{r} MTPLX is up to date ({})", chosen.branch);
         return;
     }
 
@@ -386,13 +454,13 @@ fn check_mtplx_updates() {
             "log",
             "--oneline",
             "-5",
-            &format!("HEAD..origin/{}", branch),
+            &format!("HEAD..origin/{}", chosen.branch),
         ])
         .output()
     {
         eprintln!(
             "{d}MTPLX is {a}{}{d} commit(s) behind {a}origin/{}{r}",
-            behind, branch
+            behind, chosen.branch
         );
         for line in String::from_utf8_lossy(&o.stdout).lines() {
             eprintln!("  {a}{}{r}", line);
@@ -412,7 +480,14 @@ fn check_mtplx_updates() {
     }
 
     let pull = Command::new("git")
-        .args(["-C", &dir_str, "pull", "--ff-only", "origin", &branch])
+        .args([
+            "-C",
+            &dir_str,
+            "pull",
+            "--ff-only",
+            "origin",
+            &chosen.branch,
+        ])
         .status();
     if !matches!(pull, Ok(s) if s.success()) {
         eprintln!(
@@ -421,11 +496,17 @@ fn check_mtplx_updates() {
         );
         return;
     }
-    eprintln!("{g}✓{r} MTPLX updated to latest origin/{}", branch);
+    eprintln!("{g}✓{r} MTPLX updated to latest origin/{}", chosen.branch);
+    flag_running_server();
+}
 
-    // If the server's actually running, flag that it needs a restart so
-    // the user actually picks up what they just pulled.
-    let server_listening = Command::new("lsof")
+/// If the MTPLX server is listening on :8088, tell the user it still has
+/// the old code mapped and needs a restart to pick up the new files.
+fn flag_running_server() {
+    use crate::theme::{warn, RESET};
+    let w = warn();
+    let r = RESET;
+    let server_listening = std::process::Command::new("lsof")
         .args(["-nP", "-iTCP:8088", "-sTCP:LISTEN"])
         .output()
         .map(|o| !o.stdout.is_empty())
