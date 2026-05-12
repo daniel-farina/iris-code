@@ -9,6 +9,7 @@ mod client;
 mod dry_run_log;
 mod logo;
 mod pretty;
+mod prune;
 mod read_cache;
 mod repl;
 mod runlog;
@@ -134,6 +135,15 @@ struct Cli {
     /// tracking performance across many runs.
     #[arg(long, env = "MLX_CODE_LOG_RUNS", default_value_t = true)]
     log_runs: bool,
+
+    /// Disable automatic pruning of old tool-result messages once the
+    /// conversation passes the prune trigger watermark (default 20K
+    /// estimated tokens). Pruning replaces old tool outputs with a stub so
+    /// prefill stays small. Off here is for power users who want full
+    /// untouched history; the default (on) is much cheaper at long context.
+    /// Also gated by env `MLX_CODE_NO_AUTO_PRUNE=1`.
+    #[arg(long, env = "MLX_CODE_NO_AUTO_PRUNE")]
+    no_auto_prune: bool,
 
     /// Shortcut: enable --show-thinking, --full-output and --stats together.
     #[arg(short = 'v', long)]
@@ -1172,7 +1182,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 }
             }
         } else {
-            match agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await {
+            match agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, sampler_opts(cli), cli.no_auto_prune).await {
                 Ok(stats) => {
                     log.rounds = Some(stats.rounds);
                     log.tool_calls = Some(stats.total_tool_calls);
@@ -1447,7 +1457,7 @@ async fn run_chat_fallback(
             out.write_all(b"\n").await.ok();
             conv.push(ChatMessage::assistant_text(res.content.clone()));
         } else {
-            let _ = agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await?;
+            let _ = agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, sampler_opts(cli), cli.no_auto_prune).await?;
         }
     }
 }
@@ -1490,7 +1500,7 @@ async fn run_turns(cli: &Cli, client: &mut MtplxClient, turns: &[String]) -> Res
             out.flush().await.ok();
             conv.push(ChatMessage::assistant_text(res.content.clone()));
         } else {
-            let _ = agent::run_loop(client, &mut conv, cli.max_rounds, opts).await?;
+            let _ = agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, opts, cli.no_auto_prune).await?;
         }
         // Persist between turns so the prefix cache extends naturally.
         session_store::save(client.session_id(), &conv);
@@ -1596,7 +1606,7 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
     };
     let mut log = runlog::RunLog::new("agent", client.session_id(), client.model(), prompt);
     let pre_snap = if cli.diff { Some(snap_cwd()) } else { None };
-    let stats = match agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await {
+    let stats = match agent::run_loop_with_prune(client, &mut conv, cli.max_rounds, sampler_opts(cli), cli.no_auto_prune).await {
         Ok(s) => s,
         Err(e) => {
             log.success = false;

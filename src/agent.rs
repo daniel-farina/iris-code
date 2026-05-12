@@ -61,20 +61,40 @@ pub struct LoopStats {
     pub total_completion_tokens: u32,
 }
 
-pub async fn run_loop(
+/// Runs the agent's tool-use loop. Auto-prunes older large tool-result
+/// messages once estimated total prompt tokens cross a watermark (see
+/// `crate::prune`). Pass `no_auto_prune=true` to disable pruning and keep
+/// the full untouched history.
+pub async fn run_loop_with_prune(
     client: &MtplxClient,
     conv: &mut Vec<ChatMessage>,
     max_rounds: u32,
     opts: SamplingOpts,
+    no_auto_prune: bool,
 ) -> Result<LoopStats> {
     let tools = tools::registry();
     let specs = tools::tool_specs(&tools);
     let mut stats = LoopStats::default();
     let started = Instant::now();
     let mut out = stdout();
+    let prune_opts = crate::prune::opts_from_env(no_auto_prune);
 
     for round in 0..max_rounds {
         stats.rounds = round + 1;
+        // Auto-prune older tool outputs before each request once we're past
+        // the trigger watermark. Cheap (just walks the Vec); pays off by
+        // reducing prefill cost on the next request.
+        if let Some(p) = prune_opts {
+            if let Some(report) = crate::prune::maybe_prune_tool_outputs(conv, p) {
+                eprintln!(
+                    "[hip] auto-pruned {} old tool result(s), ~{} tok freed ({} -> {} tok estimated total)",
+                    report.pruned_count,
+                    report.savings_tokens,
+                    report.total_before_tokens,
+                    report.total_after_tokens,
+                );
+            }
+        }
         let res = client.stream(conv, Some(&specs), opts, &mut out).await?;
 
         if stats.first_ttft.is_none() {
