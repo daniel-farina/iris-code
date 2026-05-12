@@ -80,10 +80,7 @@ pub fn estimate_conv_tokens(conv: &[ChatMessage]) -> usize {
 
 /// Inspect the conversation and prune older tool-result messages when warranted.
 /// Returns Some(report) if any pruning happened, None otherwise.
-pub fn maybe_prune_tool_outputs(
-    conv: &mut Vec<ChatMessage>,
-    opts: PruneOpts,
-) -> Option<PruneReport> {
+pub fn maybe_prune_tool_outputs(conv: &mut [ChatMessage], opts: PruneOpts) -> Option<PruneReport> {
     let total_before = estimate_conv_tokens(conv);
     if total_before < opts.trigger_tokens {
         return None;
@@ -96,11 +93,7 @@ pub fn maybe_prune_tool_outputs(
     let mut window_start_idx = 0usize;
     let mut crossed = false;
     for (i, m) in conv.iter().enumerate().rev() {
-        accumulated += m
-            .content
-            .as_deref()
-            .map(estimate_tokens)
-            .unwrap_or(0);
+        accumulated += m.content.as_deref().map(estimate_tokens).unwrap_or(0);
         if accumulated >= opts.recent_window_tokens {
             window_start_idx = i;
             crossed = true;
@@ -207,7 +200,10 @@ mod tests {
 
     #[test]
     fn below_trigger_returns_none() {
-        let mut conv = vec![ChatMessage::user("hello"), ChatMessage::assistant_text("hi")];
+        let mut conv = vec![
+            ChatMessage::user("hello"),
+            ChatMessage::assistant_text("hi"),
+        ];
         let opts = PruneOpts {
             trigger_tokens: 100,
             recent_window_tokens: 50,
