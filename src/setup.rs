@@ -32,21 +32,33 @@ const MARKER_PATH: &str = "~/.mlx-code/.welcomed";
 // directly. The runtime env vars below (MTPLX_SESSION_BANK_*) still need
 // to be set per-instance because they're env-overridable, not baked-in
 // defaults.
-// MTPLX repo + branch defaults. Override via env vars to test against
-// a fork or feature branch:
+// MTPLX repo + branch defaults — upstream main carries the SessionBank
+// commit-tokens fix (upstream commit f1cbd97, equivalent to closed
+// PR #55 / issue #54). No fork needed.
+//
+// Override via env vars when validating a feature branch or fork:
 //   HIP_MTPLX_REPO=https://github.com/me/MTPLX.git hip --setup
-//   HIP_MTPLX_BRANCH=daniel/dev-stack hip --setup
-// Useful when validating local fixes (e.g. our daniel-farina/MTPLX
-// daniel/dev-stack branch carries fixes that aren't merged upstream
-// yet) without committing to upstream main as the only install path.
+//   HIP_MTPLX_BRANCH=feature/foo hip --setup
 const MTPLX_REPO_URL_DEFAULT: &str = "https://github.com/youssofal/MTPLX";
 const MTPLX_BRANCH_DEFAULT: &str = "main";
+pub const MTPLX_REPO_URL_UPSTREAM: &str = "https://github.com/youssofal/MTPLX";
+pub const MTPLX_TRACKING_NOTE: &str =
+    "tracking the upstream `main` branch. Override with HIP_MTPLX_REPO / \
+     HIP_MTPLX_BRANCH to test a fork or feature branch.";
 
-fn mtplx_repo_url() -> String {
+pub fn mtplx_repo_url() -> String {
     std::env::var("HIP_MTPLX_REPO").unwrap_or_else(|_| MTPLX_REPO_URL_DEFAULT.to_string())
 }
-fn mtplx_branch() -> String {
+pub fn mtplx_branch() -> String {
     std::env::var("HIP_MTPLX_BRANCH").unwrap_or_else(|_| MTPLX_BRANCH_DEFAULT.to_string())
+}
+
+/// True when hip is currently tracking a non-upstream MTPLX repo/branch
+/// (i.e. a temporary fix branch in our fork waiting on an upstream merge).
+/// Surfacing this to users so they understand what `hip --update` is
+/// pulling and why.
+pub fn mtplx_is_on_fork_branch() -> bool {
+    mtplx_repo_url() != MTPLX_REPO_URL_UPSTREAM || mtplx_branch() != "main"
 }
 const MTPLX_DEFAULT_INSTALL_DIR: &str = "~/code/MTPLX";
 const MTPLX_PID_FILE: &str = "~/.mlx-code/mtplx.pid";
@@ -161,7 +173,8 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
     eprintln!("  {a}hippo-code{r} talks to a local MTPLX server. We can install our fork");
     eprintln!(
         "  ({a}{}{r}, branch {a}{}{r})",
-        mtplx_repo_url(), mtplx_branch()
+        mtplx_repo_url(),
+        mtplx_branch()
     );
     eprintln!("  and have it ready in a few steps.");
     eprintln!();
@@ -181,6 +194,14 @@ async fn offer_install_mtplx(url: &str) -> Result<bool> {
     let install_dir = expand(MTPLX_DEFAULT_INSTALL_DIR);
     eprintln!();
     eprintln!("  {a}install dir{r}: {}", install_dir.display());
+    if mtplx_is_on_fork_branch() {
+        eprintln!(
+            "  {a}MTPLX source{r}: {} @ {}",
+            mtplx_repo_url(),
+            mtplx_branch()
+        );
+        eprintln!("  {d}({}){r}", MTPLX_TRACKING_NOTE);
+    }
     if install_dir.exists() {
         eprintln!(
             "  {w}!{r} {} already exists; will skip clone and reuse.",

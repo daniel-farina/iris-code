@@ -175,6 +175,7 @@ pub async fn do_update() -> Result<()> {
 
     if !cmp_version(&latest, current).is_gt() {
         eprintln!("{g}✓{r} already on the latest version ({current})");
+        check_mtplx_updates();
         return Ok(());
     }
 
@@ -235,7 +236,205 @@ pub async fn do_update() -> Result<()> {
 
     eprintln!("{g}✓{r} installed {a}{}{r} at {}", latest, dest.display());
     eprintln!("{d}restart hip to use the new version{r}");
+    check_mtplx_updates();
     Ok(())
+}
+
+/// After hip update completes (or hip is already current), check the
+/// local MTPLX checkout for upstream commits and offer to pull. Silent
+/// no-op when MTPLX isn't installed or the checkout isn't a git repo,
+/// so it can't make `hip --update` worse than it was.
+fn check_mtplx_updates() {
+    use crate::theme::{accent, dim, good, warn, RESET};
+    use std::process::Command;
+
+    let d = dim();
+    let a = accent();
+    let g = good();
+    let w = warn();
+    let r = RESET;
+
+    // Resolve where MTPLX lives. Same env-var override that setup.rs
+    // honors (HIP_MTPLX_INSTALL_DIR), with the same default of
+    // ~/code/MTPLX. Users with non-standard installs can point us at
+    // them without forcing a build.
+    let install_dir = std::env::var("HIP_MTPLX_INSTALL_DIR")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::PathBuf::from(shellexpand::tilde("~/code/MTPLX").into_owned())
+        });
+
+    if !install_dir.exists() || !install_dir.join(".git").exists() {
+        // Either MTPLX isn't installed via git, or it lives somewhere
+        // exotic and the user can update it themselves. Don't be noisy.
+        return;
+    }
+
+    let dir_str = install_dir.to_string_lossy().to_string();
+    eprintln!();
+    eprintln!(
+        "{d}─ checking MTPLX at {a}{}{d} ─{r}",
+        install_dir.display()
+    );
+
+    // If hippo-code is currently configured to track a non-upstream
+    // MTPLX branch (i.e. a temporary fix branch), surface that to the
+    // user up front. They might be on plain upstream main and not
+    // realize hip has rolled the default to a fork.
+    if crate::setup::mtplx_is_on_fork_branch() {
+        let expected_repo = crate::setup::mtplx_repo_url();
+        let expected_branch = crate::setup::mtplx_branch();
+        eprintln!(
+            "{w}!{r} hip is tracking a non-upstream MTPLX branch: {a}{}{r} @ {a}{}{r}",
+            expected_repo, expected_branch
+        );
+        eprintln!("  {d}{}{r}", crate::setup::MTPLX_TRACKING_NOTE);
+
+        // If their actual checkout is still on upstream main, tell them
+        // how to align with hip's tracked branch. Don't auto-rewrite
+        // remotes — that's user-visible state change.
+        let remote_url = Command::new("git")
+            .args(["-C", &dir_str, "remote", "get-url", "origin"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().trim_end_matches(".git").to_string())
+            .unwrap_or_default();
+        let current_branch_for_notice = Command::new("git")
+            .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let expected_repo_norm = expected_repo.trim_end_matches(".git");
+        if remote_url != expected_repo_norm || current_branch_for_notice != expected_branch {
+            eprintln!(
+                "  {d}your local checkout is on {a}{}{d} @ {a}{}{d}.{r}",
+                if remote_url.is_empty() {
+                    "<no-remote>"
+                } else {
+                    remote_url.as_str()
+                },
+                if current_branch_for_notice.is_empty() {
+                    "<detached>"
+                } else {
+                    current_branch_for_notice.as_str()
+                }
+            );
+            eprintln!(
+                "  {d}to align, run inside the MTPLX checkout:{r}\n    \
+                 {a}git remote set-url origin {}{r}\n    \
+                 {a}git fetch origin{r}\n    \
+                 {a}git checkout {}{r}",
+                expected_repo, expected_branch
+            );
+            eprintln!();
+        }
+    }
+
+    let fetch = Command::new("git")
+        .args(["-C", &dir_str, "fetch", "origin", "--quiet"])
+        .status();
+    if !matches!(fetch, Ok(s) if s.success()) {
+        eprintln!("{w}!{r} could not fetch MTPLX updates");
+        return;
+    }
+
+    // Current branch is whatever the user has checked out; we want to
+    // compare against `origin/<that-branch>`, not assume `main`.
+    let branch_out = Command::new("git")
+        .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output();
+    let branch = match branch_out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+        _ => return,
+    };
+    if branch.is_empty() || branch == "HEAD" {
+        // Detached HEAD or similar; don't try to update.
+        return;
+    }
+
+    let behind_out = Command::new("git")
+        .args([
+            "-C",
+            &dir_str,
+            "rev-list",
+            "--count",
+            &format!("HEAD..origin/{}", branch),
+        ])
+        .output();
+    let behind: u32 = match behind_out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .trim()
+            .parse()
+            .unwrap_or(0),
+        _ => return,
+    };
+
+    if behind == 0 {
+        eprintln!("{g}✓{r} MTPLX is up to date ({branch})");
+        return;
+    }
+
+    // Preview what would land so the user can decide.
+    if let Ok(o) = Command::new("git")
+        .args([
+            "-C",
+            &dir_str,
+            "log",
+            "--oneline",
+            "-5",
+            &format!("HEAD..origin/{}", branch),
+        ])
+        .output()
+    {
+        eprintln!(
+            "{d}MTPLX is {a}{}{d} commit(s) behind {a}origin/{}{r}",
+            behind, branch
+        );
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            eprintln!("  {a}{}{r}", line);
+        }
+    }
+
+    eprint!("{d}update MTPLX? [Y/n] {r}");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
+    let mut input = String::new();
+    if std::io::stdin().read_line(&mut input).is_err() {
+        return;
+    }
+    let answer = input.trim().to_lowercase();
+    if !answer.is_empty() && !answer.starts_with('y') {
+        eprintln!("{d}skipped{r}");
+        return;
+    }
+
+    let pull = Command::new("git")
+        .args(["-C", &dir_str, "pull", "--ff-only", "origin", &branch])
+        .status();
+    if !matches!(pull, Ok(s) if s.success()) {
+        eprintln!(
+            "{w}!{r} MTPLX pull failed; resolve manually in {}",
+            install_dir.display()
+        );
+        return;
+    }
+    eprintln!("{g}✓{r} MTPLX updated to latest origin/{}", branch);
+
+    // If the server's actually running, flag that it needs a restart so
+    // the user actually picks up what they just pulled.
+    let server_listening = Command::new("lsof")
+        .args(["-nP", "-iTCP:8088", "-sTCP:LISTEN"])
+        .output()
+        .map(|o| !o.stdout.is_empty())
+        .unwrap_or(false);
+    if server_listening {
+        eprintln!(
+            "{w}!{r} MTPLX server still running on :8088 with the old code -- restart it to pick up the update"
+        );
+    }
 }
 
 fn detect_platform() -> Option<(&'static str, &'static str)> {

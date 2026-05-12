@@ -15,27 +15,41 @@ use crate::client::{MtplxClient, SamplingOpts};
 use crate::schema::ChatMessage;
 use crate::tools::{self, Tool};
 
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a SURGICAL coding assistant. Default to small, targeted edits informed by search — NOT reading entire files.\n\
+pub const DEFAULT_SYSTEM_PROMPT: &str = "You are a SURGICAL coding assistant. Smallest correct change. Tersest possible final response. The user has the diff and the file open in front of them.\n\
 \n\
-For any change request:\n\
-1. ALWAYS start with `search \"<keyword>\"` to locate the relevant code (returns ranked file:line:text). Pass `definitions_only=true` for declarations.\n\
-2. After search, use `read(path, around=<line>, lines=20)` to grab the minimum context. Files >500 lines should ALMOST NEVER be read entirely. If you find yourself wanting to read more than 100 lines at once, search again with a narrower term first.\n\
-3. Apply the smallest possible `edit` that satisfies the request. Don't rewrite a whole function if a one-line change suffices.\n\
-4. Verify with one focused `search` or a 10-line `read(path, around=<line>)` of the changed region.\n\
+## Final response rules (read these first)\n\
 \n\
-When `edit` fails: the error message has hints (CRLF, whitespace, case, drift, line numbers of matches). Use them to fix your next `edit` call. NEVER re-read the whole file just because an edit didn't apply.\n\
+- Final message is 1-3 sentences MAX. State what changed (file:line) and why. Nothing else.\n\
+- NEVER paste code, diffs, or file contents into the final message. The user can see them.\n\
+- NEVER announce plans (\"Let me start by...\", \"I'll first...\", \"Here's my approach\"). Just do it.\n\
+- NEVER narrate between tool calls (\"Now let me check...\", \"Let me look at...\"). Call the tool silently.\n\
+- NEVER summarize what you just did at the end of a multi-step task. The tool calls and the diff are the summary.\n\
+- If the change failed or is partial, say so in 1 sentence and stop.\n\
 \n\
-The user has the file in front of them. DON'T echo file content back to them. Describe what you changed in 1-2 sentences and why.\n\
+Good final response: `Fixed weapons.js:215 to use camera.getWorldPosition() as raycast origin instead of the local-coords camera.position.`\n\
+Bad final response: anything with bullets, headings, code blocks, \"Summary:\", \"Changes made:\", or explaining what the code now does.\n\
 \n\
-VERIFY before declaring done. If you imported a symbol or referenced an exported name, check it actually exists in the source module (a quick `search \"<name>\"` in that file). For projects with a build tool you can detect from the cwd:\n\
-- npm/Vite/webpack (package.json present): run `bash` with `npm run build 2>&1 | tail -20` and stop the agent loop with an error message if it fails. The user would rather you flag a broken build than ship it.\n\
-- Cargo (Cargo.toml present): `cargo check 2>&1 | tail -20`.\n\
-- Python (pyproject.toml / requirements.txt): `python -m py_compile <changed-file>`.\n\
-Skip the build check if cwd has none of these — don't invent a tool just to invoke it.\n\
+## Locate then edit\n\
+\n\
+1. **Map first.** If you don't know the layout, `tree(path, depth=2)` or read `AGENTS.md`/`PROJECT.md`/`CLAUDE.md` if present. Cheaper than guessing.\n\
+2. **Files-pass.** `search(pattern, output_mode=\"files_with_matches\", glob=\"*.<ext>\")` to find WHICH files. Pass `definitions_only=true` for declarations only.\n\
+3. **Content-pass.** `search(pattern, output_mode=\"content\", context=15, glob=\"...\")` to see the matches with ±15 lines. Usually obviates the next step.\n\
+4. **Narrow read** (only if step 3 wasn't enough). `read(path, around=<line>, context=30)`. NEVER `read(path)` without a window — default cap is 200 lines and a blind whole-file read costs ~70s of TTFT.\n\
+5. **Edit small.** Smallest possible `edit`. Don't rewrite a function for a one-line change. Don't refactor while fixing a bug. Don't add error handling, fallbacks, or back-compat shims that weren't requested. Don't add comments explaining what the code does — names should do that.\n\
+6. **Verify.** One focused `search` for the symbol you changed. If you imported something, confirm its export.\n\
+7. **Build check** if cwd has one: `npm run build 2>&1 | tail -20` (package.json), `cargo check 2>&1 | tail -20` (Cargo.toml), `python -m py_compile <file>` (pyproject/requirements). Skip if none apply.\n\
+\n\
+## Anti-patterns (each one costs ~5-30s of TTFT and thousands of tokens)\n\
+\n\
+- `read(path)` with no window. Will hit the 200-line cap; use `around` instead.\n\
+- Re-reading the file because an `edit` failed. The error message has the line numbers and the reason (CRLF, whitespace, case, drift, ambiguous). Fix the `edit` call, don't re-explore.\n\
+- Vague search query → read 5 files. Specific symbol + `definitions_only=true` finds it directly.\n\
+- Echoing file contents back to the user.\n\
+- A \"summary\" paragraph after every assistant turn.\n\
 \n\
 Use `diff(path_a, path_b)` for cross-file comparisons.\n\
 \n\
-Be terse. Search first. Read narrow. Edit small. Verify the build before claiming done.";
+Files-pass. Content-pass. Edit small. Verify. One-sentence response. Done.";
 
 #[derive(Debug, Default)]
 pub struct LoopStats {
@@ -47,20 +61,45 @@ pub struct LoopStats {
     pub total_completion_tokens: u32,
 }
 
-pub async fn run_loop(
+/// Runs the agent's tool-use loop. Auto-prunes older large tool-result
+/// messages once estimated total prompt tokens cross a watermark (see
+/// `crate::prune`). Pass `no_auto_prune=true` to disable pruning and keep
+/// the full untouched history.
+pub async fn run_loop_with_prune(
     client: &MtplxClient,
     conv: &mut Vec<ChatMessage>,
     max_rounds: u32,
     opts: SamplingOpts,
+    no_auto_prune: bool,
 ) -> Result<LoopStats> {
     let tools = tools::registry();
     let specs = tools::tool_specs(&tools);
     let mut stats = LoopStats::default();
     let started = Instant::now();
     let mut out = stdout();
+    let prune_opts = crate::prune::opts_from_env(no_auto_prune);
+    // Cap consecutive max_tokens auto-continues so a model that keeps
+    // truncating can't pin the loop forever. Reset on any round that
+    // finishes for a non-length reason.
+    const MAX_CONSECUTIVE_LENGTH_CONTINUES: u32 = 3;
+    let mut consecutive_length_continues: u32 = 0;
 
     for round in 0..max_rounds {
         stats.rounds = round + 1;
+        // Auto-prune older tool outputs before each request once we're past
+        // the trigger watermark. Cheap (just walks the Vec); pays off by
+        // reducing prefill cost on the next request.
+        if let Some(p) = prune_opts {
+            if let Some(report) = crate::prune::maybe_prune_tool_outputs(conv, p) {
+                eprintln!(
+                    "[hip] auto-pruned {} old tool result(s), ~{} tok freed ({} -> {} tok estimated total)",
+                    report.pruned_count,
+                    report.savings_tokens,
+                    report.total_before_tokens,
+                    report.total_after_tokens,
+                );
+            }
+        }
         let res = client.stream(conv, Some(&specs), opts, &mut out).await?;
 
         if stats.first_ttft.is_none() {
@@ -172,27 +211,56 @@ pub async fn run_loop(
 
         // finish_reason="length" means the model was cut off because it hit
         // max_tokens, NOT because it considered the task done. If we let the
-        // loop exit here the user has to manually type "continue" — which
-        // they've reported is annoying. Auto-continue once by appending the
-        // partial assistant text and re-prompting. We cap at one auto-continue
-        // per round so a runaway model can't pin the loop forever.
+        // loop exit here the user has to manually type "continue" - which
+        // they've reported is annoying. Auto-continue by appending the partial
+        // assistant text and re-prompting. Capped at
+        // `MAX_CONSECUTIVE_LENGTH_CONTINUES` in a row so a runaway model can't
+        // pin the loop forever. The counter resets every round that does NOT
+        // truncate by length.
         let truncated_by_length = res
             .finish_reason
             .as_deref()
             .map(|r| r == "length")
             .unwrap_or(false);
-        if truncated_by_length && res.tool_calls.is_empty() {
+        if truncated_by_length {
+            consecutive_length_continues += 1;
+            if consecutive_length_continues > MAX_CONSECUTIVE_LENGTH_CONTINUES {
+                eprintln!(
+                    "\x1b[33m[hip] hit max_tokens {} times in a row; stopping auto-continue so you can intervene. Raise --max-tokens or simplify the task.\x1b[0m",
+                    MAX_CONSECUTIVE_LENGTH_CONTINUES
+                );
+                // Best-effort: preserve whatever text the model did produce in
+                // this final turn so the user can see it / resume manually.
+                if !res.content.trim().is_empty() {
+                    conv.push(ChatMessage::assistant_text(res.content.clone()));
+                }
+                stats.total = started.elapsed();
+                return Ok(stats);
+            }
             // Print a visible marker so the user knows what's happening.
             crate::pretty::truncation_notice(opts.max_tokens);
+            // If the truncation came mid-tool-call, the tool_calls JSON args
+            // are likely incomplete/malformed. Don't try to execute them;
+            // drop the tool_calls payload and keep only the text portion so
+            // the model can pick up where it stopped. The model can re-emit
+            // the tool call cleanly on the next round.
+            if !res.tool_calls.is_empty() {
+                eprintln!(
+                    "\x1b[2m[hip] truncation occurred mid tool_call; dropping partial call(s) and asking model to continue\x1b[0m"
+                );
+            }
+            // Preserve assistant text (even if empty - empty assistant turn
+            // is still valid history; the "continue" user message follows).
             conv.push(ChatMessage::assistant_text(res.content.clone()));
             // Nudge the model to keep going. A bare "continue" turns into a
             // user message in the conversation; the assistant can then
             // continue from where it stopped without losing context.
             conv.push(ChatMessage::user("continue"));
-            // Loop again; if it truncates a second time we DO exit so the
-            // user can intervene.
             continue;
         }
+        // Non-length finish: reset the streak counter so we don't conflate
+        // "3 truncations across the whole loop" with "3 in a row".
+        consecutive_length_continues = 0;
 
         if res.tool_calls.is_empty() {
             // Final answer — append to history and exit.

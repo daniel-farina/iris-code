@@ -9,6 +9,7 @@ mod client;
 mod dry_run_log;
 mod logo;
 mod pretty;
+mod prune;
 mod read_cache;
 mod repl;
 mod runlog;
@@ -134,6 +135,15 @@ struct Cli {
     /// tracking performance across many runs.
     #[arg(long, env = "MLX_CODE_LOG_RUNS", default_value_t = true)]
     log_runs: bool,
+
+    /// Disable automatic pruning of old tool-result messages once the
+    /// conversation passes the prune trigger watermark (default 20K
+    /// estimated tokens). Pruning replaces old tool outputs with a stub so
+    /// prefill stays small. Off here is for power users who want full
+    /// untouched history; the default (on) is much cheaper at long context.
+    /// Also gated by env `MLX_CODE_NO_AUTO_PRUNE=1`.
+    #[arg(long, env = "MLX_CODE_NO_AUTO_PRUNE")]
+    no_auto_prune: bool,
 
     /// Shortcut: enable --show-thinking, --full-output and --stats together.
     #[arg(short = 'v', long)]
@@ -420,11 +430,37 @@ async fn main() -> Result<()> {
     let on_default_session = cli.session == "mlx-code-default";
     let resume_explicitly = cli.continue_last || cli.resume.is_some();
     if !going_interactive && on_default_session && !resume_explicitly {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        cli.session = format!("hip-print-{}-{}", now, std::process::id());
+        // Stable session id derived from (user@host, abs_cwd, model, tool-schema
+        // hash). Repeated hip invocations in the same project share MTPLX prefix
+        // cache; changing model or tool registry rotates the session so a stale
+        // cache built against a different schema can't silently poison results.
+        // Pattern lifted from opencode-context-cache.
+        use std::hash::{Hash, Hasher};
+        let cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.canonicalize().ok())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unknown".to_string());
+        let user = std::env::var("USER").unwrap_or_else(|_| "anon".to_string());
+        let host = std::env::var("HOSTNAME")
+            .or_else(|_| std::env::var("HOST"))
+            .unwrap_or_else(|_| {
+                std::process::Command::new("hostname")
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|| "localhost".to_string())
+            });
+        let tools_fingerprint =
+            serde_json::to_string(&tools::tool_specs(&tools::registry())).unwrap_or_default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        user.hash(&mut hasher);
+        host.hash(&mut hasher);
+        cwd.hash(&mut hasher);
+        cli.model.hash(&mut hasher);
+        tools_fingerprint.hash(&mut hasher);
+        cli.session = format!("hip-warm-{:016x}", hasher.finish());
     }
 
     let mut client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
@@ -1146,7 +1182,15 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 }
             }
         } else {
-            match agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await {
+            match agent::run_loop_with_prune(
+                client,
+                &mut conv,
+                cli.max_rounds,
+                sampler_opts(cli),
+                cli.no_auto_prune,
+            )
+            .await
+            {
                 Ok(stats) => {
                     log.rounds = Some(stats.rounds);
                     log.tool_calls = Some(stats.total_tool_calls);
@@ -1421,7 +1465,14 @@ async fn run_chat_fallback(
             out.write_all(b"\n").await.ok();
             conv.push(ChatMessage::assistant_text(res.content.clone()));
         } else {
-            let _ = agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await?;
+            let _ = agent::run_loop_with_prune(
+                client,
+                &mut conv,
+                cli.max_rounds,
+                sampler_opts(cli),
+                cli.no_auto_prune,
+            )
+            .await?;
         }
     }
 }
@@ -1464,7 +1515,14 @@ async fn run_turns(cli: &Cli, client: &mut MtplxClient, turns: &[String]) -> Res
             out.flush().await.ok();
             conv.push(ChatMessage::assistant_text(res.content.clone()));
         } else {
-            let _ = agent::run_loop(client, &mut conv, cli.max_rounds, opts).await?;
+            let _ = agent::run_loop_with_prune(
+                client,
+                &mut conv,
+                cli.max_rounds,
+                opts,
+                cli.no_auto_prune,
+            )
+            .await?;
         }
         // Persist between turns so the prefix cache extends naturally.
         session_store::save(client.session_id(), &conv);
@@ -1570,7 +1628,15 @@ async fn run_agent(cli: &Cli, client: &MtplxClient, prompt: &str) -> Result<()> 
     };
     let mut log = runlog::RunLog::new("agent", client.session_id(), client.model(), prompt);
     let pre_snap = if cli.diff { Some(snap_cwd()) } else { None };
-    let stats = match agent::run_loop(client, &mut conv, cli.max_rounds, sampler_opts(cli)).await {
+    let stats = match agent::run_loop_with_prune(
+        client,
+        &mut conv,
+        cli.max_rounds,
+        sampler_opts(cli),
+        cli.no_auto_prune,
+    )
+    .await
+    {
         Ok(s) => s,
         Err(e) => {
             log.success = false;
