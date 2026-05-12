@@ -254,7 +254,11 @@ fn run_rg(p: &Params, force_ci: bool) -> Result<String> {
         if let Some(re) = build_def_regex(&p.pattern, p.case_insensitive || force_ci) {
             owned = lines
                 .iter()
-                .filter(|l| split_content_line(l).map(|(_, _, t)| re.is_match(t)).unwrap_or(false))
+                .filter(|l| {
+                    split_content_line(l)
+                        .map(|(_, _, t)| re.is_match(t))
+                        .unwrap_or(false)
+                })
                 .map(|s| s.to_string())
                 .collect();
             if owned.is_empty() {
@@ -268,7 +272,11 @@ fn run_rg(p: &Params, force_ci: bool) -> Result<String> {
         lines
     };
 
-    Ok(format_output(p, &view, effective_head(p.mode, p.head_limit)))
+    Ok(format_output(
+        p,
+        &view,
+        effective_head(p.mode, p.head_limit),
+    ))
 }
 
 fn format_output(p: &Params, lines: &[&str], head: Option<usize>) -> String {
@@ -308,7 +316,11 @@ fn format_output(p: &Params, lines: &[&str], head: Option<usize>) -> String {
                 } else {
                     String::new()
                 },
-                if p.definitions_only { " (definitions_only)" } else { "" }
+                if p.definitions_only {
+                    " (definitions_only)"
+                } else {
+                    ""
+                }
             ));
         }
     }
@@ -416,7 +428,11 @@ fn fallback_walk(p: &Params) -> Result<String> {
 
     let mut content_lines: Vec<String> = Vec::new();
     let mut counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    for entry in WalkBuilder::new(&p.root).hidden(false).git_ignore(true).build() {
+    for entry in WalkBuilder::new(&p.root)
+        .hidden(false)
+        .git_ignore(true)
+        .build()
+    {
         let Ok(entry) = entry else { continue };
         if !entry.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
             continue;
@@ -428,10 +444,16 @@ fn fallback_walk(p: &Params) -> Result<String> {
                 continue;
             }
         }
-        if entry.metadata().map(|m| m.len() > 4 * 1024 * 1024).unwrap_or(false) {
+        if entry
+            .metadata()
+            .map(|m| m.len() > 4 * 1024 * 1024)
+            .unwrap_or(false)
+        {
             continue;
         }
-        let Ok(f) = std::fs::File::open(path) else { continue };
+        let Ok(f) = std::fs::File::open(path) else {
+            continue;
+        };
         for (i, line) in BufReader::new(f).lines().enumerate() {
             let Ok(line) = line else { break };
             if line.len() > 4000 {
@@ -463,8 +485,39 @@ fn fallback_walk(p: &Params) -> Result<String> {
         }
         Mode::Content => content_lines,
     };
-    let view: Vec<&str> = owned.iter().map(String::as_str).collect();
-    Ok(format_output(p, &view, effective_head(p.mode, p.head_limit)))
+
+    // Mirror the rg path's definitions_only post-filter so behavior is
+    // identical whether ripgrep is available or not (e.g., macOS CI runners
+    // ship without rg). Without this, callers see a "(definitions_only)"
+    // header but receive unfiltered content lines.
+    let filtered: Vec<String> = if p.definitions_only && p.mode == Mode::Content {
+        if let Some(re) = build_def_regex(&p.pattern, p.case_insensitive) {
+            let kept: Vec<String> = owned
+                .iter()
+                .filter(|l| {
+                    split_content_line(l)
+                        .map(|(_, _, t)| re.is_match(t))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect();
+            if kept.is_empty() {
+                return Ok(no_match_with_filter(p, "definitions_only"));
+            }
+            kept
+        } else {
+            owned
+        }
+    } else {
+        owned
+    };
+
+    let view: Vec<&str> = filtered.iter().map(String::as_str).collect();
+    Ok(format_output(
+        p,
+        &view,
+        effective_head(p.mode, p.head_limit),
+    ))
 }
 
 /// Public for tests: builds the canonical fixture file used by the test suite.
@@ -517,7 +570,11 @@ mod tests {
         let out = rt_run(json!({"pattern": "make_widget", "path": dir.to_string_lossy()})).unwrap();
         assert!(out.contains("api.rs"), "missing api.rs:\n{}", out);
         assert!(out.contains("user.rs"), "missing user.rs:\n{}", out);
-        assert!(!out.contains("pub fn make_widget"), "default mode should be paths only:\n{}", out);
+        assert!(
+            !out.contains("pub fn make_widget"),
+            "default mode should be paths only:\n{}",
+            out
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -534,9 +591,18 @@ mod tests {
         let dir = build_fixture("content");
         let out = rt_run(json!({
             "pattern": "make_widget", "path": dir.to_string_lossy(), "output_mode": "content"
-        })).unwrap();
-        assert!(out.contains("pub fn make_widget"), "missing def line:\n{}", out);
-        assert!(out.contains("let _ = make_widget"), "missing intra-file usage:\n{}", out);
+        }))
+        .unwrap();
+        assert!(
+            out.contains("pub fn make_widget"),
+            "missing def line:\n{}",
+            out
+        );
+        assert!(
+            out.contains("let _ = make_widget"),
+            "missing intra-file usage:\n{}",
+            out
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -545,7 +611,8 @@ mod tests {
         let dir = build_fixture("countmode");
         let out = rt_run(json!({
             "pattern": "make_widget", "path": dir.to_string_lossy(), "output_mode": "count"
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(out.contains("api.rs:2"), "expected api.rs:2:\n{}", out);
         assert!(out.contains("user.rs:1"), "expected user.rs:1:\n{}", out);
         let _ = std::fs::remove_dir_all(&dir);
@@ -556,9 +623,18 @@ mod tests {
         let dir = build_fixture("filesonly");
         let out = rt_run(json!({
             "pattern": "make_widget", "path": dir.to_string_lossy(), "files_only": true
-        })).unwrap();
-        assert!(out.contains("api.rs") && out.contains("user.rs"), "missing files:\n{}", out);
-        assert!(!out.contains("pub fn make_widget"), "files_only should not include content:\n{}", out);
+        }))
+        .unwrap();
+        assert!(
+            out.contains("api.rs") && out.contains("user.rs"),
+            "missing files:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("pub fn make_widget"),
+            "files_only should not include content:\n{}",
+            out
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -568,10 +644,12 @@ mod tests {
         let out = rt_run(json!({
             "pattern": "make_widget", "path": dir.to_string_lossy(),
             "output_mode": "content", "-C": 1
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(
             out.contains("n + 1") || out.contains("println!"),
-            "expected context lines:\n{}", out
+            "expected context lines:\n{}",
+            out
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -582,18 +660,37 @@ mod tests {
         let out = rt_run(json!({
             "pattern": "make_widget", "path": dir.to_string_lossy(),
             "output_mode": "content", "definitions_only": true
-        })).unwrap();
-        assert!(out.contains("pub fn make_widget"), "missing def line:\n{}", out);
-        assert!(!out.contains("let _ = make_widget"), "should drop usage:\n{}", out);
-        assert!(!out.contains("println!(\"{}\", make_widget"), "should drop cross-file usage:\n{}", out);
+        }))
+        .unwrap();
+        assert!(
+            out.contains("pub fn make_widget"),
+            "missing def line:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("let _ = make_widget"),
+            "should drop usage:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("println!(\"{}\", make_widget"),
+            "should drop cross-file usage:\n{}",
+            out
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn no_matches_returns_helpful_message() {
         let dir = build_fixture("nope");
-        let out = rt_run(json!({"pattern": "zzz_no_such_token_zzz", "path": dir.to_string_lossy()})).unwrap();
-        assert!(out.starts_with("(no matches"), "expected no-match prefix:\n{}", out);
+        let out =
+            rt_run(json!({"pattern": "zzz_no_such_token_zzz", "path": dir.to_string_lossy()}))
+                .unwrap();
+        assert!(
+            out.starts_with("(no matches"),
+            "expected no-match prefix:\n{}",
+            out
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
