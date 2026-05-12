@@ -255,34 +255,72 @@ fn check_mtplx_updates() {
     let w = warn();
     let r = RESET;
 
-    // Resolve where MTPLX lives. Same env-var override that setup.rs
-    // honors (HIP_MTPLX_INSTALL_DIR), with the same default of
-    // ~/code/MTPLX. Users with non-standard installs can point us at
-    // them without forcing a build.
-    let install_dir = std::env::var("HIP_MTPLX_INSTALL_DIR")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::PathBuf::from(shellexpand::tilde("~/code/MTPLX").into_owned())
-        });
+    // Detect how MTPLX was installed (git checkout, Homebrew formula, or
+    // something we can't recognize). The update path differs for each:
+    // git uses fetch+pull, brew uses `brew upgrade`, unknown gets a hint.
+    let install = resolve_mtplx_install();
 
     eprintln!();
-    eprintln!(
-        "{d}─ checking MTPLX at {a}{}{d} ─{r}",
-        install_dir.display()
-    );
+    eprintln!("{d}─ checking MTPLX ─{r}");
 
-    if !install_dir.exists() {
-        eprintln!("  {w}!{r} no MTPLX checkout found. Run {a}hip --setup{r} to install one.");
-        return;
-    }
-    if !install_dir.join(".git").exists() {
-        eprintln!(
-            "  {w}!{r} {} exists but is not a git checkout; cannot check version.",
-            install_dir.display()
-        );
-        return;
-    }
+    let install_dir = match install {
+        MtplxInstall::Git(p) => {
+            eprintln!(
+                "  {d}install{r}: {a}{}{r} {d}(git checkout){r}",
+                p.display()
+            );
+            p
+        }
+        MtplxInstall::Brew { formula, version } => {
+            eprintln!("  {d}install{r}: {a}{}{r} {d}(Homebrew){r}", formula);
+            eprintln!("  {d}version{r}: {a}{}{r}", version);
+            match brew_mtplx_latest_available() {
+                Some(latest) => {
+                    eprintln!("  {w}!{r} a newer MTPLX is available: {a}{}{r}", latest);
+                    eprint!("  {d}run `brew upgrade mtplx` now? [Y/n] {r}");
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                    let mut input = String::new();
+                    if std::io::stdin().read_line(&mut input).is_err() {
+                        return;
+                    }
+                    let answer = input.trim().to_lowercase();
+                    if !answer.is_empty() && !answer.starts_with('y') {
+                        eprintln!("  {d}skipped{r}");
+                        return;
+                    }
+                    let status = std::process::Command::new("brew")
+                        .args(["upgrade", "mtplx"])
+                        .status();
+                    if matches!(status, Ok(s) if s.success()) {
+                        eprintln!("{g}✓{r} MTPLX upgraded via Homebrew");
+                        flag_running_server();
+                    } else {
+                        eprintln!(
+                            "  {w}!{r} `brew upgrade mtplx` failed; run it manually to diagnose."
+                        );
+                    }
+                }
+                None => {
+                    eprintln!("  {g}✓{r} MTPLX is up to date");
+                }
+            }
+            return;
+        }
+        MtplxInstall::Unknown => {
+            eprintln!("  {w}!{r} MTPLX server is running but we can't tell how it was installed.");
+            eprintln!(
+                "    {d}set {a}HIP_MTPLX_INSTALL_DIR{d} to your checkout, or update it manually.{r}"
+            );
+            return;
+        }
+        MtplxInstall::None => {
+            eprintln!(
+                "  {w}!{r} could not locate MTPLX. Install via {a}brew install youssofal/mtplx/mtplx{r}"
+            );
+            eprintln!("    or run {a}hip --setup{r} to clone a source checkout.");
+            return;
+        }
+    };
 
     let dir_str = install_dir.to_string_lossy().to_string();
 
@@ -544,6 +582,182 @@ fn check_mtplx_updates() {
 
 /// If the MTPLX server is listening on :8088, tell the user it still has
 /// the old code mapped and needs a restart to pick up the new files.
+/// How MTPLX got onto this machine. Determines what the "update" path
+/// looks like: git pull vs `brew upgrade mtplx` vs "we have no idea."
+pub enum MtplxInstall {
+    /// Source checkout with a `.git` directory. Update via fetch+pull.
+    Git(PathBuf),
+    /// Installed via Homebrew (`youssofal/mtplx/mtplx` formula or a
+    /// custom tap). Update via `brew upgrade`. String is the formula
+    /// name including the tap prefix when known, e.g.
+    /// "youssofal/mtplx/mtplx".
+    Brew { formula: String, version: String },
+    /// Server is reachable but we couldn't figure out how it was
+    /// installed (custom Python env, container, etc.). Best we can do
+    /// is tell the user.
+    Unknown,
+    /// No MTPLX detected anywhere.
+    None,
+}
+
+/// Locate MTPLX. Order:
+///   1. $HIP_MTPLX_INSTALL_DIR override (must point at a git checkout).
+///   2. Wizard default ~/code/MTPLX if it's a git checkout.
+///   3. Probe the running server on :8088 for open-file paths -- if any
+///      lead back to a Homebrew Cellar / venv, we know it's brew.
+///   4. Probe the running server's cwd, walk up for a `.git` ancestor.
+///   5. `brew list --formula mtplx` as a final passive check.
+fn resolve_mtplx_install() -> MtplxInstall {
+    use std::process::Command;
+
+    // 1. Explicit env override always wins, but only if it points at a
+    //    git checkout (the only thing we can fetch+pull from).
+    if let Ok(v) = std::env::var("HIP_MTPLX_INSTALL_DIR") {
+        let p = PathBuf::from(v);
+        if p.join(".git").exists() {
+            return MtplxInstall::Git(p);
+        }
+    }
+
+    // 2. Wizard default.
+    let default = PathBuf::from(shellexpand::tilde("~/code/MTPLX").into_owned());
+    if default.join(".git").exists() {
+        return MtplxInstall::Git(default);
+    }
+
+    // 3 + 4. Probe the running server on :8088.
+    let pid_out = Command::new("lsof")
+        .args(["-nP", "-iTCP:8088", "-sTCP:LISTEN", "-t"])
+        .output()
+        .ok();
+    let pid_str = pid_out
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_default();
+
+    if !pid_str.is_empty() {
+        // Look at all open files for telltale brew-tap paths first.
+        // Homebrew installs MTPLX under /opt/homebrew/var/mtplx/venv-<ver>
+        // (Apple Silicon) or /usr/local/var/mtplx/venv-<ver> (Intel).
+        if let Ok(o) = Command::new("lsof").args(["-p", &pid_str]).output() {
+            let body = String::from_utf8_lossy(&o.stdout);
+            let brew_hit = body.lines().find(|l| {
+                l.contains("/homebrew/var/mtplx/") || l.contains("/usr/local/var/mtplx/")
+            });
+            if brew_hit.is_some() {
+                let (formula, version) = detect_brew_mtplx_version();
+                return MtplxInstall::Brew { formula, version };
+            }
+        }
+
+        // No brew signature: try to recover a git checkout from cwd.
+        let cwd = Command::new("lsof")
+            .args(["-p", &pid_str, "-a", "-d", "cwd", "-Fn"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .find(|l| l.starts_with('n'))
+                    .map(|l| l[1..].to_string())
+            })
+            .map(PathBuf::from);
+        if let Some(start) = cwd {
+            let mut cur = start.as_path();
+            loop {
+                if cur.join(".git").exists() && cur.join("setup.py").exists()
+                    || cur.join(".git").exists() && cur.join("pyproject.toml").exists()
+                {
+                    return MtplxInstall::Git(cur.to_path_buf());
+                }
+                match cur.parent() {
+                    Some(p) => cur = p,
+                    None => break,
+                }
+            }
+        }
+    }
+
+    // 5. Passive brew probe even if the server isn't running: maybe
+    //    they installed via brew and just haven't started it.
+    if Command::new("brew")
+        .args(["list", "--formula", "mtplx"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        let (formula, version) = detect_brew_mtplx_version();
+        return MtplxInstall::Brew { formula, version };
+    }
+
+    if !pid_str.is_empty() {
+        return MtplxInstall::Unknown;
+    }
+    MtplxInstall::None
+}
+
+/// Return (formula-with-tap, version) for the brew-installed MTPLX, or
+/// reasonable defaults if `brew info` can't be parsed.
+fn detect_brew_mtplx_version() -> (String, String) {
+    use std::process::Command;
+    let info = Command::new("brew")
+        .args(["info", "--json=v2", "mtplx"])
+        .output()
+        .ok();
+    let mut version = "unknown".to_string();
+    let mut formula = "youssofal/mtplx/mtplx".to_string();
+    if let Some(out) = info {
+        if let Ok(body) = String::from_utf8(out.stdout) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                if let Some(formulae) = v.get("formulae").and_then(|x| x.as_array()) {
+                    if let Some(f) = formulae.first() {
+                        if let Some(t) = f.get("tap").and_then(|x| x.as_str()) {
+                            if let Some(n) = f.get("name").and_then(|x| x.as_str()) {
+                                formula = format!("{}/{}", t, n);
+                            }
+                        }
+                        if let Some(installed) = f
+                            .get("installed")
+                            .and_then(|x| x.as_array())
+                            .and_then(|a| a.first())
+                        {
+                            if let Some(vstr) = installed.get("version").and_then(|x| x.as_str()) {
+                                version = vstr.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (formula, version)
+}
+
+/// Check whether brew thinks the installed MTPLX is outdated. Returns
+/// Some(latest_version) when an upgrade is available, None when current
+/// or when we can't tell.
+fn brew_mtplx_latest_available() -> Option<String> {
+    use std::process::Command;
+    // `brew outdated --json=v2 <formula>` returns a JSON document with
+    // a "formulae" array; an empty array means "up to date."
+    let out = Command::new("brew")
+        .args(["outdated", "--json=v2", "mtplx"])
+        .output()
+        .ok()?;
+    let body = String::from_utf8(out.stdout).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let formulae = v.get("formulae")?.as_array()?;
+    let first = formulae.first()?;
+    first
+        .get("current_version")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
 fn flag_running_server() {
     use crate::theme::{warn, RESET};
     let w = warn();
