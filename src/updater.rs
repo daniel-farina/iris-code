@@ -277,17 +277,7 @@ fn check_mtplx_updates() {
             match brew_mtplx_latest_available() {
                 Some(latest) => {
                     eprintln!("  {w}!{r} a newer MTPLX is available: {a}{}{r}", latest);
-                    eprint!("  {d}run `brew upgrade mtplx` now? [Y/n] {r}");
-                    let _ = std::io::Write::flush(&mut std::io::stderr());
-                    let mut input = String::new();
-                    if std::io::stdin().read_line(&mut input).is_err() {
-                        return;
-                    }
-                    let answer = input.trim().to_lowercase();
-                    if !answer.is_empty() && !answer.starts_with('y') {
-                        eprintln!("  {d}skipped{r}");
-                        return;
-                    }
+                    eprintln!("  {d}running `brew upgrade mtplx`...{r}");
                     let status = std::process::Command::new("brew")
                         .args(["upgrade", "mtplx"])
                         .status();
@@ -547,18 +537,10 @@ fn check_mtplx_updates() {
         }
     }
 
-    eprint!("{d}update MTPLX? [Y/n] {r}");
-    let _ = std::io::Write::flush(&mut std::io::stderr());
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_err() {
-        return;
-    }
-    let answer = input.trim().to_lowercase();
-    if !answer.is_empty() && !answer.starts_with('y') {
-        eprintln!("{d}skipped{r}");
-        return;
-    }
-
+    eprintln!(
+        "{d}running `git pull --ff-only origin {}`...{r}",
+        chosen.branch
+    );
     let pull = Command::new("git")
         .args([
             "-C",
