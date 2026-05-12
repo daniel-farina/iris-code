@@ -89,9 +89,13 @@ struct Cli {
     #[arg(long, default_value_t = 30)]
     max_rounds: u32,
 
-    /// Session id sent as `x-mtplx-session-id`. Reusing it warms the prefix cache.
-    #[arg(long, env = "MLX_CODE_SESSION", default_value = "mlx-code-default")]
-    session: String,
+    /// Session id sent as `x-mtplx-session-id`. If omitted, a unique
+    /// auto-generated id is used (`auto-YYYYMMDD-HHMMSS-<6hex>`) so each run
+    /// is individually identifiable in `~/.mlx-code/logs/runs.jsonl` and the
+    /// `--resume` picker. Set `MLX_CODE_SESSION` or pass `--session` to reuse
+    /// a session and warm the prefix cache across runs.
+    #[arg(long, env = "MLX_CODE_SESSION")]
+    session: Option<String>,
 
     /// MTPLX base URL.
     #[arg(long, env = "MLX_CODE_URL", default_value = "http://127.0.0.1:8088/v1")]
@@ -257,9 +261,79 @@ struct Cli {
     update: bool,
 }
 
+impl Cli {
+    /// Resolved session id. Always `Some` after `resolve_session_id` runs.
+    fn session_id(&self) -> &str {
+        self.session
+            .as_deref()
+            .expect("session resolved before first use")
+    }
+}
+
+/// Build a fresh, unique session id of the form `auto-YYYYMMDD-HHMMSS-<6hex>`.
+///
+/// The 6-hex tail comes from the sub-second portion of the wall clock so we
+/// don't need to pull in a `rand` dep. The timestamp portion is built from
+/// `std::time::SystemTime` (no `chrono` dep either) so two runs started in
+/// the same second still get distinct ids.
+fn generate_auto_session_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs() as i64;
+    let nanos = now.subsec_nanos();
+
+    // Convert epoch seconds into a UTC YYYYMMDD-HHMMSS stamp. This is a
+    // small civil-from-days routine (Howard Hinnant) so we avoid the chrono
+    // dependency for one timestamp.
+    let (y, mo, d, hh, mm, ss) = civil_from_unix(secs);
+    let tail = format!("{:06x}", nanos & 0x00FF_FFFF);
+    format!(
+        "auto-{y:04}{mo:02}{d:02}-{hh:02}{mm:02}{ss:02}-{tail}",
+        y = y,
+        mo = mo,
+        d = d,
+        hh = hh,
+        mm = mm,
+        ss = ss,
+        tail = tail
+    )
+}
+
+/// Convert a unix timestamp (seconds since epoch, UTC) into
+/// `(year, month, day, hour, minute, second)`. Algorithm from
+/// Howard Hinnant's "date" library.
+fn civil_from_unix(secs: i64) -> (i32, u32, u32, u32, u32, u32) {
+    let days = secs.div_euclid(86_400);
+    let secs_of_day = secs.rem_euclid(86_400) as u32;
+    let hh = secs_of_day / 3600;
+    let mm = (secs_of_day % 3600) / 60;
+    let ss = secs_of_day % 60;
+
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u32; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i32 + (era as i32) * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if mo <= 2 { y + 1 } else { y };
+    (y, mo, d, hh, mm, ss)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut cli = Cli::parse();
+
+    // Resolve --session priority: explicit flag / env > auto-generated.
+    // Doing this once, up front, lets the rest of the file read
+    // `cli.session_id()` without worrying about the `Option`.
+    if cli.session.is_none() {
+        cli.session = Some(generate_auto_session_id());
+    }
 
     // Default thinking display is ON. Resolve in priority order:
     // 1. --hide-thinking flag wins (explicit opt-out)
@@ -334,7 +408,7 @@ async fn main() -> Result<()> {
         match find_last_session_id() {
             Some(sid) => {
                 eprintln!("[hip] resuming session: {}", sid);
-                cli.session = sid;
+                cli.session = Some(sid);
             }
             None => {
                 eprintln!("[hip] --continue: no prior runs found in ~/.mlx-code/logs/runs.jsonl");
@@ -365,7 +439,7 @@ async fn main() -> Result<()> {
             a = theme::accent(),
             r = theme::RESET,
         );
-        cli.session = sid;
+        cli.session = Some(sid);
         // Force chat mode so the resume actually does something interactive
         // — UNLESS the user is feeding the resume into a non-interactive
         // path: scripted --turn flags, or a positional prompt that means
@@ -407,63 +481,21 @@ async fn main() -> Result<()> {
             eprintln!("[hip] --watch requires a prompt");
             std::process::exit(2);
         }
-        let client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
+        let client = MtplxClient::new(&cli.url, cli.session_id(), &cli.model)?;
         run_watch_loop(&cli, &client, &prompt, &watch_path).await?;
         return Ok(());
     }
 
     let prompt = cli.prompt.join(" ");
 
-    // Auto-rotate the session id for non-interactive --print/agent runs when
-    // the user is on the default. Reusing one default session across many
-    // back-to-back agent invocations builds up enough MTPLX prefix-cache
-    // state that occasional rounds return finish_reason=error with zero
-    // tokens (observed running 21+ iters of a self-paced game-build loop).
-    // Interactive --chat runs and explicit --session / --continue-last
-    // still keep their stable id so warm-cache-on-purpose still works.
-    // Scripted --turn mode is non-interactive even on a TTY with no
-    // positional prompt; the turns ARE the prompts.
+    // Whether to enter the interactive chat REPL. Used below to gate the
+    // chat-vs-one-shot branching.
     let going_interactive = cli.chat
         || (prompt.trim().is_empty()
             && cli.turn.is_empty()
             && std::io::IsTerminal::is_terminal(&std::io::stdin()));
-    let on_default_session = cli.session == "mlx-code-default";
-    let resume_explicitly = cli.continue_last || cli.resume.is_some();
-    if !going_interactive && on_default_session && !resume_explicitly {
-        // Stable session id derived from (user@host, abs_cwd, model, tool-schema
-        // hash). Repeated hip invocations in the same project share MTPLX prefix
-        // cache; changing model or tool registry rotates the session so a stale
-        // cache built against a different schema can't silently poison results.
-        // Pattern lifted from opencode-context-cache.
-        use std::hash::{Hash, Hasher};
-        let cwd = std::env::current_dir()
-            .ok()
-            .and_then(|p| p.canonicalize().ok())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "unknown".to_string());
-        let user = std::env::var("USER").unwrap_or_else(|_| "anon".to_string());
-        let host = std::env::var("HOSTNAME")
-            .or_else(|_| std::env::var("HOST"))
-            .unwrap_or_else(|_| {
-                std::process::Command::new("hostname")
-                    .output()
-                    .ok()
-                    .and_then(|o| String::from_utf8(o.stdout).ok())
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_else(|| "localhost".to_string())
-            });
-        let tools_fingerprint =
-            serde_json::to_string(&tools::tool_specs(&tools::registry())).unwrap_or_default();
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        user.hash(&mut hasher);
-        host.hash(&mut hasher);
-        cwd.hash(&mut hasher);
-        cli.model.hash(&mut hasher);
-        tools_fingerprint.hash(&mut hasher);
-        cli.session = format!("hip-warm-{:016x}", hasher.finish());
-    }
 
-    let mut client = MtplxClient::new(&cli.url, &cli.session, &cli.model)?;
+    let mut client = MtplxClient::new(&cli.url, cli.session_id(), &cli.model)?;
 
     // Interactive chat: explicit --chat flag, or no prompt and stdin is a TTY.
     if going_interactive {
@@ -787,7 +819,7 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 ctx_turns = 0;
                 let new_sid = format!(
                     "{}-{}",
-                    cli.session,
+                    cli.session_id(),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs())
@@ -2649,8 +2681,42 @@ fn print_stats(res: &client::StreamResult, label: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{line_diff, scan_mtimes};
+    use super::{civil_from_unix, generate_auto_session_id, line_diff, scan_mtimes};
     use std::path::PathBuf;
+
+    #[test]
+    fn civil_from_unix_matches_known_epochs() {
+        // 1970-01-01T00:00:00Z
+        assert_eq!(civil_from_unix(0), (1970, 1, 1, 0, 0, 0));
+        // 2026-05-12T15:30:12Z
+        assert_eq!(civil_from_unix(1_778_599_812), (2026, 5, 12, 15, 30, 12));
+        // 2000-02-29T12:34:56Z (leap day)
+        assert_eq!(civil_from_unix(951_827_696), (2000, 2, 29, 12, 34, 56));
+    }
+
+    #[test]
+    fn auto_session_id_has_expected_shape() {
+        let sid = generate_auto_session_id();
+        // Prefix + timestamp segments + 6-hex tail.
+        assert!(sid.starts_with("auto-"), "missing auto- prefix: {sid}");
+        let parts: Vec<&str> = sid.split('-').collect();
+        assert_eq!(parts.len(), 4, "expected 4 dash-segments in {sid}");
+        assert_eq!(parts[0], "auto");
+        assert_eq!(parts[1].len(), 8, "date should be 8 digits: {sid}");
+        assert_eq!(parts[2].len(), 6, "time should be 6 digits: {sid}");
+        assert_eq!(parts[3].len(), 6, "tail should be 6 hex chars: {sid}");
+        assert!(parts[1].chars().all(|c| c.is_ascii_digit()));
+        assert!(parts[2].chars().all(|c| c.is_ascii_digit()));
+        assert!(parts[3].chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn auto_session_id_is_unique_per_call() {
+        // Sub-second nanos drive the tail; two back-to-back calls must differ.
+        let a = generate_auto_session_id();
+        let b = generate_auto_session_id();
+        assert_ne!(a, b, "two consecutive auto ids collided: {a} == {b}");
+    }
 
     #[test]
     fn line_diff_pure_addition_at_end() {
@@ -2733,7 +2799,7 @@ mod tests {
         // Re-parse, then assert the structure.
         let parsed: serde_json::Value = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed["model"].as_str().unwrap(), "test-model");
-        assert_eq!(parsed["stream"].as_bool().unwrap(), true);
+        assert!(parsed["stream"].as_bool().unwrap());
         let msgs = parsed["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0]["role"].as_str().unwrap(), "system");

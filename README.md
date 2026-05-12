@@ -94,7 +94,7 @@ Toggle at launch (CLI flags) or runtime (REPL `:cmds`) or via env vars:
 | `--log-runs`        | `MLX_CODE_LOG_RUNS`     | on      | Append JSONL row per run              |
 | `--quiet / -q`      | `MLX_CODE_NO_PRETTY`+`MLX_CODE_NO_LIVE_TPS` | off | Suppress UI |
 | `--verbose / -v`    | —                       | off     | show_thinking + full_output + stats   |
-| `--session ID`      | `MLX_CODE_SESSION`      | mlx-code-default | Cache key                  |
+| `--session ID`      | `MLX_CODE_SESSION`      | auto-generated `auto-YYYYMMDD-HHMMSS-<6hex>` | Cache key. Omit for a fresh unique id per run; set explicitly to reuse and warm the prefix cache. |
 | `--url URL`         | `MLX_CODE_URL`          | localhost:8088/v1 | Server                    |
 | `--model NAME`      | `MLX_CODE_MODEL`        | mtplx-qwen36-27b-optimized-speed | Model id |
 | `--continue / -c`   | —                       | off     | Resume the most recent session_id     |
