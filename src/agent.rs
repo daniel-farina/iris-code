@@ -78,6 +78,11 @@ pub async fn run_loop_with_prune(
     let started = Instant::now();
     let mut out = stdout();
     let prune_opts = crate::prune::opts_from_env(no_auto_prune);
+    // Cap consecutive max_tokens auto-continues so a model that keeps
+    // truncating can't pin the loop forever. Reset on any round that
+    // finishes for a non-length reason.
+    const MAX_CONSECUTIVE_LENGTH_CONTINUES: u32 = 3;
+    let mut consecutive_length_continues: u32 = 0;
 
     for round in 0..max_rounds {
         stats.rounds = round + 1;
@@ -206,27 +211,56 @@ pub async fn run_loop_with_prune(
 
         // finish_reason="length" means the model was cut off because it hit
         // max_tokens, NOT because it considered the task done. If we let the
-        // loop exit here the user has to manually type "continue" — which
-        // they've reported is annoying. Auto-continue once by appending the
-        // partial assistant text and re-prompting. We cap at one auto-continue
-        // per round so a runaway model can't pin the loop forever.
+        // loop exit here the user has to manually type "continue" - which
+        // they've reported is annoying. Auto-continue by appending the partial
+        // assistant text and re-prompting. Capped at
+        // `MAX_CONSECUTIVE_LENGTH_CONTINUES` in a row so a runaway model can't
+        // pin the loop forever. The counter resets every round that does NOT
+        // truncate by length.
         let truncated_by_length = res
             .finish_reason
             .as_deref()
             .map(|r| r == "length")
             .unwrap_or(false);
-        if truncated_by_length && res.tool_calls.is_empty() {
+        if truncated_by_length {
+            consecutive_length_continues += 1;
+            if consecutive_length_continues > MAX_CONSECUTIVE_LENGTH_CONTINUES {
+                eprintln!(
+                    "\x1b[33m[hip] hit max_tokens {} times in a row; stopping auto-continue so you can intervene. Raise --max-tokens or simplify the task.\x1b[0m",
+                    MAX_CONSECUTIVE_LENGTH_CONTINUES
+                );
+                // Best-effort: preserve whatever text the model did produce in
+                // this final turn so the user can see it / resume manually.
+                if !res.content.trim().is_empty() {
+                    conv.push(ChatMessage::assistant_text(res.content.clone()));
+                }
+                stats.total = started.elapsed();
+                return Ok(stats);
+            }
             // Print a visible marker so the user knows what's happening.
             crate::pretty::truncation_notice(opts.max_tokens);
+            // If the truncation came mid-tool-call, the tool_calls JSON args
+            // are likely incomplete/malformed. Don't try to execute them;
+            // drop the tool_calls payload and keep only the text portion so
+            // the model can pick up where it stopped. The model can re-emit
+            // the tool call cleanly on the next round.
+            if !res.tool_calls.is_empty() {
+                eprintln!(
+                    "\x1b[2m[hip] truncation occurred mid tool_call; dropping partial call(s) and asking model to continue\x1b[0m"
+                );
+            }
+            // Preserve assistant text (even if empty - empty assistant turn
+            // is still valid history; the "continue" user message follows).
             conv.push(ChatMessage::assistant_text(res.content.clone()));
             // Nudge the model to keep going. A bare "continue" turns into a
             // user message in the conversation; the assistant can then
             // continue from where it stopped without losing context.
             conv.push(ChatMessage::user("continue"));
-            // Loop again; if it truncates a second time we DO exit so the
-            // user can intervene.
             continue;
         }
+        // Non-length finish: reset the streak counter so we don't conflate
+        // "3 truncations across the whole loop" with "3 in a row".
+        consecutive_length_continues = 0;
 
         if res.tool_calls.is_empty() {
             // Final answer — append to history and exit.
