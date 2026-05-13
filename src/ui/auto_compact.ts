@@ -9,11 +9,12 @@
 // stable approximation - good enough for a threshold check that just
 // needs to fire near 10K. Extracted here so it's testable without Ink.
 
+import { DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS } from '../config.js';
 import type { ChatMessage } from '../schema.js';
 
 /** Conv-size cliff (in tokens) above which MTPLX starts evicting the
  *  session from its 8-slot bank. We trigger compact a bit below this. */
-export const AUTO_COMPACT_TOKEN_THRESHOLD = 9000;
+export const AUTO_COMPACT_TOKEN_THRESHOLD = DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS;
 
 /** Cheap token estimate: ~4 chars/token on average for English + JSON. */
 export function estimateTokens(conv: ChatMessage[]): number {

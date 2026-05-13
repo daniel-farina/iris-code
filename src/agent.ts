@@ -14,6 +14,7 @@
 import type { MtplxClient, SamplingOpts } from './client.js';
 import { approxTokens, compactConv } from './compact.js';
 import {
+  DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS,
   DEFAULT_MAX_ROUNDS,
   DEFAULT_POSTCOMMIT_DELAY_MS,
   MAX_CONSECUTIVE_LENGTH_CONTINUES,
@@ -87,7 +88,8 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
   const { client, conv, sampling, events, signal } = opts;
   const maxRounds = opts.maxRounds ?? DEFAULT_MAX_ROUNDS;
   const postcommitDelayMs = opts.postcommitDelayMs ?? DEFAULT_POSTCOMMIT_DELAY_MS;
-  const autoCompactThreshold = opts.autoCompactThresholdTokens ?? 9000;
+  const autoCompactThreshold =
+    opts.autoCompactThresholdTokens ?? DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS;
   const specs = toolSpecs();
   const startTotal = performance.now();
   let consecutiveLength = 0;

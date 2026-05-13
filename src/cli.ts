@@ -11,6 +11,7 @@ import { parseArgs } from 'node:util';
 import { runLoop } from './agent.js';
 import { MtplxClient } from './client.js';
 import {
+  DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS,
   DEFAULT_MAX_ROUNDS,
   DEFAULT_MAX_TOKENS,
   DEFAULT_MODEL,
@@ -402,7 +403,8 @@ async function runPrintMode(
     // (or by default if they didn't pass --no-auto-compact). The TUI
     // already wires its own auto-compact; in --print mode this is
     // brand new and gates on the same flag.
-    autoCompactThresholdTokens: flags.autoCompact === false ? 0 : 9000,
+    autoCompactThresholdTokens:
+      flags.autoCompact === false ? 0 : DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS,
     systemPromptForCompact: flags.system,
     events: {
       onRound: (_n, info) => {
