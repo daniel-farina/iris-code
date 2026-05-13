@@ -37,6 +37,6 @@ jobs:
 
       - name: vitest
         run: bunx vitest run
-
-      - name: bun test (repo only; test-game playground excluded)
-        run: bun test tests/
+        # Note: the test-game/ playground has its own bun:test suite and
+        # depends on three; it's a local stress-testing sandbox and is
+        # intentionally not run in CI.
