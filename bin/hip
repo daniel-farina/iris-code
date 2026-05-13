@@ -1,0 +1,4 @@
+#!/usr/bin/env bun
+// Thin launcher so users can run `hip-ts ...` after `npm link` (or after
+// adding ./bin to PATH). Forwards to src/cli.ts.
+import('../src/cli.ts');

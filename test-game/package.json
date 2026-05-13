@@ -1,0 +1,12 @@
+{
+  "name": "hip-ts-test-game",
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": { "three": "^0.160.0" },
+  "devDependencies": { "vite": "^5.0.0" }
+}
