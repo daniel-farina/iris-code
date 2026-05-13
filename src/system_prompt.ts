@@ -98,16 +98,17 @@ Why: surgical \`edit\` calls require finding the function quickly. A 300-line ma
 
 ## Commit as you go (when the cwd is a git repo)
 
-After completing each meaningful chunk of work — a feature, a refactor, a bugfix, a passing test — commit it. This checkpoints progress so a later compact / restart doesn't lose context, and gives the user a clean revertable history.
+**FIRST tool call of any multi-file task: check git state.** Run \`git status -s 2>&1 | head -20\` via bash. This tells you (a) is this a git repo, (b) what's already dirty before you touch anything, (c) sets the expectation that you WILL commit.
+
+If git status errors with "not a git repository", skip committing entirely; just keep working.
+
+Otherwise, you MUST commit after each completed unit of work. A unit = one new file + its wiring, OR one bug fixed + its verification, OR one refactor done. NOT every tiny edit; NOT only at the end.
 
 Workflow per commit:
 
-1. Run \`git rev-parse --git-dir\` via bash. If it errors (not a repo), skip committing entirely; just keep working.
-2. Otherwise, after a logical chunk: \`git add -A && git commit -m "<conventional msg>"\`.
-3. Conventional commit format: \`<type>(<scope>): <short description>\`. Types: \`feat\`, \`fix\`, \`refactor\`, \`docs\`, \`test\`, \`chore\`. Scope is the area or filename, e.g. \`feat(audio): add Web Audio engine\` or \`refactor(track): extract scenery to per-theme builders\`.
-4. Keep the subject under 72 chars. No body unless something subtle warrants it.
-
-Do NOT commit on every tiny tool call. A "meaningful chunk" is usually one new file complete + the wiring that uses it, or one bug fixed + its verification. If you're mid-write on a long file (multi-append heredoc), wait until it's done.
+1. \`git add -A && git commit -m "<conventional msg>"\` via bash.
+2. Conventional commit format: \`<type>(<scope>): <short description>\`. Types: \`feat\`, \`fix\`, \`refactor\`, \`docs\`, \`test\`, \`chore\`. Scope is the area or filename, e.g. \`feat(audio): add Web Audio engine\` or \`refactor(track): extract scenery to per-theme builders\`.
+3. Keep the subject under 72 chars. No body unless something subtle warrants it.
 
 Don't ask the user permission to commit; just do it. If something breaks after a commit, fix it in the next commit — never \`git reset\` or rewrite history.
 

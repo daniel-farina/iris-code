@@ -65,6 +65,11 @@ interface Flags {
   /** Sidecar base URL (no trailing /v1). Default http://localhost:11434
    *  (Ollama default). */
   sidecarUrl?: string;
+  /** When set, after --print exits hip will git-add+commit any
+   *  uncommitted changes in cwd if it's a git repo. Commit message is
+   *  derived from runningSummary (sidecar) or the first user prompt.
+   *  Safety net for when the model forgets to commit-as-it-goes. */
+  autoCommit?: boolean;
 }
 
 const VERSION = '0.4.1-dev';
@@ -128,6 +133,7 @@ export function parseFlags(argv: string[]): Flags {
       'no-auto-compact': { type: 'boolean' },
       sidecar: { type: 'string' },
       'sidecar-url': { type: 'string' },
+      'auto-commit': { type: 'boolean' },
       'clear-stale-sessions': { type: 'string' },
       version: { type: 'boolean', short: 'V' },
       help: { type: 'boolean', short: 'h' },
@@ -182,6 +188,8 @@ export function parseFlags(argv: string[]): Flags {
       (values['sidecar-url'] as string | undefined) ??
       process.env['HIP_SIDECAR_URL'] ??
       'http://localhost:11434',
+    autoCommit:
+      (values['auto-commit'] as boolean | undefined) ?? process.env['HIP_AUTO_COMMIT'] === '1',
     clearStaleSessionsMinutes: values['clear-stale-sessions']
       ? num('clear-stale-sessions', values['clear-stale-sessions'] as string, 30)
       : undefined,
@@ -214,6 +222,7 @@ Options:
   --no-auto-compact                  TUI: disable auto-/compact when conv approaches ~9K tokens
   --sidecar <model>                  Ollama small-model id (e.g. gemma4:e2b) for parallel per-round summaries; free compact (env: HIP_SIDECAR_MODEL). Auto-detected if Ollama is reachable with a known small model.
   --sidecar-url <url>                Ollama base URL for --sidecar (default http://localhost:11434; env: HIP_SIDECAR_URL)
+  --auto-commit                      after --print exits, sweep up any uncommitted changes into one commit using a sidecar-derived message (env: HIP_AUTO_COMMIT=1)
   --clear-stale-sessions [N]         at startup, clear MTPLX sessions idle >N min (default 30) to free session-bank slots
   --update                           download + install the latest release from GitHub
   --install-info                     print where hip is installed and the target platform
@@ -542,6 +551,19 @@ async function runPrintMode(
   process.stderr.write(
     `\n[done] session=${sessionId} rounds=${stats.rounds} tool_calls=${stats.toolCalls} ms=${stats.totalMs.toFixed(0)} ctok=${completionTokens}${tps}${compactStats}${sidecarStats} finish=${finishLabel}\n`,
   );
+  // Safety-net auto-commit: if the user asked for it and the model
+  // didn't commit on its own, sweep up any dirty changes.
+  if (flags.autoCommit) {
+    const { autoCommit } = await import('./auto_commit.js');
+    const result = autoCommit(process.cwd(), runningSummary, flags.print ?? '');
+    if (result.committed) {
+      process.stderr.write(
+        `[hip] auto-commit: ${result.message} (${result.files?.length ?? 0} files)\n`,
+      );
+    } else if (result.attempted) {
+      process.stderr.write(`[hip] auto-commit skipped: ${result.reason}\n`);
+    }
+  }
 }
 
 function jsonOneLine(o: Record<string, unknown>): string {
