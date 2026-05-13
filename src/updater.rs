@@ -272,34 +272,104 @@ async fn check_mtplx_updates() {
             p
         }
         MtplxInstall::Brew { formula, version } => {
-            eprintln!("  {d}install{r}: {a}{}{r} {d}(Homebrew){r}", formula);
-            eprintln!("  {d}version{r}: {a}{}{r}", version);
+            eprintln!("  {d}install{r}:  {a}{}{r} {d}(Homebrew){r}", formula);
+            eprintln!("  {d}brew ver{r}: {a}{}{r}", version);
 
             // Compare the running command line against our canonical
             // optimal config and surface any deltas. Done BEFORE the
             // upgrade check so the user sees config status even when
             // they're already up to date.
             let server_running = crate::mtplx_runner::running_pid().is_some();
+            let mut needs_restart_for_stale_code = false;
             if server_running {
                 let cmd = crate::mtplx_runner::running_command_line().unwrap_or_default();
                 let delta = crate::mtplx_runner::config_deltas(&cmd);
                 if delta.is_optimal() {
-                    eprintln!("  {d}config{r}:  {g}optimal{r}");
+                    eprintln!("  {d}config{r}:   {g}optimal{r} {d}(all canonical flags match){r}");
                 } else {
                     eprintln!(
-                        "  {d}config{r}:  {w}suboptimal{r} {d}({} delta(s)){r}",
+                        "  {d}config{r}:   {w}suboptimal{r} {d}({} delta(s)){r}",
                         delta.missing_or_wrong.len()
                     );
                     for missing in &delta.missing_or_wrong {
                         eprintln!("    {w}-{r} missing/wrong: {a}{}{r}", missing);
                     }
+                }
+
+                // Detail rows: at-a-glance view of the running server's
+                // key flag values so users can verify what's loaded
+                // without ps-ing the process themselves.
+                let details = crate::mtplx_runner::summarize_running_config(&cmd);
+                eprintln!("  {d}details{r}:");
+                for (label, value) in &details {
+                    eprintln!("    {d}{:<11}{r} {a}{}{r}", label, value);
+                }
+
+                // The running process pins its venv files by inode even
+                // after `brew upgrade` replaces the dir on disk. Detect
+                // when the running code came from a venv version that
+                // differs from the currently-installed brew version --
+                // that's the "you upgraded brew but didn't restart the
+                // server" state, and is exactly when a restart picks up
+                // the new code.
+                if let Some(running_ver) = crate::mtplx_runner::running_venv_version() {
+                    if running_ver != version {
+                        eprintln!(
+                            "  {w}!{r} running server is still on stale {a}{}{r} code; brew is at {a}{}{r}",
+                            running_ver, version
+                        );
+                        needs_restart_for_stale_code = true;
+                    }
+                }
+
+                if !delta.is_optimal() && !needs_restart_for_stale_code {
                     eprintln!(
-                        "  {d}fix{r}: run {a}hip --restart-mtplx{r} to relaunch with optimal config"
+                        "  {d}fix{r}:      run {a}hip --restart-mtplx{r} to relaunch with optimal config"
                     );
                 }
             } else {
-                eprintln!("  {d}config{r}:  {w}not running{r}");
-                eprintln!("  {d}fix{r}: run {a}hip --start-mtplx{r} to launch with optimal config");
+                eprintln!("  {d}config{r}:   {w}not running{r}");
+                eprintln!(
+                    "  {d}fix{r}:      run {a}hip --start-mtplx{r} to launch with optimal config"
+                );
+            }
+
+            // Stale-code path: the running server outlasted a brew
+            // upgrade. User invoked `hip --update`, so go ahead and
+            // restart with optimal config to land them on the new code.
+            if needs_restart_for_stale_code {
+                eprintln!();
+                eprintln!(
+                    "  {d}restarting MTPLX with optimal config to pick up the new code...{r}"
+                );
+                crate::mtplx_runner::stop_running_mtplx(std::time::Duration::from_secs(15));
+                match crate::mtplx_runner::start_mtplx_optimal_background() {
+                    Ok(pid) => {
+                        eprintln!(
+                            "  {g}✓{r} new MTPLX spawned (pid {a}{}{r}), waiting for model load...",
+                            pid
+                        );
+                        let up = crate::mtplx_runner::wait_until_listening(
+                            std::time::Duration::from_secs(300),
+                        )
+                        .await;
+                        if up {
+                            eprintln!(
+                                "  {g}✓{r} MTPLX is listening on :{}",
+                                crate::mtplx_runner::OPTIMAL_PORT
+                            );
+                        } else {
+                            eprintln!(
+                                "  {w}!{r} MTPLX didn't bind within 5 min; tail {a}{}{r} for diagnostics",
+                                crate::mtplx_runner::log_file().display()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
+                    }
+                }
+                return;
             }
 
             match brew_mtplx_latest_available() {

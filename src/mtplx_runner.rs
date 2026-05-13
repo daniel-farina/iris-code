@@ -169,6 +169,44 @@ pub fn running_command_line() -> Option<String> {
     }
 }
 
+/// Extract the brew MTPLX venv version that the currently-running server
+/// has files mapped from. After `brew upgrade mtplx` replaces the venv
+/// on disk, the running Python process still has the OLD venv's site-
+/// packages held open via inode preservation -- so its open-files list
+/// betrays the version the running code actually came from, even if the
+/// directory on disk has been replaced.
+///
+/// Returns None when nothing is listening on :8088 or when no venv path
+/// shows up in the open-files list (e.g., user installed via something
+/// other than brew).
+pub fn running_venv_version() -> Option<String> {
+    use std::process::Command;
+    let pid = running_pid()?;
+    let out = Command::new("lsof")
+        .args(["-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let body = String::from_utf8_lossy(&out.stdout);
+    for line in body.lines() {
+        // `?` would short-circuit the loop on the first line without a
+        // venv path -- the first match wins, so we iterate.
+        if let Some(idx) = line.find("/var/mtplx/venv-") {
+            let after = &line[idx + "/var/mtplx/venv-".len()..];
+            // Version runs until next / or first non-version char (digits/dots only).
+            let end = after
+                .char_indices()
+                .find(|(_, c)| !c.is_ascii_digit() && *c != '.')
+                .map(|(i, _)| i)
+                .unwrap_or(after.len());
+            let version = &after[..end];
+            if !version.is_empty() {
+                return Some(version.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Pull the PID listening on the optimal port. Returns None if nothing
 /// is listening.
 pub fn running_pid() -> Option<u32> {
@@ -181,6 +219,52 @@ pub fn running_pid() -> Option<u32> {
         .lines()
         .next()
         .and_then(|s| s.trim().parse::<u32>().ok())
+}
+
+/// Extract a small set of "headline" flag values from the running
+/// command line for at-a-glance display. Returns (label, value) pairs
+/// in the order callers should print them. Unknown values become
+/// "(not set)" so the display never silently omits a row.
+pub fn summarize_running_config(running_cmd: &str) -> Vec<(&'static str, String)> {
+    let tokens: Vec<&str> = running_cmd.split_whitespace().collect();
+    let get = |flag: &str| -> String {
+        for (i, t) in tokens.iter().enumerate() {
+            if *t == flag {
+                if let Some(v) = tokens.get(i + 1) {
+                    return v.to_string();
+                }
+            }
+        }
+        "(not set)".to_string()
+    };
+    let model_path = get("--model");
+    // Display just the directory name -- the full ~/.mtplx/models/... path
+    // is noise in a status table.
+    let model_short = std::path::Path::new(&model_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or(model_path);
+    vec![
+        ("model id", get("--model-id")),
+        ("model", model_short),
+        ("server", format!("{}:{}", get("--host"), get("--port"))),
+        (
+            "decode",
+            format!(
+                "{} depth={} profile={}",
+                get("--generation-mode"),
+                get("--depth"),
+                get("--profile"),
+            ),
+        ),
+        ("verify core", get("--verify-core")),
+        ("context", format!("{} tokens", get("--context-window"))),
+        (
+            "sampling",
+            format!("temp={} top-p={}", get("--temperature"), get("--top-p"),),
+        ),
+        ("reasoning", get("--reasoning-parser")),
+    ]
 }
 
 /// Compare the running command line against OPTIMAL_FLAGS. For each
@@ -399,10 +483,62 @@ mod tests {
     }
 
     #[test]
+    fn summarize_running_config_extracts_headline_values() {
+        let cmd = "python -m mtplx.server.openai --model /m/path --host 127.0.0.1 --port 8088 \
+            --depth 3 --generation-mode mtp --profile sustained \
+            --verify-core linear-gdn-from-conv-tape --context-window 128000 \
+            --temperature 0.6 --top-p 0.95 --reasoning-parser qwen3 \
+            --model-id mtplx-qwen36-27b-optimized-speed";
+        let rows = summarize_running_config(cmd);
+        let map: std::collections::HashMap<_, _> = rows.into_iter().collect();
+        assert_eq!(
+            map.get("model id").unwrap(),
+            "mtplx-qwen36-27b-optimized-speed"
+        );
+        assert_eq!(map.get("server").unwrap(), "127.0.0.1:8088");
+        assert_eq!(map.get("decode").unwrap(), "mtp depth=3 profile=sustained");
+        assert_eq!(map.get("verify core").unwrap(), "linear-gdn-from-conv-tape");
+        assert_eq!(map.get("context").unwrap(), "128000 tokens");
+        assert_eq!(map.get("sampling").unwrap(), "temp=0.6 top-p=0.95");
+        assert_eq!(map.get("reasoning").unwrap(), "qwen3");
+    }
+
+    #[test]
     fn find_optimal_model_dir_handles_missing() {
         // The function should return None when path doesn't exist; we can't
         // assert it returns Some without depending on local state, so just
         // make sure it doesn't panic.
         let _ = find_optimal_model_dir();
+    }
+
+    /// Live-environment smoke test for the read-only detection helpers.
+    /// Marked `#[ignore]` so it doesn't run in plain `cargo test` (which
+    /// must remain side-effect-free). Run explicitly with:
+    ///   cargo test -- --ignored live_detect_smoke --nocapture
+    /// to see what hip is detecting on the current machine.
+    #[test]
+    #[ignore]
+    fn live_detect_smoke() {
+        println!("\n--- mtplx_runner live detection ---");
+        println!("brew_python:        {:?}", find_brew_python());
+        println!("model_dir:          {:?}", find_optimal_model_dir());
+        println!("running_pid:        {:?}", running_pid());
+        println!("running_venv_ver:   {:?}", running_venv_version());
+        match running_command_line() {
+            Some(cmd) => {
+                println!("running_cmd: {}", cmd);
+                let d = config_deltas(&cmd);
+                println!("is_optimal: {}", d.is_optimal());
+                if !d.is_optimal() {
+                    println!("deltas:");
+                    for x in &d.missing_or_wrong {
+                        println!("  - {}", x);
+                    }
+                }
+            }
+            None => println!("running_cmd: (no MTPLX listening on :8088)"),
+        }
+        println!("log_file: {}", log_file().display());
+        println!("--- end ---\n");
     }
 }
