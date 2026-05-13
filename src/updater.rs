@@ -494,7 +494,36 @@ async fn check_mtplx_updates() {
             }
         }
     } else {
-        eprintln!("  {d}(no MTPLX server running -- run {a}hip --start-mtplx{d} to launch){r}");
+        // No server running. Auto-start it with the canonical config so
+        // the user doesn't have to type `hip --start-mtplx` themselves.
+        // Skippable via HIP_NO_AUTO_START=1 for cases where the user wants
+        // to launch by hand (e.g. attaching a debugger or running with
+        // non-default flags).
+        if std::env::var("HIP_NO_AUTO_START")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
+            eprintln!(
+                "  {d}(no MTPLX server running -- HIP_NO_AUTO_START=1 set, run {a}hip --start-mtplx{d} to launch){r}"
+            );
+        } else {
+            eprintln!("  {d}no MTPLX server running -- auto-starting with optimal config...{r}");
+            match crate::mtplx_runner::start_mtplx_optimal_background_with(&state.python_path) {
+                Ok(pid) => {
+                    eprintln!(
+                        "  {g}✓{r} MTPLX server started {d}(PID {}, listening on 127.0.0.1:8088){r}",
+                        pid
+                    );
+                    eprintln!(
+                        "  {d}set {a}HIP_NO_AUTO_START=1{d} to disable this auto-start behaviour.{r}"
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  {w}!{r} auto-start failed: {}", e);
+                    eprintln!("  {d}run manually:{r} {a}hip --start-mtplx{r}");
+                }
+            }
+        }
     }
 }
 
