@@ -59,7 +59,7 @@ describe('compactConv', () => {
     expect(r).not.toBeNull();
     // New conv = [system, user(summary), assistant(ack)] + tail(6)
     expect(r?.newConv.length).toBe(9);
-    expect(r?.newConv[1]?.content).toContain('Compacted session summary');
+    expect(r?.newConv[1]?.content).toContain('Compacted background context');
     // Tail should be the last 6 from original conv.
     const tailContent = r?.newConv
       .slice(3)

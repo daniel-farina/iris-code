@@ -136,10 +136,21 @@ export async function compactConv(opts: {
   // New conv: [system, user(summary), assistant(ack), ...tail].
   // The tail keeps the model anchored to the immediate next step
   // rather than ONLY having a paragraph of summary.
+  //
+  // Wording note on the assistant ack: "OK, continuing from the
+  // summary" used to make the model treat the summary as
+  // task-completion - it would output "Ready for the next task" and
+  // stop. New ack explicitly frames the summary as background and
+  // points at the LATEST user message as the active task.
   const newConv: ChatMessage[] = [
     systemMessage(systemPrompt ?? DEFAULT_SYSTEM_PROMPT),
-    userMessage(`[Compacted session summary — older turns]\n${summary}`),
-    { role: 'assistant', content: 'OK, continuing from the summary.' },
+    userMessage(
+      `[Compacted background context - work done in earlier turns]\n${summary}\n\n[The latest user message after this is the ACTIVE task. Treat the above as background only; act on the latest request.]`,
+    ),
+    {
+      role: 'assistant',
+      content: 'Got it - that was earlier work. Now acting on the latest request.',
+    },
     ...(doPartial ? sanitizeTail(tail) : []),
   ];
   return {
