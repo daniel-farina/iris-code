@@ -394,8 +394,9 @@ describe('runLoop', () => {
     expect(summarizeCalls).toBe(1);
     expect(events.tokensBefore).toBeGreaterThan(9000);
     expect(events.tokensAfter).toBeLessThan(events.tokensBefore);
-    // Conv is now the compacted shape: [system, user(summary), assistant(ack)].
-    expect(conv.length).toBeLessThanOrEqual(4); // 3 from compact + maybe 1 final
+    // Conv is now the compacted shape: [system, user(summary), assistant(ack),
+    // optionally a reinjected latest-user, optionally a final assistant msg].
+    expect(conv.length).toBeLessThanOrEqual(5); // 3 from compact + reinjected user + final
   });
 
   it('skips auto-compact when threshold=0', async () => {

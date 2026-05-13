@@ -92,6 +92,15 @@ export async function compactConv(opts: {
   while (tailStart < conv.length - 1 && approxTokens(conv.slice(tailStart)) > keepTailMaxTokens) {
     tailStart++;
   }
+  // Find the most-recent USER message in the FULL conv. If it's older
+  // than tailStart (because tool results pushed it out), pin it to the
+  // start of the tail so the model can't forget what it was asked to
+  // do. Caught from the leaderboard test (bcay2rv1l) where the model
+  // wandered off into stale topics from the summary because the actual
+  // user prompt was no longer in the kept tail.
+  const latestUserIdx = findLatestUserIdx(conv);
+  const pinnedUserMsg =
+    latestUserIdx >= 0 && latestUserIdx < tailStart ? conv[latestUserIdx] : undefined;
   const headForSummary = conv.slice(sysSlice.length, tailStart);
   const tail = conv.slice(tailStart);
   // Don't bother summarizing if there's barely anything to summarize.
@@ -142,6 +151,13 @@ export async function compactConv(opts: {
   // task-completion - it would output "Ready for the next task" and
   // stop. New ack explicitly frames the summary as background and
   // points at the LATEST user message as the active task.
+  // Build the post-compact conv. If the latest user msg got pushed out
+  // of the tail by intermediate tool calls, INSERT it at the start of
+  // the tail so the model sees the active task right after the
+  // background summary.
+  const tailParts = doPartial ? sanitizeTail(tail) : [];
+  const reinjectedUser =
+    pinnedUserMsg && !tailContainsMessage(tailParts, pinnedUserMsg) ? [pinnedUserMsg] : [];
   const newConv: ChatMessage[] = [
     systemMessage(systemPrompt ?? DEFAULT_SYSTEM_PROMPT),
     userMessage(
@@ -151,7 +167,8 @@ export async function compactConv(opts: {
       role: 'assistant',
       content: 'Got it - that was earlier work. Now acting on the latest request.',
     },
-    ...(doPartial ? sanitizeTail(tail) : []),
+    ...reinjectedUser,
+    ...tailParts,
   ];
   return {
     summary,
@@ -161,6 +178,26 @@ export async function compactConv(opts: {
     tokensBefore,
     tokensAfter: approxTokens(newConv),
   };
+}
+
+/** Find the index of the most recent message whose role is 'user' AND
+ *  whose content is NOT one of our synthetic compact-summary preambles.
+ *  Returns -1 if none. */
+function findLatestUserIdx(conv: ChatMessage[]): number {
+  for (let i = conv.length - 1; i >= 0; i--) {
+    const m = conv[i];
+    if (m?.role !== 'user') continue;
+    const c = typeof m.content === 'string' ? m.content : '';
+    if (c.startsWith('[Compacted')) continue; // our own synthetic msg
+    return i;
+  }
+  return -1;
+}
+
+/** Identity-check a message against a list to avoid duplicating. */
+function tailContainsMessage(tail: ChatMessage[], msg: ChatMessage): boolean {
+  for (const t of tail) if (t === msg) return true;
+  return false;
 }
 
 /** The tail must remain a valid assistant-tool/user-tool-result chain or

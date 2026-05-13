@@ -245,6 +245,43 @@ describe('compactConv', () => {
     expect(calls).toBeGreaterThan(0);
   });
 
+  it('reinjects latest user msg when tool calls pushed it out of the tail', async () => {
+    // Simulate the leaderboard-test failure mode: the user's prompt is
+    // followed by 8 tool-call/tool-result messages, so tail-of-6 doesn't
+    // contain the user msg anymore. After compact the user msg should
+    // be reinjected at the start of the post-summary tail.
+    const conv: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'old1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'old2' },
+      { role: 'assistant', content: 'a2' },
+      // THE NEW USER PROMPT
+      { role: 'user', content: 'NEW: add a leaderboard with localStorage' },
+      // followed by tool calls...
+      { role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c1', name: 'read', content: 'output1' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'read', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c2', name: 'read', content: 'output2' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 'c3', type: 'function', function: { name: 'grep', arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'c3', name: 'grep', content: 'output3' },
+      { role: 'assistant', content: 'investigating...' },
+    ];
+    const r = await compactConv({
+      client: fakeClient(),
+      conv,
+      sampling,
+      systemPrompt: 'sys',
+    });
+    expect(r).not.toBeNull();
+    // Find the reinjected user message in the new conv. It should be
+    // in there even though it's NOT in the natural last-6-tail anymore.
+    const userMsgs = r?.newConv
+      .filter((m) => m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content : ''));
+    expect(userMsgs?.some((c) => c.includes('add a leaderboard with localStorage'))).toBe(true);
+  });
+
   it('approxTokens grows with conv content size', async () => {
     const { approxTokens } = await import('../src/compact.js');
     const small = [{ role: 'user' as const, content: 'hi' }];
