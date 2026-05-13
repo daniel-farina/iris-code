@@ -36,7 +36,7 @@ pub fn tool() -> Tool {
                     "properties": {
                         "path":   { "type": "string", "description": "absolute or cwd-relative file path" },
                         "offset": { "type": "integer", "description": "1-based starting line (default 1)" },
-                        "limit":  { "type": "integer", "description": "max lines to return (default 4000)" },
+                        "limit":  { "type": "integer", "description": "max lines to return (default 200; raise explicitly for larger reads)" },
                         "around": { "type": "integer", "description": "1-based target line; overrides offset/limit. Returns ±context lines around it." },
                         "context":{ "type": "integer", "description": "context lines for `around` (default 20)" }
                     },
@@ -48,21 +48,26 @@ pub fn tool() -> Tool {
     }
 }
 
+/// Coerce a JSON value to u64, accepting either a real number OR a numeric
+/// string. MTPLX's qwen3 XML tool-call parser (_decode_tool_parameter_value)
+/// generally JSON-parses parameter bodies, but a model that emits parameters
+/// with leading zeros or unusual whitespace can land back in the raw-string
+/// branch, in which case as_u64() returns None and every numeric arg silently
+/// falls through to its default. Be defensive on the receive side.
+fn arg_u64(args: &Value, key: &str) -> Option<u64> {
+    let v = args.get(key)?;
+    v.as_u64()
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<u64>().ok()))
+}
+
 async fn run(args: Value) -> Result<String> {
     let path = args
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("read: missing path"))?
         .to_string();
-    let around = args
-        .get("around")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
-    let context = args
-        .get("context")
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize)
-        .unwrap_or(20);
+    let around = arg_u64(&args, "around").map(|n| n as usize);
+    let context = arg_u64(&args, "context").map(|n| n as usize).unwrap_or(20);
 
     // If `around` is set it takes precedence over offset/limit and we compute
     // [around - context, around + context] (clamped to >= 1).
@@ -71,15 +76,11 @@ async fn run(args: Value) -> Result<String> {
         let lim = (target - off) + context + 1; // inclusive of target line
         (off, lim)
     } else {
-        let off = args
-            .get("offset")
-            .and_then(|v| v.as_u64())
+        let off = arg_u64(&args, "offset")
             .map(|n| n as usize)
             .unwrap_or(1)
             .max(1);
-        let lim = args
-            .get("limit")
-            .and_then(|v| v.as_u64())
+        let lim = arg_u64(&args, "limit")
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_LIMIT);
         (off, lim)
@@ -221,6 +222,41 @@ mod tests {
         assert!(
             out.contains(">   25\tline25"),
             "target marker missing:\n{}",
+            out
+        );
+        let _ = std::fs::remove_file(&p);
+    }
+
+    #[test]
+    fn read_accepts_string_offset_and_limit() {
+        // MTPLX's qwen3 XML tool-call parser USUALLY JSON-parses parameter values
+        // (so `<parameter=offset>200</parameter>` arrives as the integer 200) but
+        // there are edge cases where the value lands back in the raw-string branch
+        // (e.g. whitespace anomalies, leading zeros). Without the as_str fallback
+        // those reads silently degrade to offset=1 / limit=200 and the user sees
+        // the start of the file instead of the requested slice. Lock the behaviour in.
+        let body: String = (1..=100).map(|n| format!("line{}\n", n)).collect();
+        let p = write_temp("string_args.txt", &body);
+        let out = rt_run(json!({
+            "path": p.to_string_lossy(),
+            "offset": "50",
+            "limit": "3"
+        }))
+        .unwrap();
+        assert!(
+            out.contains("line50"),
+            "expected line50 at start of result:\n{}",
+            out
+        );
+        assert!(out.contains("line52"), "expected line52:\n{}", out);
+        assert!(
+            !out.contains("line1\n"),
+            "string offset was ignored - leaked line1:\n{}",
+            out
+        );
+        assert!(
+            !out.contains("line53"),
+            "string limit was ignored - over-read past line52:\n{}",
             out
         );
         let _ = std::fs::remove_file(&p);
