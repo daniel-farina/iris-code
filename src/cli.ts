@@ -45,6 +45,10 @@ interface Flags {
   postcommitDelayMs?: number;
   update?: boolean;
   installInfo?: boolean;
+  /** Interactive: detect MTPLX, diff against recommended settings, offer restart. */
+  setup?: boolean;
+  /** Suppress the one-line drift banner that prints on every launch. */
+  noDriftCheck?: boolean;
   version?: boolean;
   help?: boolean;
   /** TUI only: when false, suppresses the conv>9K-token auto-/compact. */
@@ -110,6 +114,8 @@ export function parseFlags(argv: string[]): Flags {
       'postcommit-delay': { type: 'string' },
       update: { type: 'boolean' },
       'install-info': { type: 'boolean' },
+      setup: { type: 'boolean' },
+      'no-drift-check': { type: 'boolean' },
       'no-auto-compact': { type: 'boolean' },
       'clear-stale-sessions': { type: 'string' },
       version: { type: 'boolean', short: 'V' },
@@ -157,6 +163,8 @@ export function parseFlags(argv: string[]): Flags {
     ),
     update: (values.update as boolean | undefined) ?? false,
     installInfo: (values['install-info'] as boolean | undefined) ?? false,
+    setup: (values.setup as boolean | undefined) ?? false,
+    noDriftCheck: (values['no-drift-check'] as boolean | undefined) ?? false,
     autoCompact: !((values['no-auto-compact'] as boolean | undefined) ?? false),
     clearStaleSessionsMinutes: values['clear-stale-sessions']
       ? num('clear-stale-sessions', values['clear-stale-sessions'] as string, 30)
@@ -191,6 +199,8 @@ Options:
   --clear-stale-sessions [N]         at startup, clear MTPLX sessions idle >N min (default 30) to free session-bank slots
   --update                           download + install the latest release from GitHub
   --install-info                     print where hip is installed and the target platform
+  --setup                            interactive: detect MTPLX, diff vs recommended, offer restart
+  --no-drift-check                   suppress the MTPLX config-drift banner on launch
   --max-tokens <n>                   max output tokens per turn (default ${DEFAULT_MAX_TOKENS})
   --max-rounds <n>                   max agent loop rounds (default ${DEFAULT_MAX_ROUNDS})
   --temperature <f>                  sampler temperature (default ${DEFAULT_TEMPERATURE})
@@ -231,6 +241,18 @@ async function main() {
     const { printInstallInfo } = await import('./updater.js');
     printInstallInfo();
     return;
+  }
+  if (flags.setup) {
+    const { runSetup } = await import('./setup.js');
+    await runSetup(flags.url);
+    return;
+  }
+  // Passive drift banner on regular launches. Cheap (one HTTP probe +
+  // one `ps eww`); non-blocking; suppressed by --no-drift-check / -q.
+  if (!flags.noDriftCheck && !flags.quiet) {
+    const { quickDriftCheck } = await import('./mtplx_manager.js');
+    const warning = await quickDriftCheck(flags.url);
+    if (warning) process.stderr.write(`${warning}\n`);
   }
 
   // Resolve session + starting conversation:
