@@ -187,6 +187,64 @@ describe('compactConv', () => {
     expect(last?.content).toBe('a4-recent');
   });
 
+  it('uses runningSummary when provided (skips main-model summarize)', async () => {
+    // Make a client that THROWS if called - to prove we don't hit it.
+    const noNetClient = {
+      stream: async () => {
+        throw new Error('main model should not be called when runningSummary is given');
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user', content: 'u3' },
+      { role: 'assistant', content: 'a3' },
+      { role: 'user', content: 'u4-recent' },
+      { role: 'assistant', content: 'a4-recent' },
+    ];
+    const r = await compactConv({
+      client: noNetClient,
+      conv,
+      sampling,
+      systemPrompt: 'sys',
+      runningSummary: ['edited ai.js to spawn 3 cars', 'fixed wall clipping in physics.js'],
+    });
+    expect(r).not.toBeNull();
+    expect(r?.summary).toContain('edited ai.js to spawn 3 cars');
+    expect(r?.summary).toContain('fixed wall clipping in physics.js');
+  });
+
+  it('falls back to main-model summarize when runningSummary is empty', async () => {
+    let calls = 0;
+    const client = {
+      stream: async () => {
+        calls++;
+        return { content: 'fallback summary', tool_calls: [], finish_reason: 'stop' };
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user', content: 'u3' },
+      { role: 'assistant', content: 'a3' },
+    ];
+    const r = await compactConv({
+      client,
+      conv,
+      sampling,
+      systemPrompt: 'sys',
+      runningSummary: [], // empty - should call main model
+    });
+    expect(r).not.toBeNull();
+    expect(calls).toBeGreaterThan(0);
+  });
+
   it('approxTokens grows with conv content size', async () => {
     const { approxTokens } = await import('../src/compact.js');
     const small = [{ role: 'user' as const, content: 'hi' }];

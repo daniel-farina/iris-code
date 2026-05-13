@@ -25,6 +25,7 @@ import {
   assistantToolCalls,
   toolResultMessage,
 } from './schema.js';
+import { type SidecarConfig, buildExchangeText, summarizeExchange } from './sidecar.js';
 import { pruneOldToolResults } from './tool_result_prune.js';
 import { type Tool, findTool, toolSpecs } from './tools/index.js';
 
@@ -46,6 +47,8 @@ export interface AgentEvents {
   /** Fired after a pre-round tool-result prune (only when something
    *  was actually pruned). */
   onToolResultPrune?: (pruned: number, charsSaved: number) => void;
+  /** Fired when the sidecar produces a new running-summary line. */
+  onSidecarSummary?: (line: string, totalLines: number) => void;
   /** Fired before a mid-loop auto-compact. */
   onCompactStart?: (tokensBefore: number) => void;
   /** Fired after a mid-loop auto-compact completes. */
@@ -84,6 +87,16 @@ export interface RunLoopOptions {
    *  auto-compact. Default keepLastK=3, pruneOverChars=1500. Set
    *  keepLastK to 0 to disable. */
   pruneToolResults?: { keepLastK?: number; pruneOverChars?: number } | false;
+  /** Optional small-model sidecar (e.g. Ollama gemma4:e2b). When set,
+   *  the loop fires a parallel summarize call after each round.
+   *  Results accumulate in runningSummary (caller-owned array) and are
+   *  spliced into compactConv to skip the expensive main-model
+   *  summarize call. Off when undefined. */
+  sidecar?: SidecarConfig;
+  /** Caller-owned running summary array. The agent loop pushes one
+   *  short sentence per round when sidecar is configured. compactConv
+   *  reads from it. Pass the same array across resumes to preserve. */
+  runningSummary?: string[];
 }
 
 export interface LoopStats {
@@ -133,6 +146,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
             sampling,
             systemPrompt: opts.systemPromptForCompact,
             signal,
+            runningSummary: opts.runningSummary,
           });
           if (result) {
             // Rewrite the caller's conv array in place so they see the
@@ -269,6 +283,26 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
       }
       events?.onToolResult?.(call.function.name, ok, body);
       conv.push(toolResultMessage(call.id, call.function.name, body));
+    }
+
+    // Fire-and-forget sidecar summary for this round (runs IN PARALLEL
+    // with the upcoming postcommit wait, so it's free latency-wise as
+    // long as it returns within ~30s). Result is appended to the
+    // caller-owned runningSummary array, which compactConv consumes to
+    // skip the expensive main-model summarize.
+    if (opts.sidecar && opts.runningSummary) {
+      const sidecarCfg = opts.sidecar;
+      const summaries = opts.runningSummary;
+      // Last 3 messages of this round (user + assistant + last tool result
+      // OR just user + assistant if no tools). Cheap exchange context.
+      const lastN = conv.slice(Math.max(0, conv.length - 3));
+      const exchange = buildExchangeText(lastN);
+      void summarizeExchange(sidecarCfg, exchange, signal).then((line) => {
+        if (line) {
+          summaries.push(line);
+          events?.onSidecarSummary?.(line, summaries.length);
+        }
+      });
     }
 
     // Between agent-loop rounds, poll MTPLX's /admin/sessions until

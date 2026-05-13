@@ -67,6 +67,11 @@ export async function compactConv(opts: {
    *  keepTailMessages exceed this, we shrink the tail from the front
    *  (oldest-of-tail) until it fits. Default 3000. */
   keepTailMaxTokens?: number;
+  /** Optional pre-built running summary (per-round sentences from a
+   *  sidecar model). When provided AND non-empty, compactConv skips
+   *  the expensive main-model summarize call and uses these lines
+   *  directly. Compact becomes ~free. */
+  runningSummary?: string[];
 }): Promise<CompactResult | null> {
   const { client, conv, sampling, systemPrompt, signal } = opts;
   const keepTail = opts.keepTailMessages ?? 6;
@@ -93,7 +98,12 @@ export async function compactConv(opts: {
   const doPartial = headForSummary.length >= 3;
 
   let summary: string;
-  if (doPartial) {
+  // Fast path: if the caller fed us a running summary from the sidecar,
+  // use it directly. Saves ~5-10s of main-model summarize cost.
+  const presupplied = opts.runningSummary?.filter((s) => s.trim().length > 0) ?? [];
+  if (presupplied.length > 0) {
+    summary = presupplied.map((s, i) => `${i + 1}. ${s}`).join('\n');
+  } else if (doPartial) {
     const summarizeConv: ChatMessage[] = [
       ...sysSlice,
       ...headForSummary,

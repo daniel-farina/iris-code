@@ -58,6 +58,13 @@ interface Flags {
   /** When set, before normal work clear MTPLX sessions idle longer
    *  than this many minutes (frees session-bank slots). 0/undefined = off. */
   clearStaleSessionsMinutes?: number;
+  /** Sidecar model id (e.g. gemma4:e2b). When set, hip fires a parallel
+   *  summarize call after each round to maintain a free running summary
+   *  used by compact instead of the main-model summarize. */
+  sidecarModel?: string;
+  /** Sidecar base URL (no trailing /v1). Default http://localhost:11434
+   *  (Ollama default). */
+  sidecarUrl?: string;
 }
 
 const VERSION = '0.4.1-dev';
@@ -119,6 +126,8 @@ export function parseFlags(argv: string[]): Flags {
       setup: { type: 'boolean' },
       'no-drift-check': { type: 'boolean' },
       'no-auto-compact': { type: 'boolean' },
+      sidecar: { type: 'string' },
+      'sidecar-url': { type: 'string' },
       'clear-stale-sessions': { type: 'string' },
       version: { type: 'boolean', short: 'V' },
       help: { type: 'boolean', short: 'h' },
@@ -168,6 +177,11 @@ export function parseFlags(argv: string[]): Flags {
     setup: (values.setup as boolean | undefined) ?? false,
     noDriftCheck: (values['no-drift-check'] as boolean | undefined) ?? false,
     autoCompact: !((values['no-auto-compact'] as boolean | undefined) ?? false),
+    sidecarModel: (values.sidecar as string | undefined) ?? process.env['HIP_SIDECAR_MODEL'],
+    sidecarUrl:
+      (values['sidecar-url'] as string | undefined) ??
+      process.env['HIP_SIDECAR_URL'] ??
+      'http://localhost:11434',
     clearStaleSessionsMinutes: values['clear-stale-sessions']
       ? num('clear-stale-sessions', values['clear-stale-sessions'] as string, 30)
       : undefined,
@@ -198,6 +212,8 @@ Options:
   --max-time <seconds>               --print mode: hard wall-clock cap; aborts the agent loop
   --postcommit-delay <ms>            max time to wait for MTPLX postcommit between rounds when prompt >8K tok (polls; default ${DEFAULT_POSTCOMMIT_DELAY_MS}, 0 disables)
   --no-auto-compact                  TUI: disable auto-/compact when conv approaches ~9K tokens
+  --sidecar <model>                  Ollama small-model id (e.g. gemma4:e2b) for parallel per-round summaries; free compact (env: HIP_SIDECAR_MODEL)
+  --sidecar-url <url>                Ollama base URL for --sidecar (default http://localhost:11434; env: HIP_SIDECAR_URL)
   --clear-stale-sessions [N]         at startup, clear MTPLX sessions idle >N min (default 30) to free session-bank slots
   --update                           download + install the latest release from GitHub
   --install-info                     print where hip is installed and the target platform
@@ -384,6 +400,8 @@ async function runPrintMode(
   let completionTokens = 0;
   let compactFires = 0;
   let compactSavedTokens = 0;
+  let sidecarLines = 0;
+  const runningSummary: string[] = [];
   const toolStartMs: Record<string, number> = {};
   // SIGINT in headless mode cancels the in-flight stream + agent loop.
   // Without this, Ctrl-C just kills the process mid-stream and loses any
@@ -429,6 +447,10 @@ async function runPrintMode(
     autoCompactThresholdTokens:
       flags.autoCompact === false ? 0 : DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS,
     systemPromptForCompact: flags.system,
+    sidecar: flags.sidecarModel
+      ? { url: flags.sidecarUrl ?? 'http://localhost:11434', model: flags.sidecarModel }
+      : undefined,
+    runningSummary: flags.sidecarModel ? runningSummary : undefined,
     events: {
       onRound: (_n, info) => {
         if (typeof info.ctok === 'number') completionTokens += info.ctok;
@@ -449,6 +471,12 @@ async function runPrintMode(
             process.stderr.write(
               `[hip] pruned ${pruned} old tool result${pruned === 1 ? '' : 's'} (~${(charsSaved / 4).toFixed(0)} tok saved)\n`,
             ),
+      onSidecarSummary: (line, total) => {
+        sidecarLines = total;
+        if (!flags.quiet) {
+          process.stderr.write(`[hip:sidecar] ${line}\n`);
+        }
+      },
       onCompactStart: flags.quiet
         ? undefined
         : (tokensBefore) =>
@@ -501,8 +529,9 @@ async function runPrintMode(
   const finishLabel = stats.finishReason ?? (stats.rounds >= flags.maxRounds ? 'max_rounds' : '?');
   const compactStats =
     compactFires > 0 ? ` compact=${compactFires}x/-${compactSavedTokens}tok` : '';
+  const sidecarStats = sidecarLines > 0 ? ` sidecar=${sidecarLines}lines` : '';
   process.stderr.write(
-    `\n[done] session=${sessionId} rounds=${stats.rounds} tool_calls=${stats.toolCalls} ms=${stats.totalMs.toFixed(0)} ctok=${completionTokens}${tps}${compactStats} finish=${finishLabel}\n`,
+    `\n[done] session=${sessionId} rounds=${stats.rounds} tool_calls=${stats.toolCalls} ms=${stats.totalMs.toFixed(0)} ctok=${completionTokens}${tps}${compactStats}${sidecarStats} finish=${finishLabel}\n`,
   );
 }
 
