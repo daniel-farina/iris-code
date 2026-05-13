@@ -991,8 +991,11 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     if (resumeMatch) {
       const id = resumeMatch[1];
       void (async () => {
-        const { findSession, lastSession } = await import('../session_store.js');
-        const rec = !id || id === 'last' ? await lastSession() : await findSession(id);
+        const { findSession, lastSession, lastSessionForCwd } = await import('../session_store.js');
+        // `/resume last` (or bare `/resume`) prefers this-cwd's most
+        // recent, parity with --continue-last. Falls back to global.
+        const lastFor = (await lastSessionForCwd(process.cwd())) ?? (await lastSession());
+        const rec = !id || id === 'last' ? lastFor : await findSession(id);
         if (!rec) {
           setTranscript((p) => [
             ...p,
