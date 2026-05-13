@@ -361,6 +361,8 @@ async function runPrintMode(
   });
   const conv: ChatMessage[] = [...startConv, userMessage(flags.print)];
   let completionTokens = 0;
+  let compactFires = 0;
+  let compactSavedTokens = 0;
   const toolStartMs: Record<string, number> = {};
   // SIGINT in headless mode cancels the in-flight stream + agent loop.
   // Without this, Ctrl-C just kills the process mid-stream and loses any
@@ -424,12 +426,15 @@ async function runPrintMode(
         ? undefined
         : (tokensBefore) =>
             process.stderr.write(`\n[hip] auto-compact starting (conv ~${tokensBefore} tok)...\n`),
-      onCompactDone: flags.quiet
-        ? undefined
-        : (tokensBefore, tokensAfter, msgsBefore) =>
-            process.stderr.write(
-              `[hip] auto-compacted ${msgsBefore} msgs / ~${tokensBefore} tok → ~${tokensAfter} tok\n`,
-            ),
+      onCompactDone: (tokensBefore, tokensAfter, msgsBefore) => {
+        compactFires++;
+        compactSavedTokens += Math.max(0, tokensBefore - tokensAfter);
+        if (!flags.quiet) {
+          process.stderr.write(
+            `[hip] auto-compacted ${msgsBefore} msgs / ~${tokensBefore} tok → ~${tokensAfter} tok\n`,
+          );
+        }
+      },
       onToolStart: flags.quiet
         ? undefined
         : (name, args) => {
@@ -467,8 +472,10 @@ async function runPrintMode(
   // `undefined` finish means we hit the maxRounds cap; surface that
   // explicitly instead of a useless '?'.
   const finishLabel = stats.finishReason ?? (stats.rounds >= flags.maxRounds ? 'max_rounds' : '?');
+  const compactStats =
+    compactFires > 0 ? ` compact=${compactFires}x/-${compactSavedTokens}tok` : '';
   process.stderr.write(
-    `\n[done] session=${sessionId} rounds=${stats.rounds} tool_calls=${stats.toolCalls} ms=${stats.totalMs.toFixed(0)} ctok=${completionTokens}${tps} finish=${finishLabel}\n`,
+    `\n[done] session=${sessionId} rounds=${stats.rounds} tool_calls=${stats.toolCalls} ms=${stats.totalMs.toFixed(0)} ctok=${completionTokens}${tps}${compactStats} finish=${finishLabel}\n`,
   );
 }
 
