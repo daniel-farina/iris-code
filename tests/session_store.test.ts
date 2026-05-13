@@ -99,6 +99,36 @@ describe('session_store', () => {
     expect(await mod.lastSessionForCwd('/tmp/never-used')).toBeUndefined();
   });
 
+  it('round-trips running_summary across persist + read', async () => {
+    const mod = await import('../src/session_store.js?fresh=' + Date.now());
+    await mod.updateSession({
+      session_id: 'rs-1',
+      ts_unix: 1,
+      cwd: '/tmp/proj',
+      first_user: 'first ask',
+      conv: [{ role: 'user', content: 'hi' }],
+      running_summary: ['Created src/foo.js', 'Wired foo into main.js'],
+    });
+    const rec = await mod.findSession('rs-1');
+    expect(rec?.running_summary).toEqual([
+      'Created src/foo.js',
+      'Wired foo into main.js',
+    ]);
+  });
+
+  it('omitted running_summary stays undefined on read', async () => {
+    const mod = await import('../src/session_store.js?fresh=' + Date.now());
+    await mod.updateSession({
+      session_id: 'no-rs',
+      ts_unix: 1,
+      cwd: '/tmp/proj',
+      first_user: '',
+      conv: [{ role: 'user', content: 'hi' }],
+    });
+    const rec = await mod.findSession('no-rs');
+    expect(rec?.running_summary).toBeUndefined();
+  });
+
   it('updateSession overwrites the matching record', async () => {
     const mod = await import('../src/session_store.js?fresh=' + Date.now());
     await mod.appendSession({

@@ -286,7 +286,7 @@ async function main() {
   //   --resume <id>     -> load conv from store
   //   --continue-last   -> load the most recent session's conv
   //   else              -> new conv with system prompt only
-  const { resolvedSessionId, startConv } = await resolveSessionAndConv(flags);
+  const { resolvedSessionId, startConv, startRunningSummary } = await resolveSessionAndConv(flags);
 
   // Pre-flight stale-session cleanup (frees MTPLX session-bank slots).
   // Runs AFTER session resolution so we know which id to protect.
@@ -319,7 +319,7 @@ async function main() {
       const piped = await readAllStdin();
       if (piped.trim().length > 0) flags.print = piped.trim();
     }
-    return runPrintMode(flags, resolvedSessionId, startConv);
+    return runPrintMode(flags, resolvedSessionId, startConv, startRunningSummary);
   }
 
   // Interactive TUI - lazy-import so --print doesn't pay the React load cost.
@@ -327,17 +327,28 @@ async function main() {
   await runTui(flags, resolvedSessionId);
 }
 
-async function resolveSessionAndConv(
-  flags: Flags,
-): Promise<{ resolvedSessionId: string; startConv: ChatMessage[] }> {
+async function resolveSessionAndConv(flags: Flags): Promise<{
+  resolvedSessionId: string;
+  startConv: ChatMessage[];
+  startRunningSummary?: string[];
+}> {
   const { findSession, lastSession, lastSessionForCwd } = await import('./session_store.js');
   if (flags.resume) {
     const rec = await findSession(flags.resume);
     if (!rec) {
       process.stderr.write(`[hip] session ${flags.resume} not found; starting fresh\n`);
     } else {
-      process.stderr.write(`[hip] resumed session ${rec.session_id} (${rec.conv.length} msgs)\n`);
-      return { resolvedSessionId: rec.session_id, startConv: rec.conv };
+      const sumHint = rec.running_summary?.length
+        ? `, ${rec.running_summary.length} summary lines`
+        : '';
+      process.stderr.write(
+        `[hip] resumed session ${rec.session_id} (${rec.conv.length} msgs${sumHint})\n`,
+      );
+      return {
+        resolvedSessionId: rec.session_id,
+        startConv: rec.conv,
+        startRunningSummary: rec.running_summary,
+      };
     }
   } else if (flags.continueLast) {
     // Prefer a session from the CURRENT cwd. Falls back to the
@@ -348,10 +359,17 @@ async function resolveSessionAndConv(
       process.stderr.write('[hip] no prior sessions; starting fresh\n');
     } else {
       const cwdHint = rec.cwd === process.cwd() ? '' : ` (from ${rec.cwd})`;
+      const sumHint = rec.running_summary?.length
+        ? `, ${rec.running_summary.length} summary lines`
+        : '';
       process.stderr.write(
-        `[hip] continuing ${rec.session_id} (${rec.conv.length} msgs)${cwdHint}\n`,
+        `[hip] continuing ${rec.session_id} (${rec.conv.length} msgs${sumHint})${cwdHint}\n`,
       );
-      return { resolvedSessionId: rec.session_id, startConv: rec.conv };
+      return {
+        resolvedSessionId: rec.session_id,
+        startConv: rec.conv,
+        startRunningSummary: rec.running_summary,
+      };
     }
   }
   // No explicit session id: derive one from cwd so subsequent runs in
@@ -377,6 +395,7 @@ async function runPrintMode(
   flags: Flags,
   sessionId: string,
   startConv: ChatMessage[],
+  startRunningSummary?: string[],
 ): Promise<void> {
   if (!flags.print || flags.print.trim().length === 0) {
     process.stderr.write(
@@ -410,7 +429,10 @@ async function runPrintMode(
   let compactFires = 0;
   let compactSavedTokens = 0;
   let sidecarLines = 0;
-  const runningSummary: string[] = [];
+  // Seed with the resumed session's running summary (if any) so the
+  // FIRST compact in this run is also fed by sidecar lines and stays
+  // free instead of paying the main-model summarize cost.
+  const runningSummary: string[] = startRunningSummary ? [...startRunningSummary] : [];
   const toolStartMs: Record<string, number> = {};
   // Sidecar: explicit flag wins; otherwise probe Ollama and pick a
   // small model if installed. Probe has a 500ms timeout - never blocks.
@@ -535,6 +557,9 @@ async function runPrintMode(
     cwd: process.cwd(),
     first_user: typeof firstUser === 'string' ? firstUser.slice(0, 200) : '',
     conv,
+    // Persist sidecar lines so a future --resume / --continue-last
+    // inherits them and the first compact in that run is also ~free.
+    running_summary: runningSummary.length > 0 ? runningSummary : undefined,
   });
   process.off('SIGINT', onSigint);
   if (maxTimeTimer) clearTimeout(maxTimeTimer);
