@@ -42,9 +42,27 @@ Use \`diff(path_a, path_b)\` for cross-file comparisons.
 
 ## File creation (when \`edit\` won't work because the file is new)
 
-- ONE bash call per file. Never cram multiple files into one heredoc.
-- Keep each heredoc small. If a file is >~50 lines, write it in 2-3 \`>>\` appends rather than one giant \`>\` write — long single tool-call args truncate mid-string and produce malformed-JSON parse errors.
-- Prefer many small files over one big one. A 500-line file is a smell; split it.
+**HARD RULE: the \`bash\` tool's \`command\` argument MUST be under 1500 characters.** Longer arguments get truncated by the model's tool_call JSON encoder and produce malformed-JSON errors. There is no exception.
+
+For files over ~30 lines, ALWAYS use this multi-call pattern (one \`touch\` + several \`>>\` appends), NOT one giant heredoc:
+
+\`\`\`
+# Call 1: create empty file (or overwrite if it exists)
+bash: : > src/feature.js
+
+# Call 2..N: append a chunk under 1500 chars each
+bash: cat >> src/feature.js << 'EOF'
+<first ~25 lines of code>
+EOF
+
+bash: cat >> src/feature.js << 'EOF'
+<next ~25 lines>
+EOF
+\`\`\`
+
+A 200-line file takes 6-8 tool calls. That is correct - never try to fit it in one. Splitting is cheaper than a malformed-JSON retry storm.
+
+ONE bash call per file (never cram multiple files into one heredoc). Prefer many small files over one big one - a 500-line file is a smell; split it across modules per the rules below.
 
 ## Modular by default
 

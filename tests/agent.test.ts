@@ -325,6 +325,49 @@ describe('runLoop', () => {
     expect(Date.now() - t0).toBeLessThan(500); // aborted, didn't wait the full 5s
   });
 
+  it('sanitizes malformed tool_call args so the conv stays valid for the next round', async () => {
+    // qwen3 quirk: a tool_call's `arguments` string can be truncated
+    // mid-value, leaving unparseable JSON in conv. Without sanitization
+    // the next round 422s the whole conv. We replace bad args with a
+    // stub that explains the failure to the model.
+    let firstCall = true;
+    const client = {
+      stream: async () => {
+        if (firstCall) {
+          firstCall = false;
+          return {
+            content: '',
+            tool_calls: [
+              {
+                id: 'c1',
+                type: 'function' as const,
+                function: {
+                  name: 'bash',
+                  // Truncated string - unterminated quote, invalid JSON.
+                  arguments: '{"command":"cat > file << EOF\nlots of content',
+                },
+              },
+            ],
+            finish_reason: 'tool_calls',
+          } satisfies CompletionResult;
+        }
+        return { content: 'ok', tool_calls: [], finish_reason: 'stop' } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [{ role: 'user', content: 'do it' }];
+    await runLoop({ client, conv, sampling, maxRounds: 3, postcommitDelayMs: 0 });
+    // The pushed assistant message's tool_call args must now be valid JSON.
+    const asst = conv.find((m) => m.role === 'assistant' && m.tool_calls);
+    expect(asst).toBeDefined();
+    const args = asst?.tool_calls?.[0]?.function?.arguments;
+    expect(() => JSON.parse(args ?? '')).not.toThrow();
+    const parsed = JSON.parse(args ?? '{}');
+    expect(parsed._malformed).toBe(true);
+    // And the tool result fed back to the model must explain the failure.
+    const toolResult = conv.find((m) => m.role === 'tool');
+    expect((toolResult?.content as string).toLowerCase()).toMatch(/truncated|smaller chunks/);
+  });
+
   it('emits onToolStart/onToolResult/onRound events in order', async () => {
     const conv: ChatMessage[] = [{ role: 'user', content: 'go' }];
     const client = fakeClient([

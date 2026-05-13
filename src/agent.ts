@@ -100,7 +100,10 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
         conv.push({
           role: 'user',
           content:
-            'Your previous response had malformed JSON in a tool_call. Please retry the tool call, ensuring `arguments` is a single valid JSON object with proper quoting.',
+            'Your previous tool_call had malformed JSON arguments. This usually means the argument string was TRUNCATED mid-value because it was too long. ' +
+            'For file creation, NEVER use a single `cat > file << EOF ...` with more than ~30 lines or ~1500 chars of content. ' +
+            'Instead: (1) `: > path` to create the file empty, (2) several `cat >> path << EOF ...` appends, each with under 1500 chars of content. ' +
+            'A 200-line file takes ~6-8 small bash calls - that is correct. Retry the operation this way.',
         });
         events?.onRound?.(round + 1, { finishReason: 'malformed_retry' });
         continue;
@@ -130,7 +133,30 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
       return finish(startTotal, round + 1, toolCallCount, res.finish_reason);
     }
 
-    // Otherwise: append assistant tool_calls message, exec each, append results.
+    // Sanitize tool_call args BEFORE pushing the assistant message to
+    // conv. qwen3 sometimes truncates a tool_call's JSON arguments
+    // mid-string (especially for big bash heredocs); if we push the
+    // raw malformed assistant message and then resend conv on the next
+    // round, MTPLX 422s the whole conv. Replace any unparseable args
+    // with a stub here so subsequent rounds stay alive. The per-call
+    // tool dispatch below sees the stub and surfaces a clear error to
+    // the model.
+    const truncatedCalls: string[] = [];
+    for (const call of res.tool_calls) {
+      if (!call.function.arguments) continue;
+      try {
+        JSON.parse(call.function.arguments);
+      } catch {
+        const sizeKb = (call.function.arguments.length / 1024).toFixed(1);
+        truncatedCalls.push(`${call.function.name} (${sizeKb}KB)`);
+        call.function.arguments = JSON.stringify({
+          _malformed: true,
+          _hint:
+            'arguments were truncated mid-string by the tool_call JSON parser; retry with smaller chunks',
+          _original_size_bytes: call.function.arguments.length,
+        });
+      }
+    }
     conv.push(assistantToolCalls(res.content, res.tool_calls));
 
     for (const call of res.tool_calls) {
@@ -140,7 +166,20 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
       try {
         args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
       } catch (e) {
+        // Unreachable now (we sanitized above) but keep as belt-and-suspenders.
         const msg = `tool '${call.function.name}': invalid JSON arguments: ${(e as Error).message}`;
+        events?.onToolResult?.(call.function.name, false, msg);
+        conv.push(toolResultMessage(call.id, call.function.name, msg));
+        continue;
+      }
+      // Caught by the sanitizer above: surface a clear, actionable error.
+      if (args._malformed === true) {
+        const msg =
+          `tool '${call.function.name}': arguments were truncated mid-string ` +
+          `(${args._original_size_bytes ?? '?'} bytes). For file creation, ` +
+          `split the work into multiple smaller bash calls: first \`touch path\`, ` +
+          `then several \`cat >> path << EOF ... EOF\` appends, each chunk under ~1500 chars. ` +
+          `Never put more than ~30 lines of content into one tool_call.`;
         events?.onToolResult?.(call.function.name, false, msg);
         conv.push(toolResultMessage(call.id, call.function.name, msg));
         continue;
