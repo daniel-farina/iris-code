@@ -1,6 +1,6 @@
 [package]
 name = "mlx-code"
-version = "0.3.45"
+version = "0.3.46"
 edition = "2021"
 description = "Lightweight Rust CLI coding agent for a local MTPLX server"
 

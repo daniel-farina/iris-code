@@ -173,16 +173,21 @@ pub fn prompt_mtplx_source(default: MtplxSource) -> MtplxSource {
         };
     }
 
+    // Default to the fork: it tracks upstream plus the long-context-ladder
+    // patch that hip depends on (MTPLX_MTP_LONG_CONTEXT_LADDER). Pre-merged
+    // upstream fixes (e.g. the v0.3.4 consecutive-tool-call streaming fix)
+    // land in the fork on the same merge cadence, so picking 'fork' is the
+    // safer everyday choice until upstream lands the ladder patch.
     let default_idx = match default.label {
-        "fork" => 1,
-        _ => 0,
+        "upstream" => 0,
+        _ => 1,
     };
     let upstream_sub = format!(
-        "{} @ {} -- recommended (stable)",
+        "{} @ {} -- pure upstream (missing local long-context-ladder patch)",
         MTPLX_UPSTREAM_REPO, MTPLX_UPSTREAM_BRANCH
     );
     let fork_sub = format!(
-        "{} @ {} -- experimentation",
+        "{} @ {} -- recommended (upstream + long-context-ladder)",
         MTPLX_FORK_REPO, MTPLX_FORK_BRANCH
     );
     let options = [
