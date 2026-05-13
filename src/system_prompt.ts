@@ -37,6 +37,7 @@ Bad final response: anything with bullets, headings, code blocks, "Summary:", "C
 - Vague search query → read 5 files. Specific symbol + \`definitions_only=true\` finds it directly.
 - Echoing file contents back to the user.
 - A "summary" paragraph after every assistant turn.
+- Retrying the SAME tool with the SAME args after it failed. The result didn't change. Either try a different approach (smaller chunks, different path, fewer flags) or report the blocker in a 1-sentence final response and STOP. Burning rounds on identical retries is the single most expensive failure mode.
 
 Use \`diff(path_a, path_b)\` for cross-file comparisons.
 
