@@ -24,26 +24,45 @@ export interface AutoCommitResult {
   files?: string[];
 }
 
-/** Build a conventional commit subject from the running summary +
- *  fallback to the first user prompt. Caps at 72 chars. */
+/** Strip narrator prefixes ("The assistant", "I created", etc.) and
+ *  trailing punctuation from a sidecar summary line. */
+function cleanSummary(line: string): string {
+  return line
+    .trim()
+    .replace(/^(?:The assistant|I|The tool|The model|The user)\s+/i, '')
+    .replace(/[.!?]+$/, '');
+}
+
+/** Build a conventional commit message from the running summary
+ *  + the user's first prompt. Subject = user's task (capped); body =
+ *  bulleted sidecar lines showing what actually happened. This beats
+ *  the prior "last-line-only" approach because the last line is often
+ *  about minor verification (build/test) rather than the substantive
+ *  work. Total subject stays under the 72-char conventional limit. */
 export function deriveCommitMessage(
   runningSummary: readonly string[],
   fallbackUserPrompt: string,
 ): string {
-  // Prefer the last summary line - it's usually the most recent piece
-  // of work, which is what we're committing. Trim noise prefixes
-  // ("The assistant", "I created", "The tool", etc.).
-  const last = runningSummary.at(-1)?.trim();
-  if (last) {
-    const cleaned = last
-      .replace(/^(?:The assistant|I|The tool|The model)\s+/i, '')
-      .replace(/[.!?]+$/, '');
-    // Subject prefix "chore(hip): " is 12 chars; cap content at 60 so
-    // total subject stays under the 72-char conventional-commit limit.
-    return `chore(hip): ${cleaned.slice(0, 60)}`;
-  }
-  const promptHead = fallbackUserPrompt.trim().split('\n')[0]?.slice(0, 60) ?? 'update';
-  return `chore(hip): ${promptHead}`;
+  // Subject: derive from the user's first prompt (what they asked
+  // for). That's a better representation of the work than any single
+  // sidecar line. Strip the leading verb/imperative if it's too long.
+  const promptHead = fallbackUserPrompt
+    .trim()
+    .split('\n')[0]
+    ?.replace(/[.!?]+$/, '')
+    .slice(0, 60);
+  const subject = `chore(hip): ${promptHead || 'session changes'}`;
+
+  // No summary lines? Just the subject is fine.
+  const lines = runningSummary.map(cleanSummary).filter((s) => s.length > 0);
+  if (lines.length === 0) return subject;
+
+  // Body: bulleted sidecar lines. Conventional commits use one blank
+  // line between subject and body. Cap each bullet so the body stays
+  // readable in `git log --oneline` / `git show`. Up to 10 bullets;
+  // beyond that the commit is probably TOO chunked anyway.
+  const bullets = lines.slice(0, 10).map((l) => `- ${l.slice(0, 140)}`);
+  return `${subject}\n\n${bullets.join('\n')}`;
 }
 
 /** Run a sweep commit if cwd is a git repo with uncommitted changes.

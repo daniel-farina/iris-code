@@ -28,25 +28,51 @@ afterEach(() => {
 });
 
 describe('deriveCommitMessage', () => {
-  it('uses the LAST running-summary line trimmed of fluff', () => {
+  it('subject = user prompt; body = bulleted summary lines', () => {
     const msg = deriveCommitMessage(
-      ['First thing happened', 'The assistant added a new module called foo.js'],
-      'fallback prompt',
+      [
+        'Created src/audio.js with the Web Audio engine',
+        'Added beach theme config to tracks.js',
+        'The build process completed successfully',
+      ],
+      'Add audio engine and beach theme to the racing game',
     );
-    expect(msg).toContain('chore(hip):');
-    expect(msg).toContain('added a new module called foo.js');
-    expect(msg).not.toContain('The assistant');
+    const [subject, blank, ...body] = msg.split('\n');
+    expect(subject).toBe('chore(hip): Add audio engine and beach theme to the racing game');
+    expect(blank).toBe('');
+    expect(body.join('\n')).toContain('- Created src/audio.js');
+    expect(body.join('\n')).toContain('- Added beach theme config');
+    // 'The build process' isn't a narrator prefix (those are
+    // 'The assistant', 'The tool', 'The model', 'The user'), so it
+    // passes through verbatim.
+    expect(body.join('\n')).toContain('build process completed');
+    // narrator prefixes stripped
+    expect(body.join('\n')).not.toContain('The assistant');
   });
 
-  it('falls back to the user prompt when no summary lines', () => {
+  it('falls back to the user prompt alone when no summary lines', () => {
     const msg = deriveCommitMessage([], 'add a beach theme');
     expect(msg).toBe('chore(hip): add a beach theme');
   });
 
-  it('caps the subject under 72 chars', () => {
+  it('caps the subject line under 72 chars even with a huge prompt', () => {
     const huge = 'x'.repeat(200);
-    const msg = deriveCommitMessage([huge], '');
-    expect(msg.length).toBeLessThanOrEqual(72);
+    const msg = deriveCommitMessage(['some work'], huge);
+    const subject = msg.split('\n')[0]!;
+    expect(subject.length).toBeLessThanOrEqual(72);
+  });
+
+  it('caps body at 10 bullets when summary has many lines', () => {
+    const many = Array.from({ length: 20 }, (_, i) => `Line ${i}`);
+    const msg = deriveCommitMessage(many, 'task');
+    const bullets = msg.split('\n').filter((l) => l.startsWith('- '));
+    expect(bullets).toHaveLength(10);
+  });
+
+  it('uses generic fallback when prompt is empty', () => {
+    const msg = deriveCommitMessage(['some change'], '');
+    const subject = msg.split('\n')[0]!;
+    expect(subject).toBe('chore(hip): session changes');
   });
 });
 
@@ -75,12 +101,14 @@ describe('autoCommit', () => {
     );
     expect(r.attempted).toBe(true);
     expect(r.committed).toBe(true);
-    expect(r.message).toContain('Created foo.js and bar.js');
+    // Subject from the user prompt, body has the summary bullet
+    expect(r.message).toContain('chore(hip): add foo and bar');
+    expect(r.message).toContain('- Created foo.js and bar.js');
     expect(r.files?.length).toBe(2);
 
     // Verify git log has the new commit
     const log = git(['log', '--oneline']).out;
-    expect(log).toContain('foo.js');
+    expect(log).toContain('add foo and bar');
   });
 
   it('returns committed=false when git status is OK but there are NO actual changes', () => {
