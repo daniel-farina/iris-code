@@ -15,6 +15,7 @@ import { MtplxClient } from '../client.js';
 import { generateAutoSessionId } from '../config.js';
 import { type ChatMessage, systemMessage, userMessage } from '../schema.js';
 import { updateSession } from '../session_store.js';
+import type { SidecarConfig } from '../sidecar.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../system_prompt.js';
 import { detectResetIntent } from '../topic_detect.js';
 import { estimateTokens, formatTokens, shouldAutoCompact } from './auto_compact.js';
@@ -45,6 +46,9 @@ interface TuiFlags {
   postcommitDelayMs?: number;
   /** When false, suppresses the conv>9K-token auto-compact trigger. */
   autoCompact?: boolean;
+  /** Sidecar model id (auto-detected from Ollama if undefined). */
+  sidecarModel?: string;
+  sidecarUrl?: string;
 }
 
 type TranscriptItem =
@@ -84,6 +88,10 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   // Off when --no-auto-compact was passed or after /auto-compact off.
   const [autoCompactOn, setAutoCompactOn] = useState<boolean>(flags.autoCompact !== false);
   const convRef = useRef<ChatMessage[]>([systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)]);
+  // Sidecar running-summary: one line per round, used to short-circuit
+  // expensive main-model summarize calls in /compact.
+  const runningSummaryRef = useRef<string[]>([]);
+  const sidecarCfgRef = useRef<SidecarConfig | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [stats, setStats] = useState(() => emptyStats());
   // Per-tool start times so onToolResult can record duration into stats.perTool.
@@ -121,6 +129,37 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       exitArmedRef.current = null;
     }
   };
+  // Bootstrap: resolve sidecar once at mount. Explicit flag wins;
+  // otherwise probe Ollama and pick a small model if installed.
+  useEffect(() => {
+    void (async () => {
+      const { autoDetectSidecar } = await import('../sidecar.js');
+      const cfg = flags.sidecarModel
+        ? { url: flags.sidecarUrl ?? 'http://localhost:11434', model: flags.sidecarModel }
+        : await autoDetectSidecar(flags.sidecarUrl);
+      if (cfg) {
+        sidecarCfgRef.current = cfg;
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: `[sidecar ${flags.sidecarModel ? 'enabled' : 'auto-detected'}: ${cfg.model} @ ${cfg.url}]`,
+          },
+        ]);
+      } else if (!flags.sidecarModel) {
+        // Hint once that the user could benefit from installing Ollama + a small model.
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: '[no sidecar - compact will use the main model (slower). Install Ollama and `ollama pull gemma4:e2b` to enable free auto-summarize]',
+          },
+        ]);
+      }
+    })();
+    // Sidecar config doesn't change after mount, but include them to
+    // satisfy the linter without a suppression comment.
+  }, [flags.sidecarModel, flags.sidecarUrl]);
   // While busy, rotate the hippo word + tick the elapsed counter every
   // second. The hippoWord cycles independently every ~1.5s; elapsed
   // ticks at 1Hz. Both stop and reset on busy=false.
@@ -319,26 +358,34 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     setBusy(true);
     setStatus(trigger === 'auto' ? 'auto-compacting...' : 'compacting...');
     try {
-      const client = new MtplxClient({
-        baseUrl: flags.url,
-        model: runtimeModel,
-        sessionId,
-      });
-      const summarizeConv: ChatMessage[] = [
-        ...convRef.current,
-        {
-          role: 'user',
-          content:
-            'Summarize the conversation above in 5-10 bullet points: what was asked, what was done (files changed, decisions made), and any unresolved threads. Be terse - this is for resuming the session, not for the user.',
-        },
-      ];
-      const res = await client.stream(summarizeConv, undefined, {
-        temperature: runtimeTemperature,
-        top_p: runtimeTopP,
-        top_k: runtimeTopK,
-        max_tokens: 1500,
-      });
-      const summary = res.content.trim();
+      // FAST PATH: if the sidecar has been producing per-round summaries,
+      // use them directly. Saves the 5-10s main-model summarize.
+      const sideLines = runningSummaryRef.current.filter((s) => s.trim().length > 0);
+      let summary: string;
+      if (sideLines.length > 0) {
+        summary = sideLines.map((s, i) => `${i + 1}. ${s}`).join('\n');
+      } else {
+        const client = new MtplxClient({
+          baseUrl: flags.url,
+          model: runtimeModel,
+          sessionId,
+        });
+        const summarizeConv: ChatMessage[] = [
+          ...convRef.current,
+          {
+            role: 'user',
+            content:
+              'Summarize the conversation above in 5-10 bullet points: what was asked, what was done (files changed, decisions made), and any unresolved threads. Be terse - this is for resuming the session, not for the user.',
+          },
+        ];
+        const res = await client.stream(summarizeConv, undefined, {
+          temperature: runtimeTemperature,
+          top_p: runtimeTopP,
+          top_k: runtimeTopK,
+          max_tokens: 1500,
+        });
+        summary = res.content.trim();
+      }
       if (!summary) {
         setTranscript((p) => [...p, { kind: 'system', text: '[compact failed - empty summary]' }]);
         return;
@@ -477,7 +524,16 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         // before the next round); disable runLoop's internal one to
         // avoid double-compaction.
         autoCompactThresholdTokens: 0,
+        sidecar: sidecarCfgRef.current ?? undefined,
+        runningSummary: sidecarCfgRef.current ? runningSummaryRef.current : undefined,
         events: {
+          onSidecarSummary: (line, total) => {
+            // Don't spam the transcript with every summary - just bump
+            // the count silently. Surfaced in /stats and at /compact.
+            // (Future: show in a footer line.)
+            void line;
+            void total;
+          },
           onToolResultPrune: (pruned, charsSaved) => {
             setTranscript((p) => [
               ...p,
