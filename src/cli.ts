@@ -190,7 +190,7 @@ Options:
   --url <url>                        MTPLX base URL (default ${DEFAULT_MTPLX_URL})
   --model <id>                       model id (default ${DEFAULT_MODEL})
   --session <id>                     stable session id; reuse across hip runs so MTPLX's 8-slot session bank keeps the prefix cache warm (default auto-YYYYMMDD-HHMMSS-<hex>)
-  -c, --continue-last                resume the most recent session from ~/.hip/sessions.jsonl
+  -c, --continue-last                resume the most recent session in this cwd (falls back to global-latest if none)
   --resume <id>                      resume a specific session id
   -q, --quiet                        --print mode: suppress tool-call logs on stderr (final answer only)
   --system <prompt>                  override the default coding-assistant system prompt

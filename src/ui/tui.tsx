@@ -964,6 +964,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       const n = sessMatch[1] ? Math.max(1, Math.min(200, Number(sessMatch[1]))) : 10;
       void (async () => {
         const { readAllSessions } = await import('../session_store.js');
+        const here = process.cwd();
         const all = (await readAllSessions()).slice(-n).reverse();
         if (all.length === 0) {
           setTranscript((p) => [...p, { kind: 'system', text: '[no persisted sessions yet]' }]);
@@ -971,14 +972,15 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
           const list = all
             .map((r) => {
               const when = new Date(r.ts_unix * 1000).toISOString().slice(0, 19).replace('T', ' ');
-              return `  ${when}  ${r.session_id.slice(0, 30).padEnd(30)}  msgs=${String(r.conv.length).padStart(3)}  ${r.first_user.slice(0, 40)}`;
+              const tag = r.cwd === here ? ' [here]' : '';
+              return `  ${when}  ${r.session_id.slice(0, 30).padEnd(30)}  msgs=${String(r.conv.length).padStart(3)}${tag}  ${r.first_user.slice(0, 40)}`;
             })
             .join('\n');
           setTranscript((p) => [
             ...p,
             {
               kind: 'system',
-              text: `recent sessions (newest first):\n${list}\n  /resume <id> to switch · /resume last for the newest`,
+              text: `recent sessions (newest first; [here] = same cwd):\n${list}\n  /resume <id> to switch · /resume last for the newest`,
             },
           ]);
         }
