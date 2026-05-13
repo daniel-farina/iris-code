@@ -585,8 +585,10 @@ async function runPrintMode(
       process.stderr.write(
         `[hip] auto-commit: ${result.message} (${result.files?.length ?? 0} files)\n`,
       );
-    } else if (result.attempted) {
-      process.stderr.write(`[hip] auto-commit skipped: ${result.reason}\n`);
+    } else {
+      // Always surface SOMETHING when the user opted in - they should
+      // know whether the sweep ran or was a no-op.
+      process.stderr.write(`[hip] auto-commit: ${result.reason}\n`);
     }
   }
 }
