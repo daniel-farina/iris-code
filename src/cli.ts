@@ -212,7 +212,7 @@ Options:
   --max-time <seconds>               --print mode: hard wall-clock cap; aborts the agent loop
   --postcommit-delay <ms>            max time to wait for MTPLX postcommit between rounds when prompt >8K tok (polls; default ${DEFAULT_POSTCOMMIT_DELAY_MS}, 0 disables)
   --no-auto-compact                  TUI: disable auto-/compact when conv approaches ~9K tokens
-  --sidecar <model>                  Ollama small-model id (e.g. gemma4:e2b) for parallel per-round summaries; free compact (env: HIP_SIDECAR_MODEL)
+  --sidecar <model>                  Ollama small-model id (e.g. gemma4:e2b) for parallel per-round summaries; free compact (env: HIP_SIDECAR_MODEL). Auto-detected if Ollama is reachable with a known small model.
   --sidecar-url <url>                Ollama base URL for --sidecar (default http://localhost:11434; env: HIP_SIDECAR_URL)
   --clear-stale-sessions [N]         at startup, clear MTPLX sessions idle >N min (default 30) to free session-bank slots
   --update                           download + install the latest release from GitHub
@@ -403,6 +403,17 @@ async function runPrintMode(
   let sidecarLines = 0;
   const runningSummary: string[] = [];
   const toolStartMs: Record<string, number> = {};
+  // Sidecar: explicit flag wins; otherwise probe Ollama and pick a
+  // small model if installed. Probe has a 500ms timeout - never blocks.
+  const { autoDetectSidecar } = await import('./sidecar.js');
+  const resolvedSidecar = flags.sidecarModel
+    ? { url: flags.sidecarUrl ?? 'http://localhost:11434', model: flags.sidecarModel }
+    : await autoDetectSidecar(flags.sidecarUrl);
+  if (resolvedSidecar && !flags.quiet && !flags.sidecarModel) {
+    process.stderr.write(
+      `[hip] sidecar auto-detected: ${resolvedSidecar.model} @ ${resolvedSidecar.url}\n`,
+    );
+  }
   // SIGINT in headless mode cancels the in-flight stream + agent loop.
   // Without this, Ctrl-C just kills the process mid-stream and loses any
   // tool results that were already collected for this turn.
@@ -447,10 +458,8 @@ async function runPrintMode(
     autoCompactThresholdTokens:
       flags.autoCompact === false ? 0 : DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS,
     systemPromptForCompact: flags.system,
-    sidecar: flags.sidecarModel
-      ? { url: flags.sidecarUrl ?? 'http://localhost:11434', model: flags.sidecarModel }
-      : undefined,
-    runningSummary: flags.sidecarModel ? runningSummary : undefined,
+    sidecar: resolvedSidecar ?? undefined,
+    runningSummary: resolvedSidecar ? runningSummary : undefined,
     events: {
       onRound: (_n, info) => {
         if (typeof info.ctok === 'number') completionTokens += info.ctok;

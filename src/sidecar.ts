@@ -67,6 +67,39 @@ export async function summarizeExchange(
   }
 }
 
+/** Auto-detect a usable sidecar at startup. Probes Ollama's /api/tags.
+ *  Returns the first model from the preferred list that's installed,
+ *  or null if Ollama isn't reachable / no preferred model is present.
+ *  Cheap: one HTTP call with a tight 500ms timeout. Failures silent. */
+export async function autoDetectSidecar(
+  baseUrl = 'http://localhost:11434',
+  preferred: readonly string[] = [
+    // Smaller / faster models first so we pick the cheapest available.
+    'gemma3:1b',
+    'llama3.2:1b',
+    'gemma4:e2b',
+    'gemma4:e4b',
+    'qwen3:1.7b',
+  ],
+): Promise<SidecarConfig | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 500);
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { models?: { name?: string }[] };
+    const installed = new Set((data.models ?? []).map((m) => m.name ?? '').filter(Boolean));
+    for (const want of preferred) {
+      if (installed.has(want)) return { url: baseUrl, model: want };
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 /** Wire two AbortSignals together: abort the composite when EITHER fires. */
 function mergeSignals(a: AbortSignal, b: AbortSignal): AbortSignal {
   const ctrl = new AbortController();

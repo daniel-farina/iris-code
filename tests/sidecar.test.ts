@@ -1,7 +1,7 @@
 // Sidecar client tests. Mocks fetch so we don't need a real Ollama.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildExchangeText, summarizeExchange } from '../src/sidecar.js';
+import { autoDetectSidecar, buildExchangeText, summarizeExchange } from '../src/sidecar.js';
 
 const cfg = { url: 'http://localhost:11434', model: 'gemma4:e2b' };
 
@@ -77,6 +77,52 @@ describe('summarizeExchange', () => {
     setTimeout(() => ctrl.abort(), 10);
     const r = await summarizeExchange(cfg, 'fake', ctrl.signal);
     expect(r).toBeNull();
+  });
+});
+
+describe('autoDetectSidecar', () => {
+  it('returns the first preferred model that is installed', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          models: [
+            { name: 'qwen3.6:35b-a3b' },
+            { name: 'gemma4:e2b' },
+            { name: 'gemma3:1b' },
+          ],
+        }),
+        { status: 200 },
+      ),
+    ) as typeof fetch;
+    const r = await autoDetectSidecar('http://localhost:11434');
+    // gemma3:1b is first in the preference list and is installed.
+    expect(r?.model).toBe('gemma3:1b');
+  });
+
+  it('returns null if no preferred model is installed', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ models: [{ name: 'qwen3.6:35b-a3b' }] }), { status: 200 }),
+    ) as typeof fetch;
+    const r = await autoDetectSidecar('http://localhost:11434');
+    expect(r).toBeNull();
+  });
+
+  it('returns null when Ollama unreachable', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    }) as typeof fetch;
+    const r = await autoDetectSidecar('http://localhost:11434');
+    expect(r).toBeNull();
+  });
+
+  it('respects a custom preferred list', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ models: [{ name: 'phi4:mini' }, { name: 'gemma4:e2b' }] }), {
+        status: 200,
+      }),
+    ) as typeof fetch;
+    const r = await autoDetectSidecar('http://localhost:11434', ['phi4:mini']);
+    expect(r?.model).toBe('phi4:mini');
   });
 });
 
