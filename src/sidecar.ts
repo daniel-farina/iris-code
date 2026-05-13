@@ -68,39 +68,60 @@ export async function summarizeExchange(
   }
 }
 
+/** Distinguishes "Ollama not installed/reachable" from "Ollama up but
+ *  no preferred small model installed" - lets the UI offer a precise
+ *  hint (install ollama vs `ollama pull <model>`). */
+export type SidecarStatus =
+  | { kind: 'ok'; config: SidecarConfig }
+  | { kind: 'no-ollama'; reason: string }
+  | { kind: 'no-model'; preferred: readonly string[]; installed: string[] };
+
 /** Auto-detect a usable sidecar at startup. Probes Ollama's /api/tags.
  *  Returns the first model from the preferred list that's installed,
  *  or null if Ollama isn't reachable / no preferred model is present.
  *  Cheap: one HTTP call with a tight 500ms timeout. Failures silent. */
+export const PREFERRED_SIDECAR_MODELS: readonly string[] = [
+  // Order by quality at the per-summary level (based on live testing
+  // 2026-05): Gemma 4 E4B beats E2B by a clear margin for one-line
+  // summaries - it preserves exported function names, file paths,
+  // and specific numbers verbatim. 2x the latency (~600ms vs ~300ms)
+  // but still well within the 1-17s MTPLX postcommit overlap window.
+  // Smaller tier comes after as a fallback when E4B isn't installed.
+  'gemma4:e4b',
+  'gemma4:e2b',
+  'gemma3:1b',
+  'llama3.2:1b',
+  'qwen3:1.7b',
+] as const;
+
 export async function autoDetectSidecar(
   baseUrl = 'http://localhost:11434',
-  preferred: readonly string[] = [
-    // Order by quality at the per-summary level (based on live testing
-    // 2026-05): Gemma 4 E4B beats E2B by a clear margin for one-line
-    // summaries — it preserves exported function names, file paths,
-    // and specific numbers verbatim. 2x the latency (~600ms vs ~300ms)
-    // but still well within the 1-17s MTPLX postcommit overlap window.
-    // Smaller tier comes after as a fallback when E4B isn't installed.
-    'gemma4:e4b',
-    'gemma4:e2b',
-    'gemma3:1b',
-    'llama3.2:1b',
-    'qwen3:1.7b',
-  ],
+  preferred: readonly string[] = PREFERRED_SIDECAR_MODELS,
 ): Promise<SidecarConfig | null> {
+  const r = await probeSidecar(baseUrl, preferred);
+  return r.kind === 'ok' ? r.config : null;
+}
+
+/** Like autoDetectSidecar but returns a precise status so the UI can
+ *  offer install hints ("brew install ollama" vs "ollama pull X"). */
+export async function probeSidecar(
+  baseUrl = 'http://localhost:11434',
+  preferred: readonly string[] = PREFERRED_SIDECAR_MODELS,
+): Promise<SidecarStatus> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 500);
   try {
     const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/tags`, { signal: ctrl.signal });
-    if (!res.ok) return null;
+    if (!res.ok) return { kind: 'no-ollama', reason: `HTTP ${res.status}` };
     const data = (await res.json()) as { models?: { name?: string }[] };
-    const installed = new Set((data.models ?? []).map((m) => m.name ?? '').filter(Boolean));
+    const installed = (data.models ?? []).map((m) => m.name ?? '').filter(Boolean);
+    const installedSet = new Set(installed);
     for (const want of preferred) {
-      if (installed.has(want)) return { url: baseUrl, model: want };
+      if (installedSet.has(want)) return { kind: 'ok', config: { url: baseUrl, model: want } };
     }
-    return null;
-  } catch {
-    return null;
+    return { kind: 'no-model', preferred, installed };
+  } catch (e) {
+    return { kind: 'no-ollama', reason: (e as Error).message ?? 'unreachable' };
   } finally {
     clearTimeout(t);
   }

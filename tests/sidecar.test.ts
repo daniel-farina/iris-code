@@ -1,7 +1,12 @@
 // Sidecar client tests. Mocks fetch so we don't need a real Ollama.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { autoDetectSidecar, buildExchangeText, summarizeExchange } from '../src/sidecar.js';
+import {
+  autoDetectSidecar,
+  buildExchangeText,
+  probeSidecar,
+  summarizeExchange,
+} from '../src/sidecar.js';
 
 const cfg = { url: 'http://localhost:11434', model: 'gemma4:e2b' };
 
@@ -124,6 +129,44 @@ describe('autoDetectSidecar', () => {
     ) as typeof fetch;
     const r = await autoDetectSidecar('http://localhost:11434', ['phi4:mini']);
     expect(r?.model).toBe('phi4:mini');
+  });
+});
+
+describe('probeSidecar', () => {
+  it('returns ok with the first preferred model installed', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ models: [{ name: 'gemma4:e2b' }] }), { status: 200 }),
+    ) as typeof fetch;
+    const r = await probeSidecar('http://localhost:11434');
+    expect(r.kind).toBe('ok');
+    if (r.kind === 'ok') expect(r.config.model).toBe('gemma4:e2b');
+  });
+
+  it('returns no-model when Ollama up but nothing preferred installed', async () => {
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ models: [{ name: 'codellama:13b' }] }), { status: 200 }),
+    ) as typeof fetch;
+    const r = await probeSidecar('http://localhost:11434');
+    expect(r.kind).toBe('no-model');
+    if (r.kind === 'no-model') {
+      expect(r.installed).toContain('codellama:13b');
+      expect(r.preferred[0]).toBe('gemma4:e4b');
+    }
+  });
+
+  it('returns no-ollama when fetch throws', async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error('ECONNREFUSED');
+    }) as typeof fetch;
+    const r = await probeSidecar('http://localhost:11434');
+    expect(r.kind).toBe('no-ollama');
+  });
+
+  it('returns no-ollama on non-2xx HTTP status', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('', { status: 503 })) as typeof fetch;
+    const r = await probeSidecar('http://localhost:11434');
+    expect(r.kind).toBe('no-ollama');
+    if (r.kind === 'no-ollama') expect(r.reason).toContain('503');
   });
 });
 

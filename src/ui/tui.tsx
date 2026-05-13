@@ -133,26 +133,50 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   // otherwise probe Ollama and pick a small model if installed.
   useEffect(() => {
     void (async () => {
-      const { autoDetectSidecar } = await import('../sidecar.js');
-      const cfg = flags.sidecarModel
-        ? { url: flags.sidecarUrl ?? 'http://localhost:11434', model: flags.sidecarModel }
-        : await autoDetectSidecar(flags.sidecarUrl);
-      if (cfg) {
-        sidecarCfgRef.current = cfg;
+      const { probeSidecar } = await import('../sidecar.js');
+      const quietSidecar = process.env['HIP_QUIET_SIDECAR'] === '1';
+      if (flags.sidecarModel) {
+        sidecarCfgRef.current = {
+          url: flags.sidecarUrl ?? 'http://localhost:11434',
+          model: flags.sidecarModel,
+        };
         setTranscript((p) => [
           ...p,
           {
             kind: 'system',
-            text: `[sidecar ${flags.sidecarModel ? 'enabled' : 'auto-detected'}: ${cfg.model} @ ${cfg.url}]`,
+            text: `[sidecar enabled: ${flags.sidecarModel} @ ${flags.sidecarUrl ?? 'http://localhost:11434'}]`,
           },
         ]);
-      } else if (!flags.sidecarModel) {
-        // Hint once that the user could benefit from installing Ollama + a small model.
+        return;
+      }
+      const status = await probeSidecar(flags.sidecarUrl);
+      if (status.kind === 'ok') {
+        sidecarCfgRef.current = status.config;
         setTranscript((p) => [
           ...p,
           {
             kind: 'system',
-            text: '[no sidecar - compact will use the main model (slower). Install Ollama and `ollama pull gemma4:e2b` to enable free auto-summarize]',
+            text: `[sidecar auto-detected: ${status.config.model} @ ${status.config.url}]`,
+          },
+        ]);
+      } else if (!quietSidecar && status.kind === 'no-ollama') {
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: '[no sidecar - Ollama not reachable. /compact will use the main model (slower).\n  Install:  brew install ollama  (or curl from ollama.com), then  ollama pull gemma4:e2b\n  Suppress this hint:  HIP_QUIET_SIDECAR=1]',
+          },
+        ]);
+      } else if (!quietSidecar) {
+        // Ollama up, but no preferred model installed.
+        const top = status.kind === 'no-model' ? status.preferred[0] : 'gemma4:e2b';
+        const list =
+          status.kind === 'no-model' ? status.preferred.slice(0, 3).join(', ') : 'gemma4:e2b';
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: `[no sidecar - Ollama is running but no preferred small model is installed. /compact will use the main model.\n  Fix:  ollama pull ${top}  (or any of: ${list})\n  Suppress this hint:  HIP_QUIET_SIDECAR=1]`,
           },
         ]);
       }
