@@ -14,7 +14,13 @@ export const DEFAULT_TOP_K = 20;
 // failure mode from "fatal parse error" to "finish_reason=length" which
 // auto-continues. Still much smaller than the model's 32k context window.
 export const DEFAULT_MAX_TOKENS = 6144;
-export const DEFAULT_MAX_ROUNDS = 30;
+// Round cap. With auto-compact + postcommit polling each round is
+// fast and warm, so the bottleneck for multi-feature refactors used
+// to be this cap. Bumped from 30 to 60: a "create 5 files" task
+// needs ~5 * (touch + 3-5 appends + verify) = ~25-35 tool calls,
+// which often spans 30-50 rounds in qwen3-style 1-2-tools-per-round
+// emission. Auto-compact mid-loop keeps the prefix small even at 60.
+export const DEFAULT_MAX_ROUNDS = 60;
 export const MAX_CONSECUTIVE_LENGTH_CONTINUES = 3;
 
 // Between agent-loop rounds, wait for MTPLX's KV-cache postcommit to

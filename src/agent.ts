@@ -106,19 +106,30 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
       const tokensNow = approxTokens(conv);
       if (tokensNow >= autoCompactThreshold && conv.length > 3) {
         events?.onCompactStart?.(tokensNow);
-        const result = await compactConv({
-          client,
-          conv,
-          sampling,
-          systemPrompt: opts.systemPromptForCompact,
-          signal,
-        });
-        if (result) {
-          // Rewrite the caller's conv array in place so they see the
-          // change (we're operating on the same reference).
-          conv.length = 0;
-          for (const m of result.newConv) conv.push(m);
-          events?.onCompactDone?.(result.tokensBefore, result.tokensAfter, result.msgsBefore);
+        try {
+          const result = await compactConv({
+            client,
+            conv,
+            sampling,
+            systemPrompt: opts.systemPromptForCompact,
+            signal,
+          });
+          if (result) {
+            // Rewrite the caller's conv array in place so they see the
+            // change (we're operating on the same reference).
+            conv.length = 0;
+            for (const m of result.newConv) conv.push(m);
+            events?.onCompactDone?.(result.tokensBefore, result.tokensAfter, result.msgsBefore);
+          }
+        } catch (e) {
+          // Don't crash the agent loop if the summarize call itself
+          // 422s (can happen if the conv we're trying to summarize is
+          // already malformed). Surface the failure via the existing
+          // onCompactDone event with 0/0 sizes so callers can log.
+          if ((e as Error).name === 'AbortError' || signal?.aborted) {
+            return finish(startTotal, round, toolCallCount, 'aborted');
+          }
+          events?.onCompactDone?.(tokensNow, tokensNow, conv.length);
         }
       }
     }
