@@ -33,6 +33,8 @@ pub const COMMANDS_COLON: &[&str] = &[
     ":cwd",
     ":show-thinking",
     ":full-output",
+    ":max-tokens",
+    ":max-rounds",
     ":smoke",
     ":tools",
     ":overhead",

@@ -633,6 +633,12 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
         .unwrap_or_else(|| agent::DEFAULT_SYSTEM_PROMPT.to_string());
     let mut conv: Vec<ChatMessage> = vec![ChatMessage::system(system)];
 
+    // Runtime-mutable copies of the per-dispatch caps so `:max-tokens N` and
+    // `:max-rounds N` slash commands can change them mid-session without a
+    // restart. Initial values come from --max-tokens / --max-rounds CLI flags.
+    let mut runtime_max_rounds: u32 = cli.max_rounds;
+    let mut runtime_max_tokens: Option<u32> = cli.max_tokens;
+
     // If the user passed --resume (with or without an explicit session id),
     // try to reload the prior conversation off disk so the model actually
     // sees the past turns instead of just inheriting a warm prefix cache.
@@ -1013,6 +1019,56 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 eprintln!("[hip] show_thinking = {}", show_thinking);
                 continue;
             }
+            cmd if cmd == ":max-tokens" || cmd == ":max-output-tokens" => {
+                let current = runtime_max_tokens
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "(default 4096)".to_string());
+                eprintln!("[hip] max-tokens = {} (use ':max-tokens N' to set, ':max-tokens default' to reset)", current);
+                continue;
+            }
+            cmd if cmd.starts_with(":max-tokens ") || cmd.starts_with(":max-output-tokens ") => {
+                let body = cmd.split_once(' ').map(|(_, r)| r.trim()).unwrap_or("");
+                if matches!(body, "default" | "reset" | "unset" | "") {
+                    runtime_max_tokens = None;
+                    eprintln!("[hip] max-tokens reset to default (4096)");
+                } else {
+                    match body.parse::<u32>() {
+                        Ok(n) if n > 0 => {
+                            runtime_max_tokens = Some(n);
+                            eprintln!("[hip] max-tokens = {} (applies to next dispatch)", n);
+                        }
+                        _ => {
+                            eprintln!("[hip] usage: :max-tokens <positive integer> | default");
+                        }
+                    }
+                }
+                continue;
+            }
+            cmd if cmd == ":max-rounds" || cmd == ":max-turns" => {
+                eprintln!(
+                    "[hip] max-rounds = {} (use ':max-rounds N' to set; cap on tool-call rounds per dispatch)",
+                    runtime_max_rounds
+                );
+                continue;
+            }
+            cmd if cmd.starts_with(":max-rounds ") || cmd.starts_with(":max-turns ") => {
+                let body = cmd.split_once(' ').map(|(_, r)| r.trim()).unwrap_or("");
+                if matches!(body, "default" | "reset" | "unset" | "") {
+                    runtime_max_rounds = 30;
+                    eprintln!("[hip] max-rounds reset to default (30)");
+                } else {
+                    match body.parse::<u32>() {
+                        Ok(n) if n > 0 => {
+                            runtime_max_rounds = n;
+                            eprintln!("[hip] max-rounds = {} (applies to next dispatch)", n);
+                        }
+                        _ => {
+                            eprintln!("[hip] usage: :max-rounds <positive integer> | default");
+                        }
+                    }
+                }
+                continue;
+            }
             cmd if cmd.starts_with(":full-output ") => {
                 full_output = matches!(cmd[13..].trim(), "on" | "1" | "true");
                 apply_pretty_env(show_thinking, full_output);
@@ -1228,6 +1284,8 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 eprintln!("  {a}/cwd <path>{r}       change working directory");
                 eprintln!("  {a}/show-thinking{r} on|off  toggle <think>...</think> display");
                 eprintln!("  {a}/full-output{r} on|off    toggle full (untruncated) tool output");
+                eprintln!("  {a}/max-tokens{r} [N|default]  per-turn output cap (default 4096; lower = more auto-continues)");
+                eprintln!("  {a}/max-rounds{r} [N|default]  per-dispatch tool-call round cap (default 30)");
                 eprintln!("  {a}/smoke{r} [path]     run smoke harness in cwd or path");
                 eprintln!("  {a}/tools{r}            list registered agent tools");
                 eprintln!("  {a}/overhead{r}         show current prompt overhead size");
@@ -1289,11 +1347,16 @@ async fn run_chat(cli: &Cli, client: &mut MtplxClient, first: Option<String>) ->
                 }
             }
         } else {
+            // Honour runtime overrides from :max-tokens / :max-rounds slash cmds.
+            let mut opts = sampler_opts(cli);
+            if let Some(m) = runtime_max_tokens {
+                opts.max_tokens = m;
+            }
             match agent::run_loop_with_prune(
                 client,
                 &mut conv,
-                cli.max_rounds,
-                sampler_opts(cli),
+                runtime_max_rounds,
+                opts,
                 cli.no_auto_prune,
             )
             .await
