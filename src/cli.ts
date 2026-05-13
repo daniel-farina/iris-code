@@ -46,7 +46,7 @@ interface Flags {
   help?: boolean;
 }
 
-const VERSION = '0.0.1';
+const VERSION = '0.4.0';
 
 export function parseFlags(argv: string[]): Flags {
   const { values, positionals } = parseArgs({
