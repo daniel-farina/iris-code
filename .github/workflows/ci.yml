@@ -38,5 +38,5 @@ jobs:
       - name: vitest
         run: bunx vitest run
 
-      - name: bun test (incl. test-game)
-        run: bun test
+      - name: bun test (repo only; test-game playground excluded)
+        run: bun test tests/
