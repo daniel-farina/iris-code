@@ -46,12 +46,29 @@ export async function runSetup(baseUrl: string): Promise<void> {
   // Build the new env we'd launch with: keep MTPLX's existing env vars
   // (MLX_CODE_*, MTPLX_*) untouched and overlay our recommended ones.
   const desiredEnv: Record<string, string> = { ...(status.env ?? {}), ...RECOMMENDED_ENV };
-  const cmdline = status.cmdline ?? [];
-  if (cmdline.length === 0) {
+  // `ps` returns the resolved framework-python path, which can't
+  // `import mtplx` (the venv shim that put mtplx on sys.path is gone
+  // by then). Swap in the venv's python before relaunch.
+  const rawCmdline = status.cmdline ?? [];
+  if (rawCmdline.length === 0) {
     process.stdout.write(
       `${WARN}Could not read MTPLX's command line. Restart it manually with the env vars above.${RESET}\n`,
     );
     return;
+  }
+  const cmdline =
+    status.venvPython && rawCmdline[0] !== status.venvPython
+      ? [status.venvPython, ...rawCmdline.slice(1)]
+      : rawCmdline;
+  if (status.venvPython && status.venvPython !== rawCmdline[0]) {
+    process.stdout.write(
+      `${DIM}Will launch via venv python: ${status.venvPython}${RESET}\n` +
+        `${DIM}(ps reports the resolved framework python, which can't import mtplx)${RESET}\n`,
+    );
+  } else if (!status.venvPython) {
+    process.stdout.write(
+      `${WARN}Could not discover the venv python. The restart will reuse argv[0]=${rawCmdline[0]} and may fail with ModuleNotFoundError. Cancel and report this.${RESET}\n`,
+    );
   }
 
   process.stdout.write(

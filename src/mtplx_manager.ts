@@ -31,6 +31,12 @@ export interface MtplxStatus {
   baseUrl: string;
   pid?: number;
   cmdline?: string[];
+  /** The path to the venv's python that hosts the mtplx package.
+   *  `ps -o command=` returns the *resolved* framework python (e.g.
+   *  /opt/homebrew/Cellar/python@3.13/.../Python), which can't import
+   *  mtplx because it doesn't know the venv exists. We discover the
+   *  venv via lsof on a loaded site-packages file. */
+  venvPython?: string;
   /** Only MTPLX_* / MLX_* env vars; we don't snoop everything. */
   env?: Record<string, string>;
   /** Parsed from /v1/models, if available. */
@@ -72,6 +78,7 @@ export async function getMtplxStatus(baseUrl: string): Promise<MtplxStatus> {
     status.running = true;
     status.cmdline = readProcessCmdline(pid);
     status.env = readProcessMtplxEnv(pid);
+    status.venvPython = findVenvPython(pid);
   } else {
     status.running = status.reachable === true; // reachable but no pid (rare)
   }
@@ -97,6 +104,29 @@ function readProcessCmdline(pid: number): string[] | undefined {
   const line = r.stdout.trim();
   if (!line) return undefined;
   return line.split(/\s+/);
+}
+
+/** Find the venv python the process is actually running under. `ps`
+ *  reports the resolved framework python, which can't `import mtplx`
+ *  because the venv shim is gone from PATH at that point. Instead we
+ *  ask `lsof` for any file the process has open under a site-packages
+ *  directory; the venv root sits just above `lib/pythonX.Y/site-packages`. */
+function findVenvPython(pid: number): string | undefined {
+  const r = spawnSync('lsof', ['-p', String(pid)], { encoding: 'utf8' });
+  if (r.status !== 0) return undefined;
+  // Match the venv root by anchoring on /lib/python<v>/site-packages/.
+  const re = /(\/[^\s]+?)\/lib\/python[\d.]+\/site-packages\//;
+  for (const line of r.stdout.split('\n')) {
+    const m = re.exec(line);
+    if (m?.[1]) {
+      const candidate = `${m[1]}/bin/python`;
+      // Quick existence check; spawnSync('test', ['-x', candidate]) is
+      // portable on mac+linux but `node:fs.existsSync` is faster.
+      const fs = require('node:fs') as typeof import('node:fs');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
 }
 
 function readProcessMtplxEnv(pid: number): Record<string, string> {
