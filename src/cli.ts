@@ -49,13 +49,42 @@ interface Flags {
   help?: boolean;
   /** TUI only: when false, suppresses the conv>9K-token auto-/compact. */
   autoCompact?: boolean;
+  /** When set, before normal work clear MTPLX sessions idle longer
+   *  than this many minutes (frees session-bank slots). 0/undefined = off. */
+  clearStaleSessionsMinutes?: number;
 }
 
 const VERSION = '0.4.1-dev';
 
+/** Normalize a bare `--clear-stale-sessions` (with no following value or
+ *  followed by another flag) to `--clear-stale-sessions=30`. node:parseArgs
+ *  treats string options as required-value, so a bare flag yields a
+ *  cryptic "argument missing" error otherwise. */
+function normalizeBareClearStale(argv: string[]): string[] {
+  const KEY = '--clear-stale-sessions';
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === KEY) {
+      const next = argv[i + 1];
+      // Bare if at end OR next token looks like a flag/option.
+      if (next === undefined || next.startsWith('-')) {
+        out.push(`${KEY}=30`);
+        continue;
+      }
+    }
+    if (a !== undefined) out.push(a);
+  }
+  return out;
+}
+
 export function parseFlags(argv: string[]): Flags {
+  // Normalize bare `--clear-stale-sessions` (no arg) to the
+  // documented default of 30 minutes. node:parseArgs treats string
+  // flags as eagerly consuming a value and errors on a bare presence.
+  const argvNorm = normalizeBareClearStale(argv);
   const { values, positionals } = parseArgs({
-    args: argv,
+    args: argvNorm,
     allowPositionals: true,
     options: {
       // --print / --one-shot are boolean toggles; the prompt is always
@@ -82,6 +111,7 @@ export function parseFlags(argv: string[]): Flags {
       update: { type: 'boolean' },
       'install-info': { type: 'boolean' },
       'no-auto-compact': { type: 'boolean' },
+      'clear-stale-sessions': { type: 'string' },
       version: { type: 'boolean', short: 'V' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -124,6 +154,9 @@ export function parseFlags(argv: string[]): Flags {
     update: (values.update as boolean | undefined) ?? false,
     installInfo: (values['install-info'] as boolean | undefined) ?? false,
     autoCompact: !((values['no-auto-compact'] as boolean | undefined) ?? false),
+    clearStaleSessionsMinutes: values['clear-stale-sessions']
+      ? num('clear-stale-sessions', values['clear-stale-sessions'] as string, 30)
+      : undefined,
     version: (values.version as boolean | undefined) ?? false,
     help: (values.help as boolean | undefined) ?? false,
   };
@@ -151,6 +184,7 @@ Options:
   --max-time <seconds>               --print mode: hard wall-clock cap; aborts the agent loop
   --postcommit-delay <ms>            max time to wait for MTPLX postcommit between rounds when prompt >8K tok (polls; default ${DEFAULT_POSTCOMMIT_DELAY_MS}, 0 disables)
   --no-auto-compact                  TUI: disable auto-/compact when conv approaches ~9K tokens
+  --clear-stale-sessions [N]         at startup, clear MTPLX sessions idle >N min (default 30) to free session-bank slots
   --update                           download + install the latest release from GitHub
   --install-info                     print where hip is installed and the target platform
   --max-tokens <n>                   max output tokens per turn (default ${DEFAULT_MAX_TOKENS})
@@ -199,6 +233,30 @@ async function main() {
   //   --continue-last   -> load the most recent session's conv
   //   else              -> new conv with system prompt only
   const { resolvedSessionId, startConv } = await resolveSessionAndConv(flags);
+
+  // Pre-flight stale-session cleanup (frees MTPLX session-bank slots).
+  // Runs AFTER session resolution so we know which id to protect.
+  if (typeof flags.clearStaleSessionsMinutes === 'number') {
+    const { clearStaleSessions } = await import('./clear_stale.js');
+    try {
+      const r = await clearStaleSessions({
+        v1BaseUrl: flags.url,
+        cutoffMinutes: flags.clearStaleSessionsMinutes,
+        activeSessionId: resolvedSessionId,
+      });
+      const skip = r.skippedActive.length > 0 ? ` (skipped active: ${r.skippedActive.length})` : '';
+      const errs = r.errors.length > 0 ? ` (errors: ${r.errors.length})` : '';
+      process.stderr.write(
+        `[hip] cleared ${r.cleared.length} stale session(s) (>${flags.clearStaleSessionsMinutes}min idle)${skip}${errs}\n`,
+      );
+    } catch (e) {
+      // Non-fatal: continue with hip's normal work even if admin endpoint
+      // is unreachable (older MTPLX, network glitch).
+      process.stderr.write(
+        `[hip] --clear-stale-sessions failed: ${(e as Error).message} (continuing)\n`,
+      );
+    }
+  }
 
   if (flags.print !== undefined) {
     // Headless: if no positional prompt was passed but stdin is piped,

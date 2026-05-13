@@ -75,4 +75,13 @@ describe('parseFlags', () => {
     expect(parseFlags([]).autoCompact).toBe(true);
     expect(parseFlags(['--no-auto-compact']).autoCompact).toBe(false);
   });
+
+  it('--clear-stale-sessions: bare = 30, explicit = number, absent = undefined', () => {
+    expect(parseFlags([]).clearStaleSessionsMinutes).toBeUndefined();
+    expect(parseFlags(['--clear-stale-sessions']).clearStaleSessionsMinutes).toBe(30);
+    expect(parseFlags(['--clear-stale-sessions', '60']).clearStaleSessionsMinutes).toBe(60);
+    expect(parseFlags(['--clear-stale-sessions=120']).clearStaleSessionsMinutes).toBe(120);
+    // Bare flag followed by another flag still resolves to default 30.
+    expect(parseFlags(['--clear-stale-sessions', '--quiet']).clearStaleSessionsMinutes).toBe(30);
+  });
 });
