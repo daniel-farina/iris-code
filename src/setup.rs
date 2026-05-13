@@ -151,16 +151,10 @@ pub fn mtplx_branch() -> String {
 /// open for users with env-var overrides). On non-TTY, returns the
 /// `default` source unchanged so CI / piped invocations stay deterministic.
 pub fn prompt_mtplx_source(default: MtplxSource) -> MtplxSource {
-    use std::io::IsTerminal;
+    use crate::picker::{select_one, Option_};
     let d = theme::dim();
     let a = theme::accent();
-    let g = theme::good();
     let r = RESET;
-
-    let default_char = match default.label {
-        "fork" => 'f',
-        _ => 'u',
-    };
 
     // Env-var override short-circuits the prompt entirely so power users
     // aren't pestered.
@@ -179,42 +173,38 @@ pub fn prompt_mtplx_source(default: MtplxSource) -> MtplxSource {
         };
     }
 
-    eprintln!();
-    eprintln!("  {a}?{r} pick MTPLX source:");
-    let mark_u = if default_char == 'u' {
-        format!("{g}*{r}")
-    } else {
-        " ".to_string()
+    let default_idx = match default.label {
+        "fork" => 1,
+        _ => 0,
     };
-    let mark_f = if default_char == 'f' {
-        format!("{g}*{r}")
-    } else {
-        " ".to_string()
-    };
-    eprintln!(
-        "     {mark_u} {a}u{r}  upstream {d}({} @ {}){r}  {g}recommended (stable){r}",
+    let upstream_sub = format!(
+        "{} @ {} -- recommended (stable)",
         MTPLX_UPSTREAM_REPO, MTPLX_UPSTREAM_BRANCH
     );
-    eprintln!(
-        "     {mark_f} {a}f{r}  daniel-farina fork {d}({} @ {}){r}  {d}experimentation{r}",
+    let fork_sub = format!(
+        "{} @ {} -- experimentation",
         MTPLX_FORK_REPO, MTPLX_FORK_BRANCH
     );
-    eprint!("  {a}>{r} [u/f, default {}] ", default_char);
-    let _ = std::io::stderr().flush();
+    let options = [
+        Option_ {
+            label: "upstream",
+            subtitle: Some(upstream_sub.as_str()),
+        },
+        Option_ {
+            label: "daniel-farina fork",
+            subtitle: Some(fork_sub.as_str()),
+        },
+    ];
 
-    if !std::io::stdin().is_terminal() {
-        eprintln!("{}", default_char);
-        return default;
-    }
-    let mut s = String::new();
-    if std::io::stdin().read_line(&mut s).is_err() {
-        return default;
-    }
-    let t = s.trim().to_ascii_lowercase();
-    let chosen = match t.chars().next().unwrap_or(default_char) {
-        'f' => MtplxSource::fork(),
-        'u' => MtplxSource::upstream(),
-        _ => default,
+    let idx = select_one(
+        "pick MTPLX source (↑/↓ to move, Enter to confirm, 1-2 to jump):",
+        &options,
+        default_idx,
+    );
+    let chosen = if idx == 1 {
+        MtplxSource::fork()
+    } else {
+        MtplxSource::upstream()
     };
     persist_source(&chosen);
     chosen

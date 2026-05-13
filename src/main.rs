@@ -9,6 +9,7 @@ mod client;
 mod dry_run_log;
 mod logo;
 mod mtplx_runner;
+mod picker;
 mod pretty;
 mod prune;
 mod read_cache;
