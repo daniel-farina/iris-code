@@ -83,6 +83,260 @@ fn expand(s: &str) -> PathBuf {
     PathBuf::from(shellexpand::tilde(s).into_owned())
 }
 
+// ---------- Unified install state ----------
+
+/// How MTPLX got onto this machine. Each variant carries the info needed
+/// to (a) print a sensible status banner and (b) drive the right upgrade
+/// path (`brew upgrade` vs `git pull`).
+#[derive(Debug, Clone)]
+pub enum InstallKind {
+    Brew {
+        formula: String,
+        installed_version: String,
+    },
+    Git {
+        repo_root: PathBuf,
+        remote: String,
+        branch: String,
+        head_sha: String,
+        head_date: String,
+    },
+}
+
+/// Everything `hip --update` needs to know about the local MTPLX install
+/// in one place. Built once at the top of the check; passed through the
+/// render/upgrade/restart pipeline so each step doesn't re-probe state.
+#[derive(Debug, Clone)]
+pub struct MtplxState {
+    pub kind: InstallKind,
+    /// The Python interpreter we'd respawn the server with. For brew this
+    /// is the latest venv-*/bin/python (which changes after `brew upgrade`).
+    /// For git checkouts it's `<repo_root>/.venv/bin/python`.
+    pub python_path: PathBuf,
+    pub server_pid: Option<u32>,
+    pub running_command: Option<String>,
+    /// For brew: the venv version the running process's open files point
+    /// at -- used to detect "you upgraded brew but never restarted."
+    pub running_venv_version: Option<String>,
+}
+
+impl MtplxState {
+    pub fn is_running(&self) -> bool {
+        self.server_pid.is_some()
+    }
+    /// Compare running flags against canonical. Returns None when the
+    /// server isn't running (no command line to compare).
+    pub fn config_status(&self) -> Option<ConfigDelta> {
+        self.running_command.as_deref().map(config_deltas)
+    }
+}
+
+/// Detect the local MTPLX install (brew or git checkout) plus everything
+/// about the running server, if any. Returns None when no install can be
+/// located and nothing is listening on :8088 -- the caller should suggest
+/// `hip --setup` or `brew install youssofal/mtplx/mtplx`.
+pub fn detect_state() -> Option<MtplxState> {
+    use std::process::Command;
+
+    let pid = running_pid();
+    let cmd = running_command_line();
+    let running_venv = running_venv_version();
+
+    // 1. Explicit env override pointing at a git checkout.
+    if let Ok(v) = std::env::var("HIP_MTPLX_INSTALL_DIR") {
+        let p = PathBuf::from(&v);
+        if p.join(".git").exists() {
+            if let Some(git_kind) = build_git_kind(&p) {
+                return Some(MtplxState {
+                    kind: git_kind,
+                    python_path: p.join(".venv").join("bin").join("python"),
+                    server_pid: pid,
+                    running_command: cmd,
+                    running_venv_version: running_venv,
+                });
+            }
+        }
+    }
+
+    // 2. Wizard default git checkout.
+    let default_checkout = PathBuf::from(shellexpand::tilde("~/code/MTPLX").into_owned());
+    if default_checkout.join(".git").exists() {
+        if let Some(git_kind) = build_git_kind(&default_checkout) {
+            return Some(MtplxState {
+                kind: git_kind,
+                python_path: default_checkout.join(".venv").join("bin").join("python"),
+                server_pid: pid,
+                running_command: cmd,
+                running_venv_version: running_venv,
+            });
+        }
+    }
+
+    // 3. Brew install (passive check via `brew list`).
+    let brew_installed = Command::new("brew")
+        .args(["list", "--formula", "mtplx"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if brew_installed {
+        let (formula, installed_version) = detect_brew_mtplx_version();
+        if let Some(python_path) = find_brew_python() {
+            return Some(MtplxState {
+                kind: InstallKind::Brew {
+                    formula,
+                    installed_version,
+                },
+                python_path,
+                server_pid: pid,
+                running_command: cmd,
+                running_venv_version: running_venv,
+            });
+        }
+    }
+
+    // 4. Last-ditch: probe the running server's cwd for an ancestor with
+    //    .git + setup.py/pyproject. Same heuristic we used before.
+    if let Some(probe_pid) = pid {
+        if let Some(cwd) = process_cwd(probe_pid) {
+            let mut cur = cwd.as_path();
+            loop {
+                if (cur.join(".git").exists() && cur.join("setup.py").exists())
+                    || (cur.join(".git").exists() && cur.join("pyproject.toml").exists())
+                {
+                    if let Some(git_kind) = build_git_kind(cur) {
+                        return Some(MtplxState {
+                            kind: git_kind,
+                            python_path: cur.join(".venv").join("bin").join("python"),
+                            server_pid: pid,
+                            running_command: cmd,
+                            running_venv_version: running_venv,
+                        });
+                    }
+                    break;
+                }
+                match cur.parent() {
+                    Some(p) => cur = p,
+                    None => break,
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn build_git_kind(repo_root: &std::path::Path) -> Option<InstallKind> {
+    use std::process::Command;
+    let dir_str = repo_root.to_string_lossy().to_string();
+    let remote = Command::new("git")
+        .args(["-C", &dir_str, "remote", "get-url", "origin"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let branch = Command::new("git")
+        .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let head_sha = Command::new("git")
+        .args(["-C", &dir_str, "rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let head_date = Command::new("git")
+        .args(["-C", &dir_str, "log", "-1", "--format=%cs", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if branch.is_empty() {
+        return None;
+    }
+    Some(InstallKind::Git {
+        repo_root: repo_root.to_path_buf(),
+        remote,
+        branch,
+        head_sha,
+        head_date,
+    })
+}
+
+fn process_cwd(pid: u32) -> Option<PathBuf> {
+    use std::process::Command;
+    Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-a", "-d", "cwd", "-Fn"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .find(|l| l.starts_with('n'))
+                .map(|l| PathBuf::from(&l[1..]))
+        })
+}
+
+/// (formula-with-tap, installed-version) for the brew-installed MTPLX,
+/// or sensible defaults if brew info can't be parsed.
+pub fn detect_brew_mtplx_version() -> (String, String) {
+    use std::process::Command;
+    let info = Command::new("brew")
+        .args(["info", "--json=v2", "mtplx"])
+        .output()
+        .ok();
+    let mut version = "unknown".to_string();
+    let mut formula = "youssofal/mtplx/mtplx".to_string();
+    if let Some(out) = info {
+        if let Ok(body) = String::from_utf8(out.stdout) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
+                if let Some(formulae) = v.get("formulae").and_then(|x| x.as_array()) {
+                    if let Some(f) = formulae.first() {
+                        if let Some(t) = f.get("tap").and_then(|x| x.as_str()) {
+                            if let Some(n) = f.get("name").and_then(|x| x.as_str()) {
+                                formula = format!("{}/{}", t, n);
+                            }
+                        }
+                        if let Some(installed) = f
+                            .get("installed")
+                            .and_then(|x| x.as_array())
+                            .and_then(|a| a.first())
+                        {
+                            if let Some(vstr) = installed.get("version").and_then(|x| x.as_str()) {
+                                version = vstr.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (formula, version)
+}
+
+/// Latest brew version available for upgrade, or None if up to date /
+/// brew unavailable.
+pub fn brew_mtplx_latest_available() -> Option<String> {
+    use std::process::Command;
+    let out = Command::new("brew")
+        .args(["outdated", "--json=v2", "mtplx"])
+        .output()
+        .ok()?;
+    let body = String::from_utf8(out.stdout).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let formulae = v.get("formulae")?.as_array()?;
+    let first = formulae.first()?;
+    first
+        .get("current_version")
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string())
+}
+
 /// Find the brew-installed MTPLX venv Python. Globs
 /// `/opt/homebrew/var/mtplx/venv-*/bin/python` (Apple Silicon) and
 /// `/usr/local/var/mtplx/venv-*/bin/python` (Intel) and returns the
@@ -312,16 +566,15 @@ pub fn config_deltas(running_cmd: &str) -> ConfigDelta {
     }
 }
 
-/// Spawn MTPLX detached with the canonical optimal config. Writes the PID
-/// to ~/.mlx-code/mtplx.pid and logs to ~/.mlx-code/mtplx.log. Returns the
+/// Spawn MTPLX detached with the canonical optimal config, using the
+/// caller-supplied Python interpreter. Writes the PID to
+/// ~/.mlx-code/mtplx.pid and logs to ~/.mlx-code/mtplx.log. Returns the
 /// child PID once spawned. Does NOT wait for the server to bind -- that's
 /// caller's job (see `wait_until_listening`).
-pub fn start_mtplx_optimal_background() -> Result<u32> {
+pub fn start_mtplx_optimal_background_with(python: &std::path::Path) -> Result<u32> {
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
-    let python = find_brew_python()
-        .ok_or_else(|| anyhow!("could not find brew MTPLX venv python under /opt/homebrew/var/mtplx/ or /usr/local/var/mtplx/"))?;
     let model_dir = find_optimal_model_dir().ok_or_else(|| {
         anyhow!(
             "optimal model not found at ~/.mtplx/models/{}",
@@ -343,7 +596,7 @@ pub fn start_mtplx_optimal_background() -> Result<u32> {
     let port_str = OPTIMAL_PORT.to_string();
     let model_str = model_dir.to_string_lossy().to_string();
 
-    let mut cmd = Command::new(&python);
+    let mut cmd = Command::new(python);
     cmd.args([
         "-m",
         "mtplx.server.openai",
@@ -431,6 +684,223 @@ pub fn stop_running_mtplx(timeout: Duration) {
 pub fn log_file() -> PathBuf {
     expand(LOG_FILE)
 }
+
+/// Backwards-compat wrapper: spawn using the brew Python (auto-detected).
+/// Returns Err when no brew install can be found.
+pub fn start_mtplx_optimal_background() -> Result<u32> {
+    let python = find_brew_python().ok_or_else(|| {
+        anyhow!(
+            "could not find brew MTPLX venv python under /opt/homebrew/var/mtplx/ \
+             or /usr/local/var/mtplx/"
+        )
+    })?;
+    start_mtplx_optimal_background_with(&python)
+}
+
+// ---------- High-level orchestration ----------
+
+/// Print a uniform install/version/config/details banner for the given
+/// state. Same shape for brew and git so users see a consistent picture.
+pub fn render_status(state: &MtplxState) {
+    use crate::theme::{accent, dim, good, warn, RESET};
+    let d = dim();
+    let a = accent();
+    let g = good();
+    let w = warn();
+    let r = RESET;
+
+    match &state.kind {
+        InstallKind::Brew {
+            formula,
+            installed_version,
+        } => {
+            eprintln!("  {d}install{r}:  {a}{}{r} {d}(Homebrew){r}", formula);
+            eprintln!("  {d}brew ver{r}: {a}{}{r}", installed_version);
+        }
+        InstallKind::Git {
+            repo_root,
+            remote,
+            branch,
+            head_sha,
+            head_date,
+        } => {
+            eprintln!(
+                "  {d}install{r}:  {a}{}{r} {d}(git checkout){r}",
+                repo_root.display()
+            );
+            let label = MtplxSource::classify(remote, branch);
+            eprintln!(
+                "  {d}current{r}:  {a}{}{r} @ {a}{}{r}  {d}[{}]{r}",
+                if remote.is_empty() {
+                    "<no-remote>"
+                } else {
+                    remote.as_str()
+                },
+                branch,
+                label,
+            );
+            if !head_sha.is_empty() {
+                eprintln!(
+                    "  {d}version{r}:  {a}{}{r}{}",
+                    head_sha,
+                    if head_date.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {d}({}){r}", head_date)
+                    }
+                );
+            }
+        }
+    }
+
+    // Config status (only meaningful when the server is running).
+    if let Some(delta) = state.config_status() {
+        if delta.is_optimal() {
+            eprintln!("  {d}config{r}:   {g}optimal{r} {d}(all canonical flags match){r}");
+        } else {
+            eprintln!(
+                "  {d}config{r}:   {w}suboptimal{r} {d}({} delta(s)){r}",
+                delta.missing_or_wrong.len()
+            );
+            for missing in &delta.missing_or_wrong {
+                eprintln!("    {w}-{r} missing/wrong: {a}{}{r}", missing);
+            }
+        }
+        if let Some(cmd) = &state.running_command {
+            let details = summarize_running_config(cmd);
+            eprintln!("  {d}details{r}:");
+            for (label, value) in &details {
+                eprintln!("    {d}{:<11}{r} {a}{}{r}", label, value);
+            }
+        }
+    } else if state.is_running() {
+        eprintln!("  {d}config{r}:   {w}(running but no command line readable){r}");
+    } else {
+        eprintln!("  {d}config{r}:   {w}not running{r}");
+    }
+}
+
+/// Probe for an upstream update appropriate to the install kind. Returns
+/// Some(label) describing the available newer version when one exists.
+pub async fn check_upstream(state: &MtplxState) -> Option<String> {
+    match &state.kind {
+        InstallKind::Brew { .. } => brew_mtplx_latest_available(),
+        InstallKind::Git {
+            repo_root, branch, ..
+        } => {
+            use std::process::Command;
+            let dir = repo_root.to_string_lossy().to_string();
+            let ok = Command::new("git")
+                .args(["-C", &dir, "fetch", "origin", "--quiet"])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !ok {
+                return None;
+            }
+            let behind = Command::new("git")
+                .args([
+                    "-C",
+                    &dir,
+                    "rev-list",
+                    "--count",
+                    &format!("HEAD..origin/{}", branch),
+                ])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| s.trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            if behind > 0 {
+                Some(format!("{} commit(s) behind origin/{}", behind, branch))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Apply the upgrade matching the install kind. Returns true on success.
+/// Stdout/stderr stream through to the user so they can watch the upgrade.
+pub async fn apply_upgrade(state: &MtplxState) -> bool {
+    use std::process::Command;
+    match &state.kind {
+        InstallKind::Brew { .. } => Command::new("brew")
+            .args(["upgrade", "mtplx"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        InstallKind::Git {
+            repo_root, branch, ..
+        } => {
+            let dir = repo_root.to_string_lossy().to_string();
+            Command::new("git")
+                .args(["-C", &dir, "pull", "--ff-only", "origin", branch])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+    }
+}
+
+/// Whether the running server has code that's out of sync with what's on
+/// disk. For brew: running_venv_version != installed_version. For git:
+/// caller must pass `just_pulled` because we can't read the running
+/// process's commit SHA from outside.
+pub fn is_running_stale(state: &MtplxState, just_pulled: bool) -> bool {
+    if !state.is_running() {
+        return false;
+    }
+    match &state.kind {
+        InstallKind::Brew {
+            installed_version, ..
+        } => state
+            .running_venv_version
+            .as_deref()
+            .map(|v| v != installed_version.as_str())
+            .unwrap_or(false),
+        InstallKind::Git { .. } => just_pulled,
+    }
+}
+
+/// Stop the running server (if any) and respawn it with the optimal
+/// config using state.python_path. Waits up to 5 min for the new server
+/// to bind. Reports progress to stderr at every step.
+pub async fn restart_with_optimal_config(state: &MtplxState) {
+    use crate::theme::{accent, dim, good, warn, RESET};
+    let d = dim();
+    let a = accent();
+    let g = good();
+    let w = warn();
+    let r = RESET;
+
+    eprintln!();
+    eprintln!("  {d}restarting MTPLX with optimal config to pick up the new code...{r}");
+    stop_running_mtplx(Duration::from_secs(15));
+    match start_mtplx_optimal_background_with(&state.python_path) {
+        Ok(pid) => {
+            eprintln!(
+                "  {g}✓{r} new MTPLX spawned (pid {a}{}{r}), waiting for model load...",
+                pid
+            );
+            let up = wait_until_listening(Duration::from_secs(300)).await;
+            if up {
+                eprintln!("  {g}✓{r} MTPLX is listening on :{}", OPTIMAL_PORT);
+            } else {
+                eprintln!(
+                    "  {w}!{r} MTPLX didn't bind within 5 min; tail {a}{}{r} for diagnostics",
+                    log_file().display()
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
+        }
+    }
+}
+
+// Re-export MtplxSource so render_status can classify a git remote.
+use crate::setup::MtplxSource;
 
 #[cfg(test)]
 mod tests {

@@ -745,7 +745,7 @@ dependencies = [
 
 [[package]]
 name = "mlx-code"
-version = "0.3.36"
+version = "0.3.37"
 dependencies = [
  "anyhow",
  "bytes",

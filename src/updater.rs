@@ -240,209 +240,31 @@ pub async fn do_update() -> Result<()> {
     Ok(())
 }
 
-/// After hip update completes (or hip is already current), check the
-/// local MTPLX checkout for upstream commits and offer to pull. Silent
-/// no-op when MTPLX isn't installed or the checkout isn't a git repo,
-/// so it can't make `hip --update` worse than it was.
+/// Unified MTPLX status + update + restart driver. Detects install kind
+/// (brew or git checkout), prints a consistent banner, handles source
+/// switching for git installs, runs `brew upgrade mtplx` or `git pull`
+/// as appropriate, and respawns the server with the optimal config if
+/// new code landed and the server is still on stale bytes.
 async fn check_mtplx_updates() {
-    use crate::setup::{prompt_mtplx_source, MtplxSource};
+    use crate::mtplx_runner::{
+        apply_upgrade, check_upstream, detect_state, is_running_stale, render_status,
+        restart_with_optimal_config, InstallKind,
+    };
+    use crate::setup::{persist_source, prompt_mtplx_source, MtplxSource};
     use crate::theme::{accent, dim, good, warn, RESET};
     use std::process::Command;
-
     let d = dim();
     let a = accent();
     let g = good();
     let w = warn();
     let r = RESET;
 
-    // Detect how MTPLX was installed (git checkout, Homebrew formula, or
-    // something we can't recognize). The update path differs for each:
-    // git uses fetch+pull, brew uses `brew upgrade`, unknown gets a hint.
-    let install = resolve_mtplx_install();
-
     eprintln!();
     eprintln!("{d}─ checking MTPLX ─{r}");
 
-    let install_dir = match install {
-        MtplxInstall::Git(p) => {
-            eprintln!(
-                "  {d}install{r}: {a}{}{r} {d}(git checkout){r}",
-                p.display()
-            );
-            p
-        }
-        MtplxInstall::Brew { formula, version } => {
-            eprintln!("  {d}install{r}:  {a}{}{r} {d}(Homebrew){r}", formula);
-            eprintln!("  {d}brew ver{r}: {a}{}{r}", version);
-
-            // Compare the running command line against our canonical
-            // optimal config and surface any deltas. Done BEFORE the
-            // upgrade check so the user sees config status even when
-            // they're already up to date.
-            let server_running = crate::mtplx_runner::running_pid().is_some();
-            let mut needs_restart_for_stale_code = false;
-            if server_running {
-                let cmd = crate::mtplx_runner::running_command_line().unwrap_or_default();
-                let delta = crate::mtplx_runner::config_deltas(&cmd);
-                if delta.is_optimal() {
-                    eprintln!("  {d}config{r}:   {g}optimal{r} {d}(all canonical flags match){r}");
-                } else {
-                    eprintln!(
-                        "  {d}config{r}:   {w}suboptimal{r} {d}({} delta(s)){r}",
-                        delta.missing_or_wrong.len()
-                    );
-                    for missing in &delta.missing_or_wrong {
-                        eprintln!("    {w}-{r} missing/wrong: {a}{}{r}", missing);
-                    }
-                }
-
-                // Detail rows: at-a-glance view of the running server's
-                // key flag values so users can verify what's loaded
-                // without ps-ing the process themselves.
-                let details = crate::mtplx_runner::summarize_running_config(&cmd);
-                eprintln!("  {d}details{r}:");
-                for (label, value) in &details {
-                    eprintln!("    {d}{:<11}{r} {a}{}{r}", label, value);
-                }
-
-                // The running process pins its venv files by inode even
-                // after `brew upgrade` replaces the dir on disk. Detect
-                // when the running code came from a venv version that
-                // differs from the currently-installed brew version --
-                // that's the "you upgraded brew but didn't restart the
-                // server" state, and is exactly when a restart picks up
-                // the new code.
-                if let Some(running_ver) = crate::mtplx_runner::running_venv_version() {
-                    if running_ver != version {
-                        eprintln!(
-                            "  {w}!{r} running server is still on stale {a}{}{r} code; brew is at {a}{}{r}",
-                            running_ver, version
-                        );
-                        needs_restart_for_stale_code = true;
-                    }
-                }
-
-                if !delta.is_optimal() && !needs_restart_for_stale_code {
-                    eprintln!(
-                        "  {d}fix{r}:      run {a}hip --restart-mtplx{r} to relaunch with optimal config"
-                    );
-                }
-            } else {
-                eprintln!("  {d}config{r}:   {w}not running{r}");
-                eprintln!(
-                    "  {d}fix{r}:      run {a}hip --start-mtplx{r} to launch with optimal config"
-                );
-            }
-
-            // Stale-code path: the running server outlasted a brew
-            // upgrade. User invoked `hip --update`, so go ahead and
-            // restart with optimal config to land them on the new code.
-            if needs_restart_for_stale_code {
-                eprintln!();
-                eprintln!(
-                    "  {d}restarting MTPLX with optimal config to pick up the new code...{r}"
-                );
-                crate::mtplx_runner::stop_running_mtplx(std::time::Duration::from_secs(15));
-                match crate::mtplx_runner::start_mtplx_optimal_background() {
-                    Ok(pid) => {
-                        eprintln!(
-                            "  {g}✓{r} new MTPLX spawned (pid {a}{}{r}), waiting for model load...",
-                            pid
-                        );
-                        let up = crate::mtplx_runner::wait_until_listening(
-                            std::time::Duration::from_secs(300),
-                        )
-                        .await;
-                        if up {
-                            eprintln!(
-                                "  {g}✓{r} MTPLX is listening on :{}",
-                                crate::mtplx_runner::OPTIMAL_PORT
-                            );
-                        } else {
-                            eprintln!(
-                                "  {w}!{r} MTPLX didn't bind within 5 min; tail {a}{}{r} for diagnostics",
-                                crate::mtplx_runner::log_file().display()
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
-                    }
-                }
-                return;
-            }
-
-            match brew_mtplx_latest_available() {
-                Some(latest) => {
-                    eprintln!("  {w}!{r} a newer MTPLX is available: {a}{}{r}", latest);
-                    eprintln!("  {d}running `brew upgrade mtplx`...{r}");
-                    let status = std::process::Command::new("brew")
-                        .args(["upgrade", "mtplx"])
-                        .status();
-                    if matches!(status, Ok(s) if s.success()) {
-                        eprintln!("{g}✓{r} MTPLX upgraded via Homebrew");
-
-                        // brew upgrade replaced the venv on disk but the
-                        // running process still has the old code mapped.
-                        // Stop it and respawn with optimal config so the
-                        // user lands on the new binaries immediately.
-                        if server_running {
-                            eprintln!(
-                                "  {d}stopping old MTPLX server (pid {}) and starting new one with optimal config...{r}",
-                                crate::mtplx_runner::running_pid().unwrap_or(0)
-                            );
-                            crate::mtplx_runner::stop_running_mtplx(
-                                std::time::Duration::from_secs(15),
-                            );
-                            match crate::mtplx_runner::start_mtplx_optimal_background() {
-                                Ok(pid) => {
-                                    eprintln!(
-                                        "  {g}✓{r} new MTPLX spawned (pid {a}{}{r}), waiting for model load...",
-                                        pid
-                                    );
-                                    let up = crate::mtplx_runner::wait_until_listening(
-                                        std::time::Duration::from_secs(300),
-                                    )
-                                    .await;
-                                    if up {
-                                        eprintln!(
-                                            "  {g}✓{r} MTPLX is listening on :{}",
-                                            crate::mtplx_runner::OPTIMAL_PORT
-                                        );
-                                    } else {
-                                        eprintln!(
-                                            "  {w}!{r} MTPLX didn't bind within 5 min; tail {a}{}{r} for diagnostics",
-                                            crate::mtplx_runner::log_file().display()
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
-                                }
-                            }
-                        } else {
-                            flag_running_server();
-                        }
-                    } else {
-                        eprintln!(
-                            "  {w}!{r} `brew upgrade mtplx` failed; run it manually to diagnose."
-                        );
-                    }
-                }
-                None => {
-                    eprintln!("  {g}✓{r} MTPLX is up to date");
-                }
-            }
-            return;
-        }
-        MtplxInstall::Unknown => {
-            eprintln!("  {w}!{r} MTPLX server is running but we can't tell how it was installed.");
-            eprintln!(
-                "    {d}set {a}HIP_MTPLX_INSTALL_DIR{d} to your checkout, or update it manually.{r}"
-            );
-            return;
-        }
-        MtplxInstall::None => {
+    let mut state = match detect_state() {
+        Some(s) => s,
+        None => {
             eprintln!(
                 "  {w}!{r} could not locate MTPLX. Install via {a}brew install youssofal/mtplx/mtplx{r}"
             );
@@ -451,447 +273,128 @@ async fn check_mtplx_updates() {
         }
     };
 
-    let dir_str = install_dir.to_string_lossy().to_string();
+    render_status(&state);
 
-    // Detect current remote + branch + local HEAD so we can show them
-    // exactly what version they have and default the picker to "keep
-    // current source".
-    let current_remote = Command::new("git")
-        .args(["-C", &dir_str, "remote", "get-url", "origin"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-    let current_branch = Command::new("git")
-        .args(["-C", &dir_str, "rev-parse", "--abbrev-ref", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-    let head_short = Command::new("git")
-        .args(["-C", &dir_str, "rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-    let head_date = Command::new("git")
-        .args(["-C", &dir_str, "log", "-1", "--format=%cs", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    // For git installs only: offer the source picker. This lets the user
+    // flip between upstream and the daniel-farina fork via the arrow-key
+    // selector. Brew installs don't have an equivalent (the formula
+    // points at one source by definition).
+    let mut just_switched = false;
+    if let InstallKind::Git {
+        repo_root,
+        remote,
+        branch,
+        ..
+    } = state.kind.clone()
+    {
+        if branch.is_empty() || branch == "HEAD" {
+            eprintln!("  {w}!{r} MTPLX checkout has no branch (detached HEAD); leaving it alone.");
+            return;
+        }
+        let default_src = match MtplxSource::classify(&remote, &branch) {
+            "fork" => MtplxSource::fork(),
+            _ => MtplxSource::upstream(),
+        };
+        let chosen = prompt_mtplx_source(default_src);
+        persist_source(&chosen);
 
-    // Print the version banner BEFORE any branching / prompts so the
-    // user always sees what they currently have, even if the rest of
-    // the function bails out for some reason.
-    let label_hint = MtplxSource::classify(&current_remote, &current_branch);
-    eprintln!(
-        "  {d}current{r}: {a}{}{r} @ {a}{}{r}  {d}[{}]{r}",
-        if current_remote.is_empty() {
-            "<no-remote>"
-        } else {
-            current_remote.as_str()
-        },
-        if current_branch.is_empty() {
-            "<unknown>"
-        } else {
-            current_branch.as_str()
-        },
-        label_hint
-    );
-    if !head_short.is_empty() {
-        eprintln!(
-            "  {d}version{r}: {a}{}{r}{}",
-            head_short,
-            if head_date.is_empty() {
-                String::new()
+        // If the picked source differs from current, switch remotes +
+        // branches. This is the only path in `hip --update` that mutates
+        // user-visible state without a separate "going to do X" line --
+        // we explicitly call out the clobber before it happens.
+        let current_norm = remote.trim_end_matches('/').trim_end_matches(".git");
+        let chosen_norm = chosen.repo.trim_end_matches('/').trim_end_matches(".git");
+        if current_norm != chosen_norm || branch != chosen.branch {
+            let dir = repo_root.to_string_lossy().to_string();
+            let dirty = Command::new("git")
+                .args(["-C", &dir, "status", "--porcelain"])
+                .output()
+                .map(|o| !o.stdout.is_empty())
+                .unwrap_or(false);
+            if dirty {
+                eprintln!(
+                    "  {w}!{r} MTPLX checkout has uncommitted changes; refusing to switch source."
+                );
+                eprintln!(
+                    "  {d}commit or stash inside {} and re-run `hip --update` to switch.{r}",
+                    repo_root.display()
+                );
+                return;
+            }
+            eprintln!();
+            eprintln!(
+                "  {d}switching MTPLX source to {a}{}{d} @ {a}{}{d}...{r}",
+                chosen.repo, chosen.branch
+            );
+            let ok = Command::new("git")
+                .args(["-C", &dir, "remote", "set-url", "origin", &chosen.repo])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+                && Command::new("git")
+                    .args(["-C", &dir, "fetch", "origin", "--quiet"])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+                && Command::new("git")
+                    .args([
+                        "-C",
+                        &dir,
+                        "checkout",
+                        "-B",
+                        &chosen.branch,
+                        &format!("origin/{}", chosen.branch),
+                    ])
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+            if !ok {
+                eprintln!(
+                    "  {w}!{r} source switch failed; resolve manually in {}",
+                    repo_root.display()
+                );
+                return;
+            }
+            eprintln!("  {g}✓{r} switched to {} @ {}", chosen.repo, chosen.branch);
+            just_switched = true;
+            // Re-detect state so subsequent steps see the new branch/SHA.
+            if let Some(s) = detect_state() {
+                state = s;
+            }
+        }
+    }
+
+    // Check for upstream updates appropriate to the install kind.
+    let mut just_upgraded = just_switched;
+    match check_upstream(&state).await {
+        Some(label) => {
+            eprintln!("  {w}!{r} update available: {a}{}{r}", label);
+            eprintln!("  {d}applying upgrade...{r}");
+            if apply_upgrade(&state).await {
+                eprintln!("  {g}✓{r} upgrade applied");
+                just_upgraded = true;
+                if let Some(s) = detect_state() {
+                    state = s;
+                }
             } else {
-                format!(" {d}({}){r}", head_date)
-            }
-        );
-    }
-
-    if current_branch.is_empty() || current_branch == "HEAD" {
-        eprintln!("  {w}!{r} MTPLX checkout has no branch (detached HEAD); leaving it alone.");
-        return;
-    }
-
-    // Default the picker to whatever the checkout is on (so "just hit
-    // enter" keeps it on the same source). Falls back to upstream when
-    // the current remote doesn't match either well-known source.
-    let default_src = match MtplxSource::classify(&current_remote, &current_branch) {
-        "fork" => MtplxSource::fork(),
-        "upstream" => MtplxSource::upstream(),
-        _ => MtplxSource::upstream(),
-    };
-    let chosen = prompt_mtplx_source(default_src);
-
-    // If the picked source differs from what the checkout points at, we
-    // need to switch remotes + branches before fetching. This is the
-    // "overwrite current MTPLX with the latest from upstream / fork" path.
-    let current_norm = current_remote
-        .trim_end_matches('/')
-        .trim_end_matches(".git");
-    let chosen_norm = chosen.repo.trim_end_matches('/').trim_end_matches(".git");
-    let switching = current_norm != chosen_norm || current_branch != chosen.branch;
-
-    if switching {
-        // Refuse to clobber uncommitted work — the user can clean up and
-        // re-run.
-        let dirty = Command::new("git")
-            .args(["-C", &dir_str, "status", "--porcelain"])
-            .output()
-            .map(|o| !o.stdout.is_empty())
-            .unwrap_or(false);
-        if dirty {
-            eprintln!("{w}!{r} MTPLX checkout has uncommitted changes; refusing to switch source.");
-            eprintln!(
-                "  {d}commit or stash inside {} and re-run `hip --update` to switch.{r}",
-                install_dir.display()
-            );
-            return;
-        }
-
-        eprintln!();
-        eprintln!(
-            "{w}!{r} switching MTPLX source: {a}{}{r} @ {a}{}{r}",
-            chosen.repo, chosen.branch
-        );
-        eprintln!(
-            "  {d}this will run `git remote set-url`, fetch, and reset the working tree \
-             to the chosen source's HEAD.{r}"
-        );
-        eprint!("  {d}proceed? [Y/n] {r}");
-        let _ = std::io::Write::flush(&mut std::io::stderr());
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() {
-            return;
-        }
-        let answer = input.trim().to_lowercase();
-        if !answer.is_empty() && !answer.starts_with('y') {
-            eprintln!("{d}skipped{r}");
-            return;
-        }
-
-        // Rewrite origin -> chosen.repo so subsequent fetches go to the
-        // new source.
-        let set_url = Command::new("git")
-            .args(["-C", &dir_str, "remote", "set-url", "origin", &chosen.repo])
-            .status();
-        if !matches!(set_url, Ok(s) if s.success()) {
-            eprintln!("{w}!{r} `git remote set-url` failed; aborting source switch");
-            return;
-        }
-
-        let fetch = Command::new("git")
-            .args(["-C", &dir_str, "fetch", "origin", "--quiet"])
-            .status();
-        if !matches!(fetch, Ok(s) if s.success()) {
-            eprintln!("{w}!{r} could not fetch from {}", chosen.repo);
-            return;
-        }
-
-        // Force the local branch to the chosen source's HEAD. Two repos
-        // may not share history, so a normal merge would fail -- we
-        // commit to overwrite the working tree (the dirty-check above
-        // guards against losing user work).
-        let checkout = Command::new("git")
-            .args([
-                "-C",
-                &dir_str,
-                "checkout",
-                "-B",
-                &chosen.branch,
-                &format!("origin/{}", chosen.branch),
-            ])
-            .status();
-        if !matches!(checkout, Ok(s) if s.success()) {
-            eprintln!(
-                "{w}!{r} could not check out {} from {}",
-                chosen.branch, chosen.repo
-            );
-            return;
-        }
-        eprintln!(
-            "{g}✓{r} switched MTPLX to {} @ {}",
-            chosen.repo, chosen.branch
-        );
-        flag_running_server();
-        return;
-    }
-
-    // Same source as before: just fetch + offer a fast-forward pull.
-    let fetch = Command::new("git")
-        .args(["-C", &dir_str, "fetch", "origin", "--quiet"])
-        .status();
-    if !matches!(fetch, Ok(s) if s.success()) {
-        eprintln!("{w}!{r} could not fetch MTPLX updates");
-        return;
-    }
-
-    let behind_out = Command::new("git")
-        .args([
-            "-C",
-            &dir_str,
-            "rev-list",
-            "--count",
-            &format!("HEAD..origin/{}", chosen.branch),
-        ])
-        .output();
-    let behind: u32 = match behind_out {
-        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0),
-        _ => return,
-    };
-
-    if behind == 0 {
-        eprintln!("{g}✓{r} MTPLX is up to date ({})", chosen.branch);
-        return;
-    }
-
-    // Preview what would land so the user can decide.
-    if let Ok(o) = Command::new("git")
-        .args([
-            "-C",
-            &dir_str,
-            "log",
-            "--oneline",
-            "-5",
-            &format!("HEAD..origin/{}", chosen.branch),
-        ])
-        .output()
-    {
-        eprintln!(
-            "{d}MTPLX is {a}{}{d} commit(s) behind {a}origin/{}{r}",
-            behind, chosen.branch
-        );
-        for line in String::from_utf8_lossy(&o.stdout).lines() {
-            eprintln!("  {a}{}{r}", line);
-        }
-    }
-
-    eprintln!(
-        "{d}running `git pull --ff-only origin {}`...{r}",
-        chosen.branch
-    );
-    let pull = Command::new("git")
-        .args([
-            "-C",
-            &dir_str,
-            "pull",
-            "--ff-only",
-            "origin",
-            &chosen.branch,
-        ])
-        .status();
-    if !matches!(pull, Ok(s) if s.success()) {
-        eprintln!(
-            "{w}!{r} MTPLX pull failed; resolve manually in {}",
-            install_dir.display()
-        );
-        return;
-    }
-    eprintln!("{g}✓{r} MTPLX updated to latest origin/{}", chosen.branch);
-    flag_running_server();
-}
-
-/// If the MTPLX server is listening on :8088, tell the user it still has
-/// the old code mapped and needs a restart to pick up the new files.
-/// How MTPLX got onto this machine. Determines what the "update" path
-/// looks like: git pull vs `brew upgrade mtplx` vs "we have no idea."
-pub enum MtplxInstall {
-    /// Source checkout with a `.git` directory. Update via fetch+pull.
-    Git(PathBuf),
-    /// Installed via Homebrew (`youssofal/mtplx/mtplx` formula or a
-    /// custom tap). Update via `brew upgrade`. String is the formula
-    /// name including the tap prefix when known, e.g.
-    /// "youssofal/mtplx/mtplx".
-    Brew { formula: String, version: String },
-    /// Server is reachable but we couldn't figure out how it was
-    /// installed (custom Python env, container, etc.). Best we can do
-    /// is tell the user.
-    Unknown,
-    /// No MTPLX detected anywhere.
-    None,
-}
-
-/// Locate MTPLX. Order:
-///   1. $HIP_MTPLX_INSTALL_DIR override (must point at a git checkout).
-///   2. Wizard default ~/code/MTPLX if it's a git checkout.
-///   3. Probe the running server on :8088 for open-file paths -- if any
-///      lead back to a Homebrew Cellar / venv, we know it's brew.
-///   4. Probe the running server's cwd, walk up for a `.git` ancestor.
-///   5. `brew list --formula mtplx` as a final passive check.
-fn resolve_mtplx_install() -> MtplxInstall {
-    use std::process::Command;
-
-    // 1. Explicit env override always wins, but only if it points at a
-    //    git checkout (the only thing we can fetch+pull from).
-    if let Ok(v) = std::env::var("HIP_MTPLX_INSTALL_DIR") {
-        let p = PathBuf::from(v);
-        if p.join(".git").exists() {
-            return MtplxInstall::Git(p);
-        }
-    }
-
-    // 2. Wizard default.
-    let default = PathBuf::from(shellexpand::tilde("~/code/MTPLX").into_owned());
-    if default.join(".git").exists() {
-        return MtplxInstall::Git(default);
-    }
-
-    // 3 + 4. Probe the running server on :8088.
-    let pid_out = Command::new("lsof")
-        .args(["-nP", "-iTCP:8088", "-sTCP:LISTEN", "-t"])
-        .output()
-        .ok();
-    let pid_str = pid_out
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .next()
-                .map(|s| s.trim().to_string())
-        })
-        .unwrap_or_default();
-
-    if !pid_str.is_empty() {
-        // Look at all open files for telltale brew-tap paths first.
-        // Homebrew installs MTPLX under /opt/homebrew/var/mtplx/venv-<ver>
-        // (Apple Silicon) or /usr/local/var/mtplx/venv-<ver> (Intel).
-        if let Ok(o) = Command::new("lsof").args(["-p", &pid_str]).output() {
-            let body = String::from_utf8_lossy(&o.stdout);
-            let brew_hit = body.lines().find(|l| {
-                l.contains("/homebrew/var/mtplx/") || l.contains("/usr/local/var/mtplx/")
-            });
-            if brew_hit.is_some() {
-                let (formula, version) = detect_brew_mtplx_version();
-                return MtplxInstall::Brew { formula, version };
+                eprintln!("  {w}!{r} upgrade failed; run it manually to diagnose.");
             }
         }
-
-        // No brew signature: try to recover a git checkout from cwd.
-        let cwd = Command::new("lsof")
-            .args(["-p", &pid_str, "-a", "-d", "cwd", "-Fn"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .find(|l| l.starts_with('n'))
-                    .map(|l| l[1..].to_string())
-            })
-            .map(PathBuf::from);
-        if let Some(start) = cwd {
-            let mut cur = start.as_path();
-            loop {
-                if cur.join(".git").exists() && cur.join("setup.py").exists()
-                    || cur.join(".git").exists() && cur.join("pyproject.toml").exists()
-                {
-                    return MtplxInstall::Git(cur.to_path_buf());
-                }
-                match cur.parent() {
-                    Some(p) => cur = p,
-                    None => break,
-                }
-            }
+        None if !just_switched => {
+            // Nothing to pull/upgrade AND we didn't just switch sources.
+            // Print the "up to date" line only here so a switch-followed-
+            // by-no-upgrade still reads cleanly.
+            eprintln!("  {g}✓{r} MTPLX is up to date");
         }
+        None => {}
     }
 
-    // 5. Passive brew probe even if the server isn't running: maybe
-    //    they installed via brew and just haven't started it.
-    if Command::new("brew")
-        .args(["list", "--formula", "mtplx"])
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-    {
-        let (formula, version) = detect_brew_mtplx_version();
-        return MtplxInstall::Brew { formula, version };
-    }
-
-    if !pid_str.is_empty() {
-        return MtplxInstall::Unknown;
-    }
-    MtplxInstall::None
-}
-
-/// Return (formula-with-tap, version) for the brew-installed MTPLX, or
-/// reasonable defaults if `brew info` can't be parsed.
-fn detect_brew_mtplx_version() -> (String, String) {
-    use std::process::Command;
-    let info = Command::new("brew")
-        .args(["info", "--json=v2", "mtplx"])
-        .output()
-        .ok();
-    let mut version = "unknown".to_string();
-    let mut formula = "youssofal/mtplx/mtplx".to_string();
-    if let Some(out) = info {
-        if let Ok(body) = String::from_utf8(out.stdout) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body) {
-                if let Some(formulae) = v.get("formulae").and_then(|x| x.as_array()) {
-                    if let Some(f) = formulae.first() {
-                        if let Some(t) = f.get("tap").and_then(|x| x.as_str()) {
-                            if let Some(n) = f.get("name").and_then(|x| x.as_str()) {
-                                formula = format!("{}/{}", t, n);
-                            }
-                        }
-                        if let Some(installed) = f
-                            .get("installed")
-                            .and_then(|x| x.as_array())
-                            .and_then(|a| a.first())
-                        {
-                            if let Some(vstr) = installed.get("version").and_then(|x| x.as_str()) {
-                                version = vstr.to_string();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    (formula, version)
-}
-
-/// Check whether brew thinks the installed MTPLX is outdated. Returns
-/// Some(latest_version) when an upgrade is available, None when current
-/// or when we can't tell.
-fn brew_mtplx_latest_available() -> Option<String> {
-    use std::process::Command;
-    // `brew outdated --json=v2 <formula>` returns a JSON document with
-    // a "formulae" array; an empty array means "up to date."
-    let out = Command::new("brew")
-        .args(["outdated", "--json=v2", "mtplx"])
-        .output()
-        .ok()?;
-    let body = String::from_utf8(out.stdout).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&body).ok()?;
-    let formulae = v.get("formulae")?.as_array()?;
-    let first = formulae.first()?;
-    first
-        .get("current_version")
-        .and_then(|x| x.as_str())
-        .map(|s| s.to_string())
-}
-
-fn flag_running_server() {
-    use crate::theme::{warn, RESET};
-    let w = warn();
-    let r = RESET;
-    let server_listening = std::process::Command::new("lsof")
-        .args(["-nP", "-iTCP:8088", "-sTCP:LISTEN"])
-        .output()
-        .map(|o| !o.stdout.is_empty())
-        .unwrap_or(false);
-    if server_listening {
-        eprintln!(
-            "{w}!{r} MTPLX server still running on :8088 with the old code -- restart it to pick up the update"
-        );
+    // If on-disk code is now newer than the running process, restart with
+    // optimal config to land on the new bytes. Same trigger for brew
+    // (version mismatch) and git (we just successfully pulled or switched).
+    if is_running_stale(&state, just_upgraded) {
+        eprintln!("  {w}!{r} running server is on stale code; brew/disk has newer bytes.");
+        restart_with_optimal_config(&state).await;
     }
 }
 
