@@ -25,6 +25,7 @@ import {
   assistantToolCalls,
   toolResultMessage,
 } from './schema.js';
+import { pruneOldToolResults } from './tool_result_prune.js';
 import { type Tool, findTool, toolSpecs } from './tools/index.js';
 
 export interface AgentEvents {
@@ -42,6 +43,9 @@ export interface AgentEvents {
   /** Fired after the postcommit wait finishes with the actual outcome:
    *  whether MTPLX confirmed the commit landed, and how long we waited. */
   onPostcommitDone?: (landed: boolean, elapsedMs: number) => void;
+  /** Fired after a pre-round tool-result prune (only when something
+   *  was actually pruned). */
+  onToolResultPrune?: (pruned: number, charsSaved: number) => void;
   /** Fired before a mid-loop auto-compact. */
   onCompactStart?: (tokensBefore: number) => void;
   /** Fired after a mid-loop auto-compact completes. */
@@ -75,6 +79,11 @@ export interface RunLoopOptions {
    *  built-in coding-assistant prompt). Lets the TUI / --system flag
    *  preserve their override across the compact. */
   systemPromptForCompact?: string;
+  /** Tool-result pruning: in-place redact old large tool results to
+   *  stubs before each round. Free (no model call), complements
+   *  auto-compact. Default keepLastK=3, pruneOverChars=1500. Set
+   *  keepLastK to 0 to disable. */
+  pruneToolResults?: { keepLastK?: number; pruneOverChars?: number } | false;
 }
 
 export interface LoopStats {
@@ -99,6 +108,15 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) {
       return finish(startTotal, round, toolCallCount, 'aborted');
+    }
+    // Pre-round prune: redact OLD large tool results in place. Free
+    // (no model call) - just rewrites stale `read`/`bash` outputs as
+    // a one-line stub so they stop consuming prefix tokens. Skipped
+    // when explicitly disabled (pruneToolResults: false).
+    if (opts.pruneToolResults !== false) {
+      const pOpts = opts.pruneToolResults ?? {};
+      const pr = pruneOldToolResults(conv, pOpts);
+      if (pr.pruned > 0) events?.onToolResultPrune?.(pr.pruned, pr.charsSaved);
     }
     // Mid-loop auto-compact: if conv has crossed the cache-eviction
     // cliff, summarize it down before the next round. Costs one

@@ -437,6 +437,12 @@ async function runPrintMode(
             process.stderr.write(
               `[hip] postcommit ${landed ? 'landed' : 'timed-out'} after ${elapsedMs.toFixed(0)}ms\n`,
             ),
+      onToolResultPrune: flags.quiet
+        ? undefined
+        : (pruned, charsSaved) =>
+            process.stderr.write(
+              `[hip] pruned ${pruned} old tool result${pruned === 1 ? '' : 's'} (~${(charsSaved / 4).toFixed(0)} tok saved)\n`,
+            ),
       onCompactStart: flags.quiet
         ? undefined
         : (tokensBefore) =>
