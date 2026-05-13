@@ -295,7 +295,17 @@ impl Cli {
 /// `std::time::SystemTime` (no `chrono` dep either) so two runs started in
 /// the same second still get distinct ids.
 fn generate_auto_session_id() -> String {
+    use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Per-process monotonic counter so two consecutive calls within the
+    // same nanosecond still produce distinct ids. SystemTime on macOS
+    // resolves to microseconds at best, and call-to-call latency can be
+    // shorter than one microsecond -- that's what was tripping the
+    // `auto_session_id_is_unique_per_call` test on CI.
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -306,7 +316,13 @@ fn generate_auto_session_id() -> String {
     // small civil-from-days routine (Howard Hinnant) so we avoid the chrono
     // dependency for one timestamp.
     let (y, mo, d, hh, mm, ss) = civil_from_unix(secs);
-    let tail = format!("{:06x}", nanos & 0x00FF_FFFF);
+
+    // Mix nanos with the per-process counter (Knuth multiplicative hash).
+    // 2_654_435_761 is the golden-ratio constant; xor-mixing it with the
+    // counter guarantees a different 24-bit window per call even when
+    // nanos repeats.
+    let mixed = nanos ^ counter.wrapping_mul(2_654_435_761);
+    let tail = format!("{:06x}", mixed & 0x00FF_FFFF);
     format!(
         "auto-{y:04}{mo:02}{d:02}-{hh:02}{mm:02}{ss:02}-{tail}",
         y = y,

@@ -86,8 +86,12 @@ pub fn select_one(prompt: &str, options: &[Option_<'_>], default_idx: usize) -> 
         first_render = false;
 
         for (i, opt) in options.iter().enumerate() {
+            // Plain ASCII `>` so terminal plugins that convert Unicode
+            // arrows (▶) into Slack-style `:arrow_forward:` shortcodes
+            // don't mangle the prompt. Seen in the wild on a user's zsh
+            // with an emoji-replacing plugin.
             let cursor = if i == current {
-                format!("{a}▶{r}")
+                format!("{a}>{r}")
             } else {
                 " ".to_string()
             };

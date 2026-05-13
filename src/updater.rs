@@ -250,7 +250,7 @@ async fn check_mtplx_updates() {
         apply_upgrade, check_upstream, detect_state, is_running_stale, render_status,
         restart_with_optimal_config, InstallKind,
     };
-    use crate::setup::{persist_source, prompt_mtplx_source, MtplxSource};
+    use crate::setup::{persist_source, prompt_mtplx_source, read_persisted_source, MtplxSource};
     use crate::theme::{accent, dim, good, warn, RESET};
     use std::process::Command;
     let d = dim();
@@ -295,8 +295,31 @@ async fn check_mtplx_updates() {
             "fork" => MtplxSource::fork(),
             _ => MtplxSource::upstream(),
         };
-        let chosen = prompt_mtplx_source(default_src);
-        persist_source(&chosen);
+
+        // Skip the picker entirely when (a) a preference has already been
+        // persisted and (b) it matches what the checkout is currently on.
+        // No reason to bug the user every `hip --update` if their setup
+        // already agrees with their saved choice. The picker still shows
+        // up on first-ever update (no persisted file) or when the
+        // checkout has drifted from the persisted preference.
+        let chosen = match read_persisted_source() {
+            Some(persisted)
+                if persisted.label == default_src.label
+                    && persisted.repo == default_src.repo
+                    && persisted.branch == default_src.branch =>
+            {
+                eprintln!(
+                    "  {d}source preference{r}: {a}{} @ {}{r} {d}(already persisted; --pick-source to change){r}",
+                    persisted.repo, persisted.branch
+                );
+                persisted
+            }
+            _ => {
+                let c = prompt_mtplx_source(default_src);
+                persist_source(&c);
+                c
+            }
+        };
 
         // If the picked source differs from current, switch remotes +
         // branches. This is the only path in `hip --update` that mutates
@@ -393,27 +416,50 @@ async fn check_mtplx_updates() {
     // happened to the running process. Previously a "no restart needed"
     // case was indistinguishable from "we forgot to check" -- the user
     // had to infer from the absence of output.
+    // Closing state line. Priority:
+    //   1. stale code (post-upgrade, didn't restart yet)     -> auto-restart
+    //   2. suboptimal config (running flags ≠ canonical)     -> tell the
+    //      user to run hip --restart-mtplx (we don't auto-clobber a
+    //      potentially-customized server)
+    //   3. running with optimal config                       -> ✓ all good
+    //   4. nothing running                                   -> hint
     if is_running_stale(&state, just_upgraded) {
         eprintln!("  {w}!{r} running server is on stale code; brew/disk has newer bytes.");
         restart_with_optimal_config(&state).await;
-    } else if state.is_running() {
-        match &state.kind {
-            crate::mtplx_runner::InstallKind::Brew {
-                installed_version, ..
-            } => match state.running_venv_version.as_deref() {
-                Some(rv) => eprintln!(
-                    "  {g}✓{r} server is on current code {d}(running venv {} == brew {}){r}",
-                    rv, installed_version
-                ),
-                None => eprintln!(
-                    "  {g}✓{r} server is running {d}(venv version not detected; assuming current){r}"
-                ),
-            },
-            crate::mtplx_runner::InstallKind::Git { head_sha, .. } => {
-                eprintln!(
-                    "  {g}✓{r} server is on current code {d}(checkout HEAD {}){r}",
-                    head_sha
-                );
+    } else if let Some(delta) = state.config_status() {
+        if !delta.is_optimal() {
+            // Loud, end-of-output. The suboptimal warning earlier in the
+            // banner can get visually buried under the details block, so
+            // we surface it again here with the exact remediation.
+            eprintln!(
+                "  {w}!{r} server is running but config differs from optimal {d}({} delta(s)){r}",
+                delta.missing_or_wrong.len()
+            );
+            for missing in &delta.missing_or_wrong {
+                eprintln!("    {w}-{r} {a}{}{r}", missing);
+            }
+            eprintln!(
+                "  {d}fix{r}:      run {a}hip --restart-mtplx{r} to relaunch with optimal config"
+            );
+        } else {
+            match &state.kind {
+                crate::mtplx_runner::InstallKind::Brew {
+                    installed_version, ..
+                } => match state.running_venv_version.as_deref() {
+                    Some(rv) => eprintln!(
+                        "  {g}✓{r} server is on current code {d}(running venv {} == brew {}){r}",
+                        rv, installed_version
+                    ),
+                    None => eprintln!(
+                        "  {g}✓{r} server is running {d}(venv version not detected; assuming current){r}"
+                    ),
+                },
+                crate::mtplx_runner::InstallKind::Git { head_sha, .. } => {
+                    eprintln!(
+                        "  {g}✓{r} server is on current code {d}(checkout HEAD {}){r}",
+                        head_sha
+                    );
+                }
             }
         }
     } else {
