@@ -16,6 +16,7 @@ import { generateAutoSessionId } from '../config.js';
 import { type ChatMessage, systemMessage, userMessage } from '../schema.js';
 import { updateSession } from '../session_store.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../system_prompt.js';
+import { detectResetIntent } from '../topic_detect.js';
 import { estimateTokens, formatTokens, shouldAutoCompact } from './auto_compact.js';
 import { nextHippoWord, randomHippoWord } from './hippo_words.js';
 import { listLoops, parseLoopInput, scheduleLoop, stopAllLoops, stopLoop } from './loop.js';
@@ -401,6 +402,23 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     if (t.startsWith('/') || t.startsWith(':')) {
       const handled = handleSlash(t);
       if (handled) return;
+    }
+    // Conservative reset-intent detection: if the user typed an
+    // explicit "start over"/"reset"/"forget that"/"new task:" phrase
+    // and the conv has real history, wipe it and reseed with just the
+    // system prompt before sending. Same logic as the print-mode
+    // shortcut so behavior is consistent across UIs.
+    if (detectResetIntent(t, convRef.current.length)) {
+      const sysMsg = convRef.current.find((m) => m.role === 'system');
+      const before = convRef.current.length;
+      convRef.current = sysMsg ? [sysMsg] : [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)];
+      setTranscript((p) => [
+        ...p,
+        {
+          kind: 'system',
+          text: `[reset signal detected; cleared ${before - convRef.current.length} prior messages]`,
+        },
+      ]);
     }
     setTranscript((prev) => [...prev, { kind: 'user', text: t }]);
     convRef.current.push(userMessage(t));
