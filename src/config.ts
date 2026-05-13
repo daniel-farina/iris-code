@@ -37,3 +37,25 @@ export function generateAutoSessionId(): string {
     .padStart(6, '0');
   return `auto-${stamp}-${rand}`;
 }
+
+// CWD-stable session id: `cwd-<8charhash>-<YYYYMMDD>`. Reused across
+// every hip run in the same directory on the same day, so MTPLX's
+// session-bank LRU keeps the prefix cache warm without the user
+// having to remember a session id. Rolls over at midnight so the
+// session doesn't grow unboundedly large across multi-day work.
+// Falls back to a per-invocation uniqe id if cwd can't be resolved.
+export function generateCwdStableSessionId(cwd: string): string {
+  if (!cwd) return generateAutoSessionId();
+  // 32-bit FNV-1a is plenty for ~uniqueness across a user's dirs; not
+  // a crypto context. Faster + zero-dep vs crypto.createHash.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < cwd.length; i++) {
+    h ^= cwd.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  const hash = (h >>> 0).toString(16).padStart(8, '0');
+  const now = new Date();
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const date = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}`;
+  return `cwd-${hash}-${date}`;
+}

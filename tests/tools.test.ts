@@ -9,7 +9,7 @@ import { editTool } from '../src/tools/edit.js';
 import { listTool } from '../src/tools/list.js';
 import { treeTool } from '../src/tools/tree.js';
 import { argU64 } from '../src/tools/types.js';
-import { generateAutoSessionId } from '../src/config.js';
+import { generateAutoSessionId, generateCwdStableSessionId } from '../src/config.js';
 
 let tmp: string;
 
@@ -131,8 +131,26 @@ describe('tree tool', () => {
 });
 
 describe('session id', () => {
-  it('matches auto-YYYYMMDD-HHMMSS-<hex> format', () => {
+  it('generateAutoSessionId matches auto-YYYYMMDD-HHMMSS-<hex> format', () => {
     const id = generateAutoSessionId();
     expect(id).toMatch(/^auto-\d{8}-\d{6}-[0-9a-f]{6}$/);
+  });
+
+  it('generateCwdStableSessionId is deterministic for the same cwd same day', () => {
+    const a = generateCwdStableSessionId('/Users/dan/some/project');
+    const b = generateCwdStableSessionId('/Users/dan/some/project');
+    expect(a).toBe(b);
+    expect(a).toMatch(/^cwd-[0-9a-f]{8}-\d{8}$/);
+  });
+
+  it('generateCwdStableSessionId differs across different cwds', () => {
+    const a = generateCwdStableSessionId('/Users/dan/project-a');
+    const b = generateCwdStableSessionId('/Users/dan/project-b');
+    expect(a).not.toBe(b);
+  });
+
+  it('generateCwdStableSessionId falls back when cwd is empty', () => {
+    const id = generateCwdStableSessionId('');
+    expect(id).toMatch(/^auto-/); // fell through to generateAutoSessionId
   });
 });

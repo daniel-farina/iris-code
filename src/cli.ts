@@ -20,6 +20,7 @@ import {
   DEFAULT_TOP_K,
   DEFAULT_TOP_P,
   generateAutoSessionId,
+  generateCwdStableSessionId,
 } from './config.js';
 import { type ChatMessage, systemMessage, userMessage } from './schema.js';
 import { DEFAULT_SYSTEM_PROMPT } from './system_prompt.js';
@@ -321,8 +322,13 @@ async function resolveSessionAndConv(
       return { resolvedSessionId: rec.session_id, startConv: rec.conv };
     }
   }
+  // No explicit session id: derive one from cwd so subsequent runs in
+  // the same directory share the same MTPLX session-bank slot. Rolls
+  // over daily to avoid unbounded growth. Falls back to the random
+  // auto-id if cwd somehow isn't resolvable.
+  const stableId = generateCwdStableSessionId(process.cwd());
   return {
-    resolvedSessionId: flags.session ?? generateAutoSessionId(),
+    resolvedSessionId: flags.session ?? stableId,
     startConv: [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)],
   };
 }
