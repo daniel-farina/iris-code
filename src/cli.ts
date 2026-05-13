@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_TOKENS,
   DEFAULT_MODEL,
   DEFAULT_MTPLX_URL,
+  DEFAULT_POSTCOMMIT_DELAY_MS,
   DEFAULT_TEMPERATURE,
   DEFAULT_TOP_K,
   DEFAULT_TOP_P,
@@ -40,13 +41,15 @@ interface Flags {
   listTools?: boolean;
   /** Hard wall-clock cap on the print-mode agent loop (seconds). 0 = no cap. */
   maxTime?: number;
+  /** Yield this many ms between agent rounds to let MTPLX postcommit land. */
+  postcommitDelayMs?: number;
   update?: boolean;
   installInfo?: boolean;
   version?: boolean;
   help?: boolean;
 }
 
-const VERSION = '0.4.0';
+const VERSION = '0.4.1-dev';
 
 export function parseFlags(argv: string[]): Flags {
   const { values, positionals } = parseArgs({
@@ -73,6 +76,7 @@ export function parseFlags(argv: string[]): Flags {
       system: { type: 'string' },
       'list-tools': { type: 'boolean' },
       'max-time': { type: 'string' },
+      'postcommit-delay': { type: 'string' },
       update: { type: 'boolean' },
       'install-info': { type: 'boolean' },
       version: { type: 'boolean', short: 'V' },
@@ -109,6 +113,11 @@ export function parseFlags(argv: string[]): Flags {
     system: (values.system as string | undefined) ?? undefined,
     listTools: (values['list-tools'] as boolean | undefined) ?? false,
     maxTime: num('max-time', values['max-time'] as string | undefined, 0),
+    postcommitDelayMs: num(
+      'postcommit-delay',
+      values['postcommit-delay'] as string | undefined,
+      DEFAULT_POSTCOMMIT_DELAY_MS,
+    ),
     update: (values.update as boolean | undefined) ?? false,
     installInfo: (values['install-info'] as boolean | undefined) ?? false,
     version: (values.version as boolean | undefined) ?? false,
@@ -136,6 +145,7 @@ Options:
   --system <prompt>                  override the default coding-assistant system prompt
   --list-tools                       print the tool spec (json) and exit
   --max-time <seconds>               --print mode: hard wall-clock cap; aborts the agent loop
+  --postcommit-delay <ms>            max time to wait for MTPLX postcommit between rounds when prompt >8K tok (polls; default ${DEFAULT_POSTCOMMIT_DELAY_MS}, 0 disables)
   --update                           download + install the latest release from GitHub
   --install-info                     print where hip is installed and the target platform
   --max-tokens <n>                   max output tokens per turn (default ${DEFAULT_MAX_TOKENS})
@@ -291,10 +301,21 @@ async function runPrintMode(
       max_tokens: flags.maxTokens,
     },
     maxRounds: flags.maxRounds,
+    postcommitDelayMs: flags.postcommitDelayMs,
     events: {
       onRound: (_n, info) => {
         if (typeof info.ctok === 'number') completionTokens += info.ctok;
       },
+      onPostcommitWait: flags.quiet
+        ? undefined
+        : (maxMs) =>
+            process.stderr.write(`[hip] waiting up to ${maxMs}ms for MTPLX postcommit...\n`),
+      onPostcommitDone: flags.quiet
+        ? undefined
+        : (landed, elapsedMs) =>
+            process.stderr.write(
+              `[hip] postcommit ${landed ? 'landed' : 'timed-out'} after ${elapsedMs.toFixed(0)}ms\n`,
+            ),
       onToolStart: flags.quiet
         ? undefined
         : (name, args) => {

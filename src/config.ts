@@ -17,6 +17,15 @@ export const DEFAULT_MAX_TOKENS = 6144;
 export const DEFAULT_MAX_ROUNDS = 30;
 export const MAX_CONSECUTIVE_LENGTH_CONTINUES = 3;
 
+// Between agent-loop rounds, wait for MTPLX's KV-cache postcommit to
+// land before firing the next request. The agent polls MTPLX's
+// /admin/sessions endpoint and returns as soon as it sees the commit
+// stored - this is an UPPER BOUND, not a fixed sleep. Lets us scale
+// gracefully to slower devices / bigger prefixes (observed commit time
+// ranges from ~3s for a 4K prefix on M3 to ~11s for a 17K prefix).
+// Tunable via --postcommit-delay; set to 0 to disable polling entirely.
+export const DEFAULT_POSTCOMMIT_DELAY_MS = 30000;
+
 // Auto-generated session id matches hip's format: auto-YYYYMMDD-HHMMSS-<6hex>.
 // Without this the prefix cache mixes unrelated dispatches.
 export function generateAutoSessionId(): string {

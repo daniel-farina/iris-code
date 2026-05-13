@@ -166,6 +166,165 @@ describe('runLoop', () => {
     );
   });
 
+  it('polls /admin/sessions and returns when postcommit stored=true', async () => {
+    // Spin up a fake MTPLX admin endpoint that flips stored=true after
+    // a short delay; agent should poll, see it, and return early
+    // rather than waiting the full cap.
+    const { createServer } = await import('node:http');
+    let stored = false;
+    setTimeout(() => {
+      stored = true;
+    }, 400); // postcommit "lands" at 400ms
+    const server = createServer((req, res) => {
+      if (req.url?.endsWith('/admin/sessions')) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            sessions: [
+              {
+                session_id: 'test-poll-sid',
+                last_postcommit_outcome: { stored, mode: stored ? 'stored' : 'in_progress' },
+              },
+            ],
+          }),
+        );
+      } else {
+        res.writeHead(404).end();
+      }
+    });
+    const port = await new Promise<number>((resolve) =>
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        if (addr && typeof addr === 'object') resolve(addr.port);
+      }),
+    );
+
+    let firstRound = true;
+    const waitOutcomes: { landed: boolean; elapsedMs: number }[] = [];
+    const client = {
+      getBaseUrl: () => `http://127.0.0.1:${port}/v1`,
+      getSessionId: () => 'test-poll-sid',
+      stream: async () => {
+        if (firstRound) {
+          firstRound = false;
+          return {
+            content: '',
+            tool_calls: [toolCall('c1', 'list', { path: '/tmp' })],
+            finish_reason: 'tool_calls',
+            usage: { prompt_tokens: 20000 },
+          } satisfies CompletionResult;
+        }
+        return { content: 'done', tool_calls: [], finish_reason: 'stop' } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    const t0 = Date.now();
+    await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 5,
+      postcommitDelayMs: 5000, // cap at 5s; should return in ~400ms
+      events: {
+        onPostcommitDone: (landed, elapsedMs) => waitOutcomes.push({ landed, elapsedMs }),
+      },
+    });
+    const elapsed = Date.now() - t0;
+    server.close();
+    expect(waitOutcomes).toHaveLength(1);
+    expect(waitOutcomes[0]?.landed).toBe(true);
+    expect(waitOutcomes[0]?.elapsedMs).toBeLessThan(1500); // returned soon after stored flipped
+    expect(elapsed).toBeLessThan(2500); // entire run, well below the 5s cap
+  });
+
+  it('inserts a postcommit pause when prompt > threshold', async () => {
+    let firstRound = true;
+    const sleepCalls: number[] = [];
+    const client = {
+      stream: async () => {
+        if (firstRound) {
+          firstRound = false;
+          return {
+            content: '',
+            tool_calls: [toolCall('c1', 'list', { path: '/tmp' })],
+            finish_reason: 'tool_calls',
+            usage: { prompt_tokens: 20000 },
+          } satisfies CompletionResult;
+        }
+        return { content: 'done', tool_calls: [], finish_reason: 'stop' } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 5,
+      postcommitDelayMs: 25,
+      events: { onPostcommitWait: (ms) => sleepCalls.push(ms) },
+    });
+    expect(sleepCalls).toEqual([25]);
+  });
+
+  it('skips polling entirely when postcommitDelayMs=0', async () => {
+    let firstRound = true;
+    const waitCalls: number[] = [];
+    const client = {
+      stream: async () => {
+        if (firstRound) {
+          firstRound = false;
+          return {
+            content: '',
+            tool_calls: [toolCall('c1', 'list', { path: '/tmp' })],
+            finish_reason: 'tool_calls',
+          } satisfies CompletionResult;
+        }
+        return { content: 'done', tool_calls: [], finish_reason: 'stop' } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 5,
+      postcommitDelayMs: 0,
+      events: { onPostcommitWait: (ms) => waitCalls.push(ms) },
+    });
+    expect(waitCalls).toEqual([]);
+  });
+
+  it('postcommit pause is interruptible via AbortSignal', async () => {
+    const ctl = new AbortController();
+    let firstRound = true;
+    const client = {
+      stream: async () => {
+        if (firstRound) {
+          firstRound = false;
+          return {
+            content: '',
+            tool_calls: [toolCall('c1', 'list', { path: '/tmp' })],
+            finish_reason: 'tool_calls',
+            usage: { prompt_tokens: 20000 },
+          } satisfies CompletionResult;
+        }
+        return { content: 'done', tool_calls: [], finish_reason: 'stop' } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    setTimeout(() => ctl.abort(), 10);
+    const t0 = Date.now();
+    await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 5,
+      postcommitDelayMs: 5000,
+      signal: ctl.signal,
+    });
+    expect(Date.now() - t0).toBeLessThan(500); // aborted, didn't wait the full 5s
+  });
+
   it('emits onToolStart/onToolResult/onRound events in order', async () => {
     const conv: ChatMessage[] = [{ role: 'user', content: 'go' }];
     const client = fakeClient([

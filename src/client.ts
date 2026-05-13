@@ -36,6 +36,18 @@ export class MtplxClient {
     this.opts = opts;
   }
 
+  /** /v1/chat/completions base; used by the agent loop to derive the
+   *  admin endpoint (root + /admin/sessions) for postcommit polling. */
+  getBaseUrl(): string {
+    return this.opts.baseUrl;
+  }
+
+  /** Effective session id (caller-supplied or auto-generated). The
+   *  agent loop uses this to look up its own session in /admin/sessions. */
+  getSessionId(): string | undefined {
+    return this.opts.sessionId;
+  }
+
   async stream(
     messages: ChatMessage[],
     tools: ToolSpec[] | undefined,

@@ -40,6 +40,7 @@ interface TuiFlags {
   topP: number;
   topK: number;
   system?: string;
+  postcommitDelayMs?: number;
 }
 
 type TranscriptItem =
@@ -366,7 +367,18 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
           max_tokens: runtimeMaxTokens,
         },
         maxRounds: runtimeMaxRounds,
+        postcommitDelayMs: flags.postcommitDelayMs,
         events: {
+          onPostcommitWait: (maxMs) => {
+            setStatus(`waiting up to ${(maxMs / 1000).toFixed(0)}s for postcommit`);
+          },
+          onPostcommitDone: (landed, elapsedMs) => {
+            setStatus(
+              landed
+                ? `postcommit landed (+${(elapsedMs / 1000).toFixed(1)}s)`
+                : `postcommit timed out (${(elapsedMs / 1000).toFixed(1)}s)`,
+            );
+          },
           onRound: (n, info) => {
             setStats((prev) => ({
               ...prev,
