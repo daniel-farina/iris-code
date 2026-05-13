@@ -53,7 +53,9 @@ export function pruneOldToolResults(
     // Already pruned (idempotent re-runs are common - we call this
     // every round). Detect by stub marker.
     if (content.startsWith('[redacted:')) continue;
-    const stub = `[redacted: ${content.length} chars of ${msg.name ?? 'tool'} output from an earlier round; call the tool again if you need this data]`;
+    // Neutral hint: don't say "call again" because some tools (bash)
+    // have side effects. Model decides what to do with the gap.
+    const stub = `[redacted: ${content.length} chars of ${msg.name ?? 'tool'} output from an earlier round]`;
     charsSaved += content.length - stub.length;
     pruned++;
     msg.content = stub;

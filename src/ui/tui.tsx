@@ -478,6 +478,15 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         // avoid double-compaction.
         autoCompactThresholdTokens: 0,
         events: {
+          onToolResultPrune: (pruned, charsSaved) => {
+            setTranscript((p) => [
+              ...p,
+              {
+                kind: 'system',
+                text: `[pruned ${pruned} old tool result${pruned === 1 ? '' : 's'} (~${(charsSaved / 4).toFixed(0)} tok freed)]`,
+              },
+            ]);
+          },
           onPostcommitWait: (maxMs) => {
             setStatus(`waiting up to ${(maxMs / 1000).toFixed(0)}s for postcommit`);
           },
