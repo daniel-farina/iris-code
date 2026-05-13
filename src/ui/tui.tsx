@@ -599,7 +599,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
             runtimeModel +
             ')\n  /top-p [0-1|default]        get/set sampler top-p\n  /top-k [int|default]        get/set sampler top-k\n  /temperature [0-2|default]  get/set sampler temperature (current ' +
             runtimeTemperature +
-            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)\n  /auto-compact [on|off]      toggle auto-/compact at ~9K tokens (current ' +
+            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)\n  /auto-compact [on|off]      toggle auto-/compact at ~9K tokens (current\n  /setup                      check MTPLX config drift\n  /setup-apply                restart MTPLX with recommended env (after /setup)' +
             (autoCompactOn ? 'on' : 'off') +
             ')',
         },
@@ -689,6 +689,103 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     // prefix cache small for long-running iterative work.
     if (lower === '/compact' || lower === ':compact') {
       void runCompact('manual');
+      return true;
+    }
+    // /setup: detect MTPLX config drift + offer to fix from inside the
+    // TUI. Doesn't use readline (Ink owns stdin) - instead shows the
+    // diff and a follow-up /setup-apply command the user can type.
+    if (lower === '/setup' || lower === ':setup') {
+      void (async () => {
+        const { getMtplxStatus, diffConfig, formatDiff, RECOMMENDED_ENV } = await import(
+          '../mtplx_manager.js'
+        );
+        const status = await getMtplxStatus(flags.url);
+        const diff = diffConfig(status.env, RECOMMENDED_ENV);
+        if (!status.running) {
+          setTranscript((p) => [
+            ...p,
+            { kind: 'system', text: `[setup] MTPLX is not reachable at ${flags.url}` },
+          ]);
+          return;
+        }
+        if (diff.missing.length === 0) {
+          setTranscript((p) => [
+            ...p,
+            {
+              kind: 'system',
+              text: `[setup] MTPLX is already configured for hippo-code (pid ${status.pid}, ${diff.matching.length} matching).`,
+            },
+          ]);
+          return;
+        }
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text:
+              formatDiff(status, diff) +
+              '\n\nType `/setup-apply` to SIGTERM the running MTPLX and relaunch ' +
+              'it with the recommended env vars (~10s downtime).',
+          },
+        ]);
+      })();
+      return true;
+    }
+    if (lower === '/setup-apply' || lower === ':setup-apply') {
+      void (async () => {
+        setBusy(true);
+        setStatus('restarting MTPLX...');
+        try {
+          const {
+            getMtplxStatus,
+            diffConfig,
+            RECOMMENDED_ENV,
+            stopMtplx,
+            startMtplx,
+            waitForMtplx,
+          } = await import('../mtplx_manager.js');
+          const status = await getMtplxStatus(flags.url);
+          if (!status.running || !status.pid || !status.cmdline) {
+            setTranscript((p) => [
+              ...p,
+              { kind: 'system', text: '[setup-apply] MTPLX not running; nothing to restart.' },
+            ]);
+            return;
+          }
+          const diff = diffConfig(status.env, RECOMMENDED_ENV);
+          if (diff.missing.length === 0) {
+            setTranscript((p) => [
+              ...p,
+              { kind: 'system', text: '[setup-apply] already configured; no restart needed.' },
+            ]);
+            return;
+          }
+          const port = (flags.url.match(/:(\d+)/) ?? [undefined, '8088'])[1] ?? '8088';
+          const desiredEnv = { ...(status.env ?? {}), ...RECOMMENDED_ENV };
+          const cmdline =
+            status.venvPython && status.cmdline[0] !== status.venvPython
+              ? [status.venvPython, ...status.cmdline.slice(1)]
+              : status.cmdline;
+          await stopMtplx(status.pid, port);
+          const newPid = startMtplx(cmdline, desiredEnv);
+          await waitForMtplx(flags.url, 90000);
+          setTranscript((p) => [
+            ...p,
+            {
+              kind: 'system',
+              text: `[setup-apply] MTPLX restarted (new pid ${newPid}) with recommended env.`,
+            },
+          ]);
+        } catch (e) {
+          setTranscript((p) => [
+            ...p,
+            { kind: 'system', text: `[setup-apply error] ${(e as Error).message}` },
+          ]);
+        } finally {
+          setBusy(false);
+          setStatus('');
+        }
+      })();
       return true;
     }
     // /auto-compact on|off: toggle the conv>9K-token auto-compact trigger.
