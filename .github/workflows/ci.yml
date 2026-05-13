@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: install node 22 (vitest needs node:fs/promises glob)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: install bun
         uses: oven-sh/setup-bun@v1
         with:
