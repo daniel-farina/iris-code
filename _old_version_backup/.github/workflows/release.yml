@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BIN_NAME: hip
+
+jobs:
+  build:
+    name: build (${{ matrix.target_os }}-${{ matrix.target_arch }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    # Single-target matrix: hip is a thin client that talks to a local MTPLX
+    # server, and MTPLX uses MLX which only runs on Apple Silicon (M1+). An
+    # Intel-Mac or Linux build of hip would have nothing to talk to. If
+    # someone needs cross-platform later (e.g. running hip on Linux against a
+    # remote Apple-Silicon MTPLX over the network), they can `cargo install`
+    # from source. Keeping the release matrix lean cuts CI time roughly 3x.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target_os: darwin
+            target_arch: arm64
+            sha_cmd: shasum -a 256
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Package tarball
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          ARTIFACT="${BIN_NAME}-${TAG}-${{ matrix.target_os }}-${{ matrix.target_arch }}.tar.gz"
+          tar czf "${ARTIFACT}" -C target/release "${BIN_NAME}"
+          ${{ matrix.sha_cmd }} "${ARTIFACT}" > "${ARTIFACT}.sha256"
+          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
+          echo "checksum=${ARTIFACT}.sha256" >> "$GITHUB_OUTPUT"
+          ls -la "${ARTIFACT}" "${ARTIFACT}.sha256"
+          cat "${ARTIFACT}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target_os }}-${{ matrix.target_arch }}
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          # Pick "latest" by semver, not by created-at timestamp. Without
+          # this, two tags pushed back-to-back can land in the wrong order
+          # (e.g. v0.3.11 published after v0.3.12 → v0.3.11 wrongly tagged
+          # latest, and `hip --update` offers the older release).
+          make_latest: legacy
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

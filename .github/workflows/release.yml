@@ -1,105 +1,96 @@
-name: Release
+name: release
 
 on:
   push:
     tags:
       - 'v*'
 
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-  BIN_NAME: hip
+permissions:
+  contents: write
 
 jobs:
   build:
-    name: build (${{ matrix.target_os }}-${{ matrix.target_arch }})
+    name: build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    # Single-target matrix: hip is a thin client that talks to a local MTPLX
-    # server, and MTPLX uses MLX which only runs on Apple Silicon (M1+). An
-    # Intel-Mac or Linux build of hip would have nothing to talk to. If
-    # someone needs cross-platform later (e.g. running hip on Linux against a
-    # remote Apple-Silicon MTPLX over the network), they can `cargo install`
-    # from source. Keeping the release matrix lean cuts CI time roughly 3x.
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            target_os: darwin
-            target_arch: arm64
-            sha_cmd: shasum -a 256
+          - os: macos-14         # apple silicon
+            target: mac-arm64
+          - os: macos-13         # intel
+            target: mac-x64
+          - os: ubuntu-latest    # x64 linux
+            target: linux-x64
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: install bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: install deps
+        run: bun install || true
 
-      - name: Build (release)
-        run: cargo build --release
-
-      - name: Package tarball
-        id: package
-        shell: bash
+      - name: package tarball
         run: |
           set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          ARTIFACT="${BIN_NAME}-${TAG}-${{ matrix.target_os }}-${{ matrix.target_arch }}.tar.gz"
-          tar czf "${ARTIFACT}" -C target/release "${BIN_NAME}"
-          ${{ matrix.sha_cmd }} "${ARTIFACT}" > "${ARTIFACT}.sha256"
-          echo "artifact=${ARTIFACT}" >> "$GITHUB_OUTPUT"
-          echo "checksum=${ARTIFACT}.sha256" >> "$GITHUB_OUTPUT"
-          ls -la "${ARTIFACT}" "${ARTIFACT}.sha256"
-          cat "${ARTIFACT}.sha256"
+          VERSION="${GITHUB_REF_NAME#v}"
+          STAGE="hip-${VERSION}"
+          mkdir -p "$STAGE"
+          # Source-style distribution: ship the bun launcher + src/. End
+          # users need bun on PATH. (We don't ship a compiled binary
+          # because Ink's react-devtools-core import breaks bun-build
+          # bundling - see hip-ts-layout memory.)
+          cp -r bin src assets package.json tsconfig.json vitest.config.ts biome.json README.md "$STAGE/" 2>/dev/null || true
+          # An installer script the user can run from inside the unpacked tarball.
+          cat > "$STAGE/install.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if ! command -v bun >/dev/null 2>&1; then
+            echo "error: 'bun' not found on PATH. Install from https://bun.sh first."
+            exit 1
+          fi
+          ROOT="$(cd "$(dirname "$0")" && pwd)"
+          bun install --cwd "$ROOT" >/dev/null
+          PREFIX="${PREFIX:-/usr/local}"
+          install -d "$PREFIX/bin"
+          # Symlink so updates in $ROOT propagate without re-symlinking.
+          ln -sf "$ROOT/bin/hip" "$PREFIX/bin/hip"
+          echo "installed: $PREFIX/bin/hip -> $ROOT/bin/hip"
+          echo "run 'hip --version' to verify."
+          EOF
+          chmod +x "$STAGE/install.sh"
+          tar -czf "hip-${VERSION}-${{ matrix.target }}.tar.gz" "$STAGE"
+          shasum -a 256 "hip-${VERSION}-${{ matrix.target }}.tar.gz" > "hip-${VERSION}-${{ matrix.target }}.tar.gz.sha256"
 
-      - name: Upload artifact
+      - name: upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target_os }}-${{ matrix.target_arch }}
+          name: hip-${{ matrix.target }}
           path: |
-            ${{ steps.package.outputs.artifact }}
-            ${{ steps.package.outputs.checksum }}
-          if-no-files-found: error
-          retention-days: 7
+            hip-*-${{ matrix.target }}.tar.gz
+            hip-*-${{ matrix.target }}.tar.gz.sha256
 
-  release:
-    name: release
+  publish:
+    name: publish github release
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      - name: download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      - name: List artifacts
-        run: ls -la dist/
-
-      - name: Create GitHub Release
+      - name: create github release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          # Pick "latest" by semver, not by created-at timestamp. Without
-          # this, two tags pushed back-to-back can land in the wrong order
-          # (e.g. v0.3.11 published after v0.3.12 → v0.3.11 wrongly tagged
-          # latest, and `hip --update` offers the older release).
-          make_latest: legacy
           files: |
             dist/*.tar.gz
             dist/*.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true

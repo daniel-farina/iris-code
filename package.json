@@ -1,0 +1,43 @@
+{
+  "name": "hippo-code",
+  "version": "0.0.1",
+  "description": "Lean coding agent for the local MTPLX server (Bun + Ink TUI; ports the Rust hip).",
+  "type": "module",
+  "main": "src/cli.ts",
+  "bin": {
+    "hip": "./bin/hip"
+  },
+  "files": [
+    "src/",
+    "bin/",
+    "assets/",
+    "tsconfig.json",
+    "vitest.config.ts",
+    "biome.json"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "dev": "bun run src/cli.ts",
+    "start": "bun run src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && biome check src/ && vitest run",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --fix src/",
+    "fmt": "biome format --write src/"
+  },
+  "dependencies": {
+    "ink": "^5.0.1",
+    "ink-text-input": "^6.0.0",
+    "ink-spinner": "^5.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  }
+}

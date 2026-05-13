@@ -1,24 +1,17 @@
-# Rust build artifacts
-/target/
-**/*.rs.bk
-*.pdb
-
-# IDE
-.idea/
-.vscode/
-*.iml
-
-# macOS
+node_modules/
+dist/
+*.tsbuildinfo
+.env
 .DS_Store
-._*
+*.tar.gz
+*.tar.gz.sha256
+*.prev
 
-# Local state - don't ship the tester's history
-/demo/
-/examples/.runs/
+# session storage - prevent accidental commits of personal conversations
+.hip/
+.hip-ts/
 
-# Editor swap files
-*.swp
-*.swo
-
-# Logs that might land here from runs
-*.log
+# editor cruft
+.vscode/
+.idea/
+.bun/

@@ -1,0 +1,197 @@
+// Agent loop unit tests. Uses a fake client that returns canned
+// CompletionResult sequences so we can exercise tool-dispatch, length
+// auto-continue, abort, and max_rounds termination without touching a
+// real MTPLX server.
+
+import { describe, it, expect } from 'vitest';
+import { runLoop } from '../src/agent.js';
+import type { MtplxClient } from '../src/client.js';
+import type { CompletionResult, ChatMessage, ToolCall } from '../src/schema.js';
+
+function fakeClient(scripted: CompletionResult[]): MtplxClient {
+  let i = 0;
+  return {
+    stream: async () => {
+      const r = scripted[i++];
+      if (!r) throw new Error(`fakeClient: ran out of scripted responses at call ${i}`);
+      return r;
+    },
+  } as unknown as MtplxClient;
+}
+
+function toolCall(id: string, name: string, args: Record<string, unknown>): ToolCall {
+  return { id, type: 'function', function: { name, arguments: JSON.stringify(args) } };
+}
+
+const sampling = { temperature: 0, top_p: 1, top_k: 1, max_tokens: 16 };
+
+describe('runLoop', () => {
+  it('terminates after a single tool-free assistant turn (finish=stop)', async () => {
+    const conv: ChatMessage[] = [{ role: 'user', content: 'hi' }];
+    const client = fakeClient([
+      { content: 'hello', tool_calls: [], finish_reason: 'stop' },
+    ]);
+    const stats = await runLoop({ client, conv, sampling });
+    expect(stats.rounds).toBe(1);
+    expect(stats.finishReason).toBe('stop');
+    expect(stats.toolCalls).toBe(0);
+    // Final assistant message appended to conv.
+    expect(conv.at(-1)).toEqual({ role: 'assistant', content: 'hello' });
+  });
+
+  it('dispatches a tool call, appends the result, then completes', async () => {
+    const conv: ChatMessage[] = [{ role: 'user', content: 'list src' }];
+    // First round: assistant wants to call `list`. Second round: final
+    // text answer that wraps the result.
+    const client = fakeClient([
+      {
+        content: '',
+        tool_calls: [toolCall('c1', 'list', { path: '/tmp' })],
+        finish_reason: 'tool_calls',
+      },
+      { content: 'done', tool_calls: [], finish_reason: 'stop' },
+    ]);
+    const stats = await runLoop({ client, conv, sampling, maxRounds: 5 });
+    expect(stats.rounds).toBe(2);
+    expect(stats.toolCalls).toBe(1);
+    expect(stats.finishReason).toBe('stop');
+    // conv now has: user, assistant(tool_calls), tool(result), assistant(text)
+    expect(conv.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+    const toolMsg = conv[2]!;
+    expect(toolMsg.role).toBe('tool');
+    // The list tool either succeeded or returned an error string - either
+    // way, the body should be a non-empty string back-referenced by id.
+    expect(typeof toolMsg.content).toBe('string');
+    expect((toolMsg.content as string).length).toBeGreaterThan(0);
+  });
+
+  it('gracefully reports unknown tool errors back to the model', async () => {
+    const conv: ChatMessage[] = [{ role: 'user', content: 'do it' }];
+    const client = fakeClient([
+      {
+        content: '',
+        tool_calls: [toolCall('c1', 'nonexistent_tool', {})],
+        finish_reason: 'tool_calls',
+      },
+      { content: 'ok', tool_calls: [], finish_reason: 'stop' },
+    ]);
+    const stats = await runLoop({ client, conv, sampling, maxRounds: 3 });
+    expect(stats.toolCalls).toBe(1);
+    const toolResult = conv.find((m) => m.role === 'tool');
+    expect((toolResult?.content as string).toLowerCase()).toMatch(/unknown tool/);
+  });
+
+  it('auto-continues on finish=length up to MAX_CONSECUTIVE_LENGTH_CONTINUES', async () => {
+    const conv: ChatMessage[] = [{ role: 'user', content: 'write a lot' }];
+    // Three length turns then a stop.
+    const client = fakeClient([
+      { content: 'part1 ', tool_calls: [], finish_reason: 'length' },
+      { content: 'part2 ', tool_calls: [], finish_reason: 'length' },
+      { content: 'part3 ', tool_calls: [], finish_reason: 'length' },
+      { content: 'done', tool_calls: [], finish_reason: 'stop' },
+    ]);
+    const stats = await runLoop({ client, conv, sampling, maxRounds: 10 });
+    expect(stats.rounds).toBe(4);
+    expect(stats.finishReason).toBe('stop');
+  });
+
+  it('caps at maxRounds when the model never stops', async () => {
+    const conv: ChatMessage[] = [{ role: 'user', content: 'forever' }];
+    const client = fakeClient([
+      // Make each round a single tool call so we never get a stop.
+      { content: '', tool_calls: [toolCall('a', 'list', { path: '/tmp' })], finish_reason: 'tool_calls' },
+      { content: '', tool_calls: [toolCall('b', 'list', { path: '/tmp' })], finish_reason: 'tool_calls' },
+      { content: '', tool_calls: [toolCall('c', 'list', { path: '/tmp' })], finish_reason: 'tool_calls' },
+    ]);
+    const stats = await runLoop({ client, conv, sampling, maxRounds: 3 });
+    expect(stats.rounds).toBe(3);
+    expect(stats.finishReason).toBeUndefined();
+    expect(stats.toolCalls).toBe(3);
+  });
+
+  it('returns finish="aborted" when the signal fires mid-flight', async () => {
+    const conv: ChatMessage[] = [{ role: 'user', content: 'cancel me' }];
+    const ctl = new AbortController();
+    const client = {
+      stream: async (_m: unknown, _t: unknown, _s: unknown, signal?: AbortSignal) => {
+        // Wait briefly then check signal. Simulates an in-flight stream
+        // that the runLoop aborts.
+        await new Promise((r) => setTimeout(r, 5));
+        if (signal?.aborted) {
+          const e = new Error('aborted');
+          e.name = 'AbortError';
+          throw e;
+        }
+        return { content: 'never', tool_calls: [], finish_reason: 'stop' } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    setTimeout(() => ctl.abort(), 1);
+    const stats = await runLoop({ client, conv, sampling, signal: ctl.signal });
+    expect(stats.finishReason).toBe('aborted');
+  });
+
+  it('recovers from MTPLX malformed tool_call 422 by nudging the model', async () => {
+    // Simulate the qwen3 quirk: model emits bad JSON args, MTPLX 422s
+    // before we see the tool_call. runLoop should inject a corrective
+    // user message and retry instead of bubbling the error.
+    let firstCall = true;
+    const client = {
+      stream: async () => {
+        if (firstCall) {
+          firstCall = false;
+          throw new Error("MTPLX 422: malformed tool_call: assistant tool_call 'bash' arguments are not valid JSON");
+        }
+        return { content: 'ok', tool_calls: [], finish_reason: 'stop' } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [{ role: 'user', content: 'do it' }];
+    const stats = await runLoop({ client, conv, sampling, maxRounds: 5 });
+    expect(stats.finishReason).toBe('stop');
+    // The injected nudge should be in the conv.
+    const nudge = conv.find(
+      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes('malformed JSON'),
+    );
+    expect(nudge).toBeDefined();
+  });
+
+  it('gives up after 2 malformed-retry attempts and rethrows', async () => {
+    const client = {
+      stream: async () => {
+        throw new Error('MTPLX 422: malformed tool_call: not valid JSON');
+      },
+    } as unknown as MtplxClient;
+    const conv: ChatMessage[] = [{ role: 'user', content: 'do it' }];
+    await expect(runLoop({ client, conv, sampling, maxRounds: 10 })).rejects.toThrow(
+      /malformed tool_call/,
+    );
+  });
+
+  it('emits onToolStart/onToolResult/onRound events in order', async () => {
+    const conv: ChatMessage[] = [{ role: 'user', content: 'go' }];
+    const client = fakeClient([
+      {
+        content: '',
+        tool_calls: [toolCall('c1', 'list', { path: '/tmp' })],
+        finish_reason: 'tool_calls',
+      },
+      { content: 'fin', tool_calls: [], finish_reason: 'stop' },
+    ]);
+    const events: string[] = [];
+    await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 5,
+      events: {
+        onRound: (n) => events.push(`round:${n}`),
+        onToolStart: (n) => events.push(`start:${n}`),
+        onToolResult: (n, ok) => events.push(`result:${n}:${ok}`),
+      },
+    });
+    // round 1 (with tool), tool start/result, round 2 (final).
+    expect(events[0]).toBe('round:1');
+    expect(events[1]).toBe('start:list');
+    expect(events[2]?.startsWith('result:list:')).toBe(true);
+    expect(events[3]).toBe('round:2');
+  });
+});
