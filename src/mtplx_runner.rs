@@ -515,7 +515,12 @@ pub fn summarize_running_config(running_cmd: &str) -> Vec<(&'static str, String)
         ("context", format!("{} tokens", get("--context-window"))),
         (
             "sampling",
-            format!("temp={} top-p={}", get("--temperature"), get("--top-p"),),
+            format!(
+                "temp={} top-p={} top-k={}",
+                get("--temperature"),
+                get("--top-p"),
+                get("--draft-top-k"),
+            ),
         ),
         ("reasoning", get("--reasoning-parser")),
     ]
@@ -756,7 +761,11 @@ pub fn render_status(state: &MtplxState) {
     // Config status (only meaningful when the server is running).
     if let Some(delta) = state.config_status() {
         if delta.is_optimal() {
-            eprintln!("  {d}config{r}:   {g}optimal{r} {d}(all canonical flags match){r}");
+            eprintln!(
+                "  {d}config{r}:   {g}optimal{r} {d}({}/{} canonical flags applied){r}",
+                OPTIMAL_FLAGS.iter().filter(|f| f.starts_with("--")).count(),
+                OPTIMAL_FLAGS.iter().filter(|f| f.starts_with("--")).count(),
+            );
         } else {
             eprintln!(
                 "  {d}config{r}:   {w}suboptimal{r} {d}({} delta(s)){r}",
@@ -768,17 +777,39 @@ pub fn render_status(state: &MtplxState) {
         }
         if let Some(cmd) = &state.running_command {
             let details = summarize_running_config(cmd);
-            eprintln!("  {d}details{r}:");
-            for (label, value) in &details {
-                eprintln!("    {d}{:<11}{r} {a}{}{r}", label, value);
+            // "active configuration:" frames the block as "what's running
+            // right now" rather than passive "details," which several
+            // users misread as developer-only diagnostics.
+            eprintln!("  {d}active configuration{r}:");
+            if let Some(pid) = state.server_pid {
+                eprintln!("    {d}{:<12}{r} {a}{}{r}", "pid", pid);
             }
-            // hip-side response cap. Lives on hip not MTPLX, but users
+            eprintln!(
+                "    {d}{:<12}{r} {a}{}{r}",
+                "python",
+                state.python_path.display()
+            );
+            for (label, value) in &details {
+                eprintln!("    {d}{:<12}{r} {a}{}{r}", label, value);
+            }
+            // hip-side per-response cap. Lives on hip not MTPLX, but users
             // care about it just as much when reasoning about turn length.
             let cap = crate::client::SamplingOpts::default().max_tokens;
             eprintln!(
-                "    {d}{:<11}{r} {a}{}{r} {d}max-tokens (hip default; --max-tokens overrides){r}",
+                "    {d}{:<12}{r} {a}{}{r} {d}max-tokens (hip default; --max-tokens overrides per call){r}",
                 "hip cap", cap
             );
+            // Env vars hip launches the server with. Worth showing because
+            // MTPLX_MTP_LONG_CONTEXT_LADDER="" is a non-obvious workaround
+            // and a future reader needs to know it's intentional.
+            if !OPTIMAL_ENV.is_empty() {
+                let env_str = OPTIMAL_ENV
+                    .iter()
+                    .map(|(k, v)| format!("{}=\"{}\"", k, v))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                eprintln!("    {d}{:<12}{r} {a}{}{r}", "env", env_str);
+            }
         }
     } else if state.is_running() {
         eprintln!("  {d}config{r}:   {w}(running but no command line readable){r}");
@@ -1018,7 +1049,7 @@ mod tests {
         let cmd = "python -m mtplx.server.openai --model /m/path --host 127.0.0.1 --port 8088 \
             --depth 3 --generation-mode mtp --profile sustained \
             --verify-core linear-gdn-from-conv-tape --context-window 128000 \
-            --temperature 0.6 --top-p 0.95 --reasoning-parser qwen3 \
+            --temperature 0.6 --top-p 0.95 --draft-top-k 20 --reasoning-parser qwen3 \
             --model-id mtplx-qwen36-27b-optimized-speed";
         let rows = summarize_running_config(cmd);
         let map: std::collections::HashMap<_, _> = rows.into_iter().collect();
@@ -1030,7 +1061,7 @@ mod tests {
         assert_eq!(map.get("decode").unwrap(), "mtp depth=3 profile=sustained");
         assert_eq!(map.get("verify core").unwrap(), "linear-gdn-from-conv-tape");
         assert_eq!(map.get("context").unwrap(), "128000 tokens");
-        assert_eq!(map.get("sampling").unwrap(), "temp=0.6 top-p=0.95");
+        assert_eq!(map.get("sampling").unwrap(), "temp=0.6 top-p=0.95 top-k=20");
         assert_eq!(map.get("reasoning").unwrap(), "qwen3");
     }
 
