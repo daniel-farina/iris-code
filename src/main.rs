@@ -217,7 +217,9 @@ struct Cli {
     #[arg(long)]
     top_k: Option<u32>,
 
-    /// Max output tokens per turn (default 16384).
+    /// Max output tokens per turn (default 4096). Agent loop auto-continues
+    /// when this cap is hit, so longer answers split across rounds rather
+    /// than stalling.
     #[arg(long)]
     max_tokens: Option<u32>,
 

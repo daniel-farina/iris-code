@@ -41,14 +41,13 @@ impl Default for SamplingOpts {
             temperature: 0.6,
             top_p: 0.95,
             top_k: 20,
-            // Set effectively-unlimited so the model decides when to stop,
-            // not the sampler cap. The MTPLX server clamps internally to
-            // (context_length - prompt_tokens), so picking a number larger
-            // than the context window is safe — it just means "no cap from
-            // our side". Was 16384, which truncated mid-explanation on
-            // long file reads and made the model look like it had stopped
-            // when it was actually capped. --max-tokens still overrides.
-            max_tokens: 128_000,
+            // 4K default response cap. Keeps turns snappy and bounds the
+            // per-response token spend; users override with --max-tokens
+            // when they need a longer response (e.g. file dumps, long
+            // explanations). The agent loop auto-continues when the
+            // model hits this cap, so a truncated answer doesn't stall
+            // the conversation -- it just splits across rounds.
+            max_tokens: 4096,
             enable_thinking: false,
         }
     }
