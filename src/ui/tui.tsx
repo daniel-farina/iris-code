@@ -6,7 +6,7 @@
 import { Box, Static, Text, render, useApp, useInput, useStdout } from 'ink';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
-import React, { type FC, useRef, useState } from 'react';
+import React, { type FC, useEffect, useRef, useState } from 'react';
 // React is referenced by jsxFactory (tsconfig: jsx=react). Keep this
 // import even though TypeScript can't see the usage in JSX.
 void React;
@@ -16,6 +16,7 @@ import { generateAutoSessionId } from '../config.js';
 import { type ChatMessage, systemMessage, userMessage } from '../schema.js';
 import { updateSession } from '../session_store.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../system_prompt.js';
+import { nextHippoWord, randomHippoWord } from './hippo_words.js';
 import { listLoops, parseLoopInput, scheduleLoop, stopAllLoops, stopLoop } from './loop.js';
 import { emptyStats, formatPerTool, formatStats } from './stats.js';
 import {
@@ -95,6 +96,13 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   // removes, Esc exits queue mode.
   const [queue, setQueue] = useState<string[]>([]);
   const [queueIdx, setQueueIdx] = useState<number>(-1); // -1 = not editing queue
+  // Animated hippo-themed status word that rotates every ~1.5s while
+  // busy. Mirrors claude-code's "Smithing... (12s)" pattern. The pool
+  // lives in ui/hippo_words.ts. We also track when busy started so we
+  // can render the elapsed seconds next to the word.
+  const [hippoWord, setHippoWord] = useState<string>(randomHippoWord());
+  const [busyElapsed, setBusyElapsed] = useState<number>(0);
+  const busyStartRef = useRef<number>(0);
   // Claude-code-style Ctrl-C: first press cancels in-flight work; if
   // nothing is running, first press "arms" the exit (shows a hint) and
   // a second press within the timeout window confirms exit.
@@ -105,6 +113,28 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       exitArmedRef.current = null;
     }
   };
+  // While busy, rotate the hippo word + tick the elapsed counter every
+  // second. The hippoWord cycles independently every ~1.5s; elapsed
+  // ticks at 1Hz. Both stop and reset on busy=false.
+  useEffect(() => {
+    if (!busy) {
+      setBusyElapsed(0);
+      return;
+    }
+    busyStartRef.current = performance.now();
+    setHippoWord(randomHippoWord());
+    const wordTimer = setInterval(() => {
+      setHippoWord((w) => nextHippoWord(w));
+    }, 1500);
+    const elapsedTimer = setInterval(() => {
+      setBusyElapsed(Math.floor((performance.now() - busyStartRef.current) / 1000));
+    }, 1000);
+    return () => {
+      clearInterval(wordTimer);
+      clearInterval(elapsedTimer);
+    };
+  }, [busy]);
+
   // Wraps Ink's exit() with a session-persist + resume hint printed to
   // stderr (survives Ink's screen restore). Mirrors claude-code's exit
   // banner that tells the user how to pick up where they left off.
@@ -288,7 +318,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     setTranscript((prev) => [...prev, { kind: 'user', text: t }]);
     convRef.current.push(userMessage(t));
     setBusy(true);
-    setStatus('thinking...');
+    setStatus(''); // let the hippo-word rotator render the default state
 
     // Streaming buffer + live region. Updates to liveText re-render
     // ONLY the live box, not the whole transcript (which is inside
@@ -319,7 +349,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         }
       },
       onTtft: () => {
-        setStatus('streaming');
+        // No-op: rotator carries the visual indication of progress.
       },
     });
 
@@ -384,6 +414,8 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
               };
             });
             setTranscript((p) => [...p, { kind: 'tool', name, args, ok, body }]);
+            // Tool finished; let the rotator resume during the next think.
+            setStatus('');
           },
         },
       });
@@ -894,13 +926,15 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
           {convRef.current.length > 30 ? ' · /compact recommended' : ''}
         </Text>
       </Box>
-      {/* Status row: spinner + label appears when busy, but the input
-          stays mounted below so the user can keep typing into the
-          queue. */}
+      {/* Status row: spinner + animated hippo-themed verb + elapsed
+          seconds while busy. The input stays mounted below so the
+          user can type into the queue without losing the spinner.
+          Specific transient messages (e.g. "press Ctrl-C again to
+          exit") override the rotation when status is non-empty. */}
       {busy && (
         <Box>
           <Spinner type="dots" />
-          <Text color={HIPPO_MUSTARD}> {status}</Text>
+          <Text color={HIPPO_MUSTARD}>{` ${status || `${hippoWord}...`} (${busyElapsed}s)`}</Text>
         </Box>
       )}
       <Box>
