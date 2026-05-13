@@ -772,6 +772,13 @@ pub fn render_status(state: &MtplxState) {
             for (label, value) in &details {
                 eprintln!("    {d}{:<11}{r} {a}{}{r}", label, value);
             }
+            // hip-side response cap. Lives on hip not MTPLX, but users
+            // care about it just as much when reasoning about turn length.
+            let cap = crate::client::SamplingOpts::default().max_tokens;
+            eprintln!(
+                "    {d}{:<11}{r} {a}{}{r} {d}max-tokens (hip default; --max-tokens overrides){r}",
+                "hip cap", cap
+            );
         }
     } else if state.is_running() {
         eprintln!("  {d}config{r}:   {w}(running but no command line readable){r}");
@@ -865,7 +872,8 @@ pub fn is_running_stale(state: &MtplxState, just_pulled: bool) -> bool {
 
 /// Stop the running server (if any) and respawn it with the optimal
 /// config using state.python_path. Waits up to 5 min for the new server
-/// to bind. Reports progress to stderr at every step.
+/// to bind, then prints a before/after diff of the running config so
+/// users see exactly which fields changed across the restart.
 pub async fn restart_with_optimal_config(state: &MtplxState) {
     use crate::theme::{accent, dim, good, warn, RESET};
     let d = dim();
@@ -873,6 +881,8 @@ pub async fn restart_with_optimal_config(state: &MtplxState) {
     let g = good();
     let w = warn();
     let r = RESET;
+
+    let before_cmd = state.running_command.clone();
 
     eprintln!();
     eprintln!("  {d}restarting MTPLX with optimal config to pick up the new code...{r}");
@@ -886,6 +896,8 @@ pub async fn restart_with_optimal_config(state: &MtplxState) {
             let up = wait_until_listening(Duration::from_secs(300)).await;
             if up {
                 eprintln!("  {g}✓{r} MTPLX is listening on :{}", OPTIMAL_PORT);
+                let after_cmd = running_command_line();
+                render_config_diff(before_cmd.as_deref(), after_cmd.as_deref());
             } else {
                 eprintln!(
                     "  {w}!{r} MTPLX didn't bind within 5 min; tail {a}{}{r} for diagnostics",
@@ -896,6 +908,55 @@ pub async fn restart_with_optimal_config(state: &MtplxState) {
         Err(e) => {
             eprintln!("  {w}!{r} failed to spawn MTPLX: {}", e);
         }
+    }
+}
+
+/// Render a side-by-side diff of two running command lines via their
+/// `summarize_running_config` summaries. Unchanged rows are skipped; for
+/// each changed row we print a `-` (red, old) and `+` (green, new) pair.
+/// When everything matches we print a one-line "config unchanged".
+fn render_config_diff(before: Option<&str>, after: Option<&str>) {
+    use crate::theme::{accent, bad, dim, good, RESET};
+    let d = dim();
+    let a = accent();
+    let g = good();
+    let b = bad();
+    let r = RESET;
+
+    let (before, after) = match (before, after) {
+        (Some(o), Some(n)) => (o, n),
+        // Can't diff if either side is missing; skip silently.
+        _ => return,
+    };
+    let old_rows = summarize_running_config(before);
+    let new_rows = summarize_running_config(after);
+
+    let mut changes: Vec<(&'static str, String, String)> = Vec::new();
+    for ((ol, ov), (_, nv)) in old_rows.iter().zip(new_rows.iter()) {
+        if ov != nv {
+            changes.push((ol, ov.clone(), nv.clone()));
+        }
+    }
+
+    eprintln!();
+    if changes.is_empty() {
+        eprintln!("  {d}config unchanged after restart{r}");
+    } else {
+        eprintln!(
+            "  {d}config diff{r} {d}({} field(s) changed){r}:",
+            changes.len()
+        );
+        for (label, old, new) in &changes {
+            eprintln!("    {b}-{r} {d}{:<11}{r} {b}{}{r}", label, old);
+            eprintln!("    {g}+{r} {d}{:<11}{r} {g}{}{r}", label, new);
+        }
+        // Also flag if hip's max-tokens default would now differ. Same
+        // logic but pulled from a constant rather than the running cmd.
+        let cap = crate::client::SamplingOpts::default().max_tokens;
+        eprintln!(
+            "    {a}={r} {d}{:<11}{r} {a}{}{r} {d}(hip max-tokens, unchanged across restart){r}",
+            "hip cap", cap
+        );
     }
 }
 
