@@ -359,7 +359,22 @@ async function runPrintMode(
     sessionId,
     onContent: (t) => process.stdout.write(t),
   });
-  const conv: ChatMessage[] = [...startConv, userMessage(flags.print)];
+  // If the incoming prompt explicitly says "start over" / "reset" / etc.,
+  // and the resumed conv has real history, wipe it and reseed with just
+  // the system message. Saves prefix-cache bloat and gives the model a
+  // clean head on the new task. Logged so the user sees what happened.
+  const { detectResetIntent } = await import('./topic_detect.js');
+  let baseConv = startConv;
+  if (detectResetIntent(flags.print, startConv.length)) {
+    const sysMsg = startConv.find((m) => m.role === 'system');
+    baseConv = sysMsg ? [sysMsg] : [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)];
+    if (!flags.quiet) {
+      process.stderr.write(
+        `[hip] detected reset/new-task signal in prompt; cleared ${startConv.length - baseConv.length} prior messages\n`,
+      );
+    }
+  }
+  const conv: ChatMessage[] = [...baseConv, userMessage(flags.print)];
   let completionTokens = 0;
   let compactFires = 0;
   let compactSavedTokens = 0;
