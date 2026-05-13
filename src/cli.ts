@@ -305,7 +305,7 @@ async function main() {
 async function resolveSessionAndConv(
   flags: Flags,
 ): Promise<{ resolvedSessionId: string; startConv: ChatMessage[] }> {
-  const { findSession, lastSession } = await import('./session_store.js');
+  const { findSession, lastSession, lastSessionForCwd } = await import('./session_store.js');
   if (flags.resume) {
     const rec = await findSession(flags.resume);
     if (!rec) {
@@ -315,11 +315,17 @@ async function resolveSessionAndConv(
       return { resolvedSessionId: rec.session_id, startConv: rec.conv };
     }
   } else if (flags.continueLast) {
-    const rec = await lastSession();
+    // Prefer a session from the CURRENT cwd. Falls back to the
+    // global-latest if nothing matches (covers fresh installs / new
+    // dirs where the user wants the most recent anyway).
+    const rec = (await lastSessionForCwd(process.cwd())) ?? (await lastSession());
     if (!rec) {
       process.stderr.write('[hip] no prior sessions; starting fresh\n');
     } else {
-      process.stderr.write(`[hip] continuing ${rec.session_id} (${rec.conv.length} msgs)\n`);
+      const cwdHint = rec.cwd === process.cwd() ? '' : ` (from ${rec.cwd})`;
+      process.stderr.write(
+        `[hip] continuing ${rec.session_id} (${rec.conv.length} msgs)${cwdHint}\n`,
+      );
       return { resolvedSessionId: rec.session_id, startConv: rec.conv };
     }
   }

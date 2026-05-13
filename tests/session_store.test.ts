@@ -66,6 +66,39 @@ describe('session_store', () => {
     expect(rec?.first_user).toBe('v2');
   });
 
+  it('lastSessionForCwd filters by cwd', async () => {
+    const mod = await import('../src/session_store.js?fresh=' + Date.now());
+    await mod.appendSession({
+      session_id: 'p1-a',
+      ts_unix: 1,
+      cwd: '/tmp/project-a',
+      first_user: 'a1',
+      conv: [{ role: 'user', content: 'a1' }],
+    });
+    await mod.appendSession({
+      session_id: 'p2-a',
+      ts_unix: 2,
+      cwd: '/tmp/project-b',
+      first_user: 'b1',
+      conv: [{ role: 'user', content: 'b1' }],
+    });
+    await mod.appendSession({
+      session_id: 'p1-b',
+      ts_unix: 3,
+      cwd: '/tmp/project-a',
+      first_user: 'a2',
+      conv: [{ role: 'user', content: 'a2' }],
+    });
+    // Global last is project-b session (most recent overall).
+    expect((await mod.lastSession())?.session_id).toBe('p1-b');
+    // Cwd-scoped picks the latest in /tmp/project-a (p1-b), even though
+    // a more recent session exists in project-b.
+    expect((await mod.lastSessionForCwd('/tmp/project-a'))?.session_id).toBe('p1-b');
+    expect((await mod.lastSessionForCwd('/tmp/project-b'))?.session_id).toBe('p2-a');
+    // No match → undefined.
+    expect(await mod.lastSessionForCwd('/tmp/never-used')).toBeUndefined();
+  });
+
   it('updateSession overwrites the matching record', async () => {
     const mod = await import('../src/session_store.js?fresh=' + Date.now());
     await mod.appendSession({

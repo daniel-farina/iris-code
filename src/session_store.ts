@@ -95,6 +95,17 @@ export async function lastSession(): Promise<SessionRecord | undefined> {
   return all[all.length - 1];
 }
 
+/** Most recent session whose cwd matches the given path. Used by
+ *  --continue-last so the user resumes THIS project's last conv, not
+ *  some unrelated dir's. Falls back to undefined if nothing matches. */
+export async function lastSessionForCwd(cwd: string): Promise<SessionRecord | undefined> {
+  const all = await readAllSessions();
+  for (let i = all.length - 1; i >= 0; i--) {
+    if (all[i]?.cwd === cwd) return all[i];
+  }
+  return undefined;
+}
+
 /** Replace the conversation for an existing session id (rewrites the
  * whole sessions.jsonl with the updated record). Cheap for normal sizes;
  * if the log grows huge we'd switch to one-file-per-session. */
