@@ -47,6 +47,8 @@ interface Flags {
   installInfo?: boolean;
   version?: boolean;
   help?: boolean;
+  /** TUI only: when false, suppresses the conv>9K-token auto-/compact. */
+  autoCompact?: boolean;
 }
 
 const VERSION = '0.4.1-dev';
@@ -79,6 +81,7 @@ export function parseFlags(argv: string[]): Flags {
       'postcommit-delay': { type: 'string' },
       update: { type: 'boolean' },
       'install-info': { type: 'boolean' },
+      'no-auto-compact': { type: 'boolean' },
       version: { type: 'boolean', short: 'V' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -120,6 +123,7 @@ export function parseFlags(argv: string[]): Flags {
     ),
     update: (values.update as boolean | undefined) ?? false,
     installInfo: (values['install-info'] as boolean | undefined) ?? false,
+    autoCompact: !((values['no-auto-compact'] as boolean | undefined) ?? false),
     version: (values.version as boolean | undefined) ?? false,
     help: (values.help as boolean | undefined) ?? false,
   };
@@ -146,6 +150,7 @@ Options:
   --list-tools                       print the tool spec (json) and exit
   --max-time <seconds>               --print mode: hard wall-clock cap; aborts the agent loop
   --postcommit-delay <ms>            max time to wait for MTPLX postcommit between rounds when prompt >8K tok (polls; default ${DEFAULT_POSTCOMMIT_DELAY_MS}, 0 disables)
+  --no-auto-compact                  TUI: disable auto-/compact when conv approaches ~9K tokens
   --update                           download + install the latest release from GitHub
   --install-info                     print where hip is installed and the target platform
   --max-tokens <n>                   max output tokens per turn (default ${DEFAULT_MAX_TOKENS})

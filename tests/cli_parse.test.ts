@@ -70,4 +70,9 @@ describe('parseFlags', () => {
     expect(parseFlags([]).maxTime).toBe(0);
     expect(() => parseFlags(['--max-time', 'xyz'])).toThrow(/--max-time/);
   });
+
+  it('autoCompact defaults to true, --no-auto-compact flips it', () => {
+    expect(parseFlags([]).autoCompact).toBe(true);
+    expect(parseFlags(['--no-auto-compact']).autoCompact).toBe(false);
+  });
 });

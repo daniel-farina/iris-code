@@ -16,6 +16,7 @@ import { generateAutoSessionId } from '../config.js';
 import { type ChatMessage, systemMessage, userMessage } from '../schema.js';
 import { updateSession } from '../session_store.js';
 import { DEFAULT_SYSTEM_PROMPT } from '../system_prompt.js';
+import { estimateTokens, formatTokens, shouldAutoCompact } from './auto_compact.js';
 import { nextHippoWord, randomHippoWord } from './hippo_words.js';
 import { listLoops, parseLoopInput, scheduleLoop, stopAllLoops, stopLoop } from './loop.js';
 import { emptyStats, formatPerTool, formatStats } from './stats.js';
@@ -41,6 +42,8 @@ interface TuiFlags {
   topK: number;
   system?: string;
   postcommitDelayMs?: number;
+  /** When false, suppresses the conv>9K-token auto-compact trigger. */
+  autoCompact?: boolean;
 }
 
 type TranscriptItem =
@@ -76,6 +79,9 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   const [runtimeTemperature, setRuntimeTemperature] = useState(flags.temperature);
   const [runtimeTopP, setRuntimeTopP] = useState(flags.topP);
   const [runtimeTopK, setRuntimeTopK] = useState(flags.topK);
+  // Auto-/compact toggle: defaults to on (flags.autoCompact undefined or true).
+  // Off when --no-auto-compact was passed or after /auto-compact off.
+  const [autoCompactOn, setAutoCompactOn] = useState<boolean>(flags.autoCompact !== false);
   const convRef = useRef<ChatMessage[]>([systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)]);
   const abortRef = useRef<AbortController | null>(null);
   const [stats, setStats] = useState(() => emptyStats());
@@ -292,6 +298,86 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     }
   }
 
+  /** Runs the compact flow: asks the model for a terse summary of the
+   *  current conv, then replaces the conv with [system, user(summary),
+   *  assistant(ack)]. Invoked manually from /compact, or automatically
+   *  when shouldAutoCompact fires after a round. The `trigger` arg
+   *  changes the transcript line so the user can tell which path ran. */
+  async function runCompact(trigger: 'manual' | 'auto'): Promise<void> {
+    if (convRef.current.length <= 3) {
+      if (trigger === 'manual') {
+        setTranscript((p) => [
+          ...p,
+          { kind: 'system', text: '[nothing to compact - conv is already short]' },
+        ]);
+      }
+      return;
+    }
+    const originalCount = convRef.current.length;
+    const tokensBefore = estimateTokens(convRef.current);
+    setBusy(true);
+    setStatus(trigger === 'auto' ? 'auto-compacting...' : 'compacting...');
+    try {
+      const client = new MtplxClient({
+        baseUrl: flags.url,
+        model: runtimeModel,
+        sessionId,
+      });
+      const summarizeConv: ChatMessage[] = [
+        ...convRef.current,
+        {
+          role: 'user',
+          content:
+            'Summarize the conversation above in 5-10 bullet points: what was asked, what was done (files changed, decisions made), and any unresolved threads. Be terse - this is for resuming the session, not for the user.',
+        },
+      ];
+      const res = await client.stream(summarizeConv, undefined, {
+        temperature: runtimeTemperature,
+        top_p: runtimeTopP,
+        top_k: runtimeTopK,
+        max_tokens: 1500,
+      });
+      const summary = res.content.trim();
+      if (!summary) {
+        setTranscript((p) => [...p, { kind: 'system', text: '[compact failed - empty summary]' }]);
+        return;
+      }
+      convRef.current = [
+        systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT),
+        userMessage(`[Compacted session summary]\n${summary}`),
+        { role: 'assistant', content: 'OK, continuing from the summary.' },
+      ];
+      const tokensAfter = estimateTokens(convRef.current);
+      if (trigger === 'auto') {
+        // Single-line banner the user requested - prints the before/after
+        // token estimate so they know auto-compact fired (and why).
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: `[auto-compact at ${formatTokens(tokensBefore)} tokens → ${formatTokens(tokensAfter)}]`,
+          },
+        ]);
+      } else {
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: `[compacted ${originalCount} msgs into a summary; conv is now ${convRef.current.length} msgs]\n\n${summary}`,
+          },
+        ]);
+      }
+    } catch (e) {
+      setTranscript((p) => [
+        ...p,
+        { kind: 'system', text: `[compact error] ${(e as Error).message}` },
+      ]);
+    } finally {
+      setBusy(false);
+      setStatus('');
+    }
+  }
+
   async function dispatchPrompt(text: string) {
     const t = text.trim();
     if (!t) return;
@@ -449,6 +535,14 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       setStatus('');
       // Persist after every turn so the REPL session survives an exit.
       void persistCurrentSession();
+      // Auto-compact: if conv crossed the ~10K-token eviction cliff,
+      // summarize before the next round so MTPLX keeps our session
+      // bank slot warm. Fires before the queue drain so the next
+      // queued prompt starts from a short prefix. setTimeout(0) so we
+      // don't stack on top of React's render cycle.
+      if (shouldAutoCompact(convRef.current, autoCompactOn)) {
+        setTimeout(() => void runCompact('auto'), 0);
+      }
       // Drain one queued message if any. Fires-and-forgets the recursion
       // so we don't stack-overflow on a huge queue (await would block
       // the React finally chain).
@@ -500,7 +594,9 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
             runtimeModel +
             ')\n  /top-p [0-1|default]        get/set sampler top-p\n  /top-k [int|default]        get/set sampler top-k\n  /temperature [0-2|default]  get/set sampler temperature (current ' +
             runtimeTemperature +
-            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)',
+            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)\n  /auto-compact [on|off]      toggle auto-/compact at ~9K tokens (current ' +
+            (autoCompactOn ? 'on' : 'off') +
+            ')',
         },
       ]);
       return true;
@@ -587,69 +683,22 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     // replace it with [system, user(summary), assistant(ack)]. Keeps the
     // prefix cache small for long-running iterative work.
     if (lower === '/compact' || lower === ':compact') {
-      if (convRef.current.length <= 3) {
+      void runCompact('manual');
+      return true;
+    }
+    // /auto-compact on|off: toggle the conv>9K-token auto-compact trigger.
+    const acm = lower.match(/^[/:]auto-compact(?:\s+(on|off))?\s*$/);
+    if (acm) {
+      const arg = acm[1];
+      if (!arg) {
         setTranscript((p) => [
           ...p,
-          { kind: 'system', text: '[nothing to compact - conv is already short]' },
+          { kind: 'system', text: `auto-compact = ${autoCompactOn ? 'on' : 'off'}` },
         ]);
-        return true;
+      } else {
+        setAutoCompactOn(arg === 'on');
+        setTranscript((p) => [...p, { kind: 'system', text: `auto-compact = ${arg}` }]);
       }
-      const originalCount = convRef.current.length;
-      setBusy(true);
-      setStatus('compacting...');
-      void (async () => {
-        try {
-          const client = new MtplxClient({
-            baseUrl: flags.url,
-            model: runtimeModel,
-            sessionId,
-          });
-          // Append a summarize ask to the current conv, no tools.
-          const summarizeConv: ChatMessage[] = [
-            ...convRef.current,
-            {
-              role: 'user',
-              content:
-                'Summarize the conversation above in 5-10 bullet points: what was asked, what was done (files changed, decisions made), and any unresolved threads. Be terse - this is for resuming the session, not for the user.',
-            },
-          ];
-          const res = await client.stream(summarizeConv, undefined, {
-            temperature: runtimeTemperature,
-            top_p: runtimeTopP,
-            top_k: runtimeTopK,
-            max_tokens: 1500,
-          });
-          const summary = res.content.trim();
-          if (!summary) {
-            setTranscript((p) => [
-              ...p,
-              { kind: 'system', text: '[compact failed - empty summary]' },
-            ]);
-            return;
-          }
-          // Reset conv to [system, user(summary), assistant(ack)].
-          convRef.current = [
-            systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT),
-            userMessage(`[Compacted session summary]\n${summary}`),
-            { role: 'assistant', content: 'OK, continuing from the summary.' },
-          ];
-          setTranscript((p) => [
-            ...p,
-            {
-              kind: 'system',
-              text: `[compacted ${originalCount} msgs into a summary; conv is now ${convRef.current.length} msgs]\n\n${summary}`,
-            },
-          ]);
-        } catch (e) {
-          setTranscript((p) => [
-            ...p,
-            { kind: 'system', text: `[compact error] ${(e as Error).message}` },
-          ]);
-        } finally {
-          setBusy(false);
-          setStatus('');
-        }
-      })();
       return true;
     }
     if (lower === '/tools' || lower === ':tools') {
