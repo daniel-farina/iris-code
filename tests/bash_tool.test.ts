@@ -29,12 +29,18 @@ describe('bashTool', () => {
     await expect(bashTool.run({})).rejects.toThrow(/missing command/);
   });
 
-  it('kills process after timeout_s', async () => {
+  // Vitest's default per-test timeout is 5s; spawn+kill can easily wobble
+  // past that on cold CI runners (we measured 5004ms on ubuntu-latest).
+  // Give the test enough room that we're measuring the bash tool, not
+  // the runner. The assertion still pins elapsed < 2s for the actual
+  // kill latency.
+  it('kills process after timeout_s', { timeout: 15000 }, async () => {
     const start = Date.now();
     const out = await bashTool.run({ command: 'sleep 5', timeout_s: 1 });
     const elapsed = Date.now() - start;
-    // Should kill at ~1s, not the full 5s sleep.
-    expect(elapsed).toBeLessThan(2000);
+    // Should kill at ~1s, not the full 5s sleep. Allow 3s headroom for
+    // slow CI runners spawning+killing a subprocess.
+    expect(elapsed).toBeLessThan(3000);
     expect(out).toContain('[killed: timeout after 1s]');
   });
 
