@@ -275,10 +275,54 @@ async fn check_mtplx_updates() {
 
     render_status(&state);
 
+    // Brew installs: also offer the picker so users who want the fork
+    // (with the local long-context-ladder patch) get nudged at every
+    // --update. If they pick fork on a brew install we can't auto-flip
+    // them (brew formula points at upstream), but we print exact
+    // instructions to overlay the fork via pip in the brew venv.
+    if let InstallKind::Brew { .. } = state.kind {
+        let default_src = read_persisted_source().unwrap_or_else(MtplxSource::fork);
+        match read_persisted_source() {
+            Some(persisted) if persisted.label == default_src.label => {
+                eprintln!(
+                    "  {d}source preference{r}: {a}{} @ {}{r} {d}(already persisted; --pick-source to change){r}",
+                    persisted.repo, persisted.branch
+                );
+            }
+            _ => {
+                let c = prompt_mtplx_source(default_src);
+                persist_source(&c);
+                if c.label == "fork" {
+                    eprintln!();
+                    eprintln!(
+                        "  {w}!{r} you're on a brew install which serves {a}youssofal/mtplx{r}."
+                    );
+                    eprintln!(
+                        "    To run the fork's code with brew's venv (one-time overlay), clone"
+                    );
+                    eprintln!("    the fork and pip-install it over the brew install:");
+                    eprintln!();
+                    eprintln!(
+                        "      {a}git clone https://github.com/daniel-farina/MTPLX ~/code/MTPLX{r}"
+                    );
+                    eprintln!(
+                        "      {a}/opt/homebrew/var/mtplx/venv-*/bin/pip install --force-reinstall --no-deps ~/code/MTPLX{r}"
+                    );
+                    eprintln!();
+                    eprintln!(
+                        "    Note: next {a}brew upgrade mtplx{r} will revert this. For a permanent"
+                    );
+                    eprintln!(
+                        "    switch, use {a}hip --setup{r} to install from a git checkout instead."
+                    );
+                }
+            }
+        }
+    }
+
     // For git installs only: offer the source picker. This lets the user
     // flip between upstream and the daniel-farina fork via the arrow-key
-    // selector. Brew installs don't have an equivalent (the formula
-    // points at one source by definition).
+    // selector and actually mutates the checkout's remote + branch.
     let mut just_switched = false;
     if let InstallKind::Git {
         repo_root,
