@@ -19,7 +19,8 @@ export interface SidecarConfig {
   url: string;
   /** Model id, e.g. gemma4:e2b. */
   model: string;
-  /** Hard cap on a single call. Default 3000ms. */
+  /** Hard cap on a single call. Default 10000ms (covers Ollama cold-load
+   *  on small models; warm calls land in 300-700ms). */
   timeoutMs?: number;
 }
 
@@ -34,7 +35,7 @@ export async function summarizeExchange(
   exchangeText: string,
   signal?: AbortSignal,
 ): Promise<string | null> {
-  const timeoutMs = cfg.timeoutMs ?? 3000;
+  const timeoutMs = cfg.timeoutMs ?? 10000;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   const composite = signal ? mergeSignals(signal, ctrl.signal) : ctrl.signal;
@@ -74,11 +75,16 @@ export async function summarizeExchange(
 export async function autoDetectSidecar(
   baseUrl = 'http://localhost:11434',
   preferred: readonly string[] = [
-    // Smaller / faster models first so we pick the cheapest available.
+    // Order by quality at the per-summary level (based on live testing
+    // 2026-05): Gemma 4 E4B beats E2B by a clear margin for one-line
+    // summaries — it preserves exported function names, file paths,
+    // and specific numbers verbatim. 2x the latency (~600ms vs ~300ms)
+    // but still well within the 1-17s MTPLX postcommit overlap window.
+    // Smaller tier comes after as a fallback when E4B isn't installed.
+    'gemma4:e4b',
+    'gemma4:e2b',
     'gemma3:1b',
     'llama3.2:1b',
-    'gemma4:e2b',
-    'gemma4:e4b',
     'qwen3:1.7b',
   ],
 ): Promise<SidecarConfig | null> {

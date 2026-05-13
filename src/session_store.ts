@@ -28,6 +28,10 @@ export interface SessionRecord {
   first_user: string;
   /** Full conversation (system + user/assistant/tool messages). */
   conv: ChatMessage[];
+  /** Optional sidecar-produced running summary (one sentence per round).
+   *  Persisted so a resumed session can skip the first main-model
+   *  summarize call and reuse the cheap sidecar lines. */
+  running_summary?: string[];
 }
 
 async function ensureDir(): Promise<void> {

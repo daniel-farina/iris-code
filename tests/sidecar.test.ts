@@ -95,8 +95,9 @@ describe('autoDetectSidecar', () => {
       ),
     ) as typeof fetch;
     const r = await autoDetectSidecar('http://localhost:11434');
-    // gemma3:1b is first in the preference list and is installed.
-    expect(r?.model).toBe('gemma3:1b');
+    // gemma4:e4b isn't installed; gemma4:e2b is next in the preference
+    // list and IS installed.
+    expect(r?.model).toBe('gemma4:e2b');
   });
 
   it('returns null if no preferred model is installed', async () => {
