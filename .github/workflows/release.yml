@@ -16,12 +16,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14         # apple silicon
-            target: mac-arm64
-          - os: macos-13         # intel
-            target: mac-x64
-          - os: ubuntu-latest    # x64 linux
-            target: linux-x64
+          # MLX (the model runtime MTPLX is built on) is Apple-Silicon
+          # only, so a Linux or Intel-Mac install would have nothing to
+          # talk to. We only build darwin-arm64. Triple matches the
+          # legacy install.sh naming so the existing `curl ... | sh`
+          # one-liner keeps working across the Rust→TS transition.
+          - os: macos-14
+            target: darwin-arm64
     steps:
       - uses: actions/checkout@v4
 

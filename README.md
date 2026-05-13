@@ -21,17 +21,20 @@ Sleek Ink-based TUI inspired by claude-code; tool-call agent loop with parity to
 ## Install
 
 ```sh
-# from a release tarball:
-curl -L https://github.com/daniel-farina/hippo-code/releases/latest/download/hip-<version>-<target>.tar.gz | tar -xzf -
-cd hip-<version> && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/daniel-farina/hippo-code/main/install.sh | sh
+```
 
-# from source:
+Or from source:
+
+```sh
 git clone https://github.com/daniel-farina/hippo-code.git
 cd hippo-code && bun install
 ./bin/hip --version
 ```
 
-Requires [bun](https://bun.sh) on PATH and an MTPLX server running locally (default `http://127.0.0.1:8088/v1`).
+Requires [bun](https://bun.sh) on PATH, Apple Silicon, and an MTPLX server running locally (default `http://127.0.0.1:8088/v1`). MLX is Apple-Silicon-only, so the release tarball is mac-arm64 only.
+
+Updating an existing install: `hip --update` downloads the latest release and atomically swaps the files (previous version backed up alongside as `*.prev`).
 
 ## Use
 

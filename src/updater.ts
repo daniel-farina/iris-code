@@ -29,11 +29,14 @@ interface GHRelease {
 function targetTriple(): string {
   const plat = nodePlatform();
   const arch = nodeArch();
-  if (plat === 'darwin' && arch === 'arm64') return 'mac-arm64';
-  if (plat === 'darwin' && arch === 'x64') return 'mac-x64';
-  if (plat === 'linux' && arch === 'x64') return 'linux-x64';
-  if (plat === 'linux' && arch === 'arm64') return 'linux-arm64';
-  throw new Error(`unsupported platform: ${plat}/${arch}`);
+  // MLX (MTPLX's runtime) is Apple-Silicon-only, so we only ship for
+  // darwin-arm64. Other platforms get a clear error.
+  if (plat === 'darwin' && arch === 'arm64') return 'darwin-arm64';
+  throw new Error(
+    `unsupported platform: ${plat}/${arch}. hip only ships for darwin-arm64 ` +
+      `(MLX/MTPLX is Apple-Silicon-only). Run from source instead: ` +
+      `'git clone https://github.com/daniel-farina/hippo-code && cd hippo-code && bun install && ./bin/hip'.`,
+  );
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
