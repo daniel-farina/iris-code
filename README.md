@@ -1,22 +1,11 @@
+<p align="center">
+  <img src="docs/hippo-logo.png" alt="hippo-code" width="420" />
+</p>
+
 # hip
 
 Lean coding agent for the [MTPLX](https://github.com/daniel-farina/MTPLX) local model server.
 Sleek Ink-based TUI inspired by claude-code; tool-call agent loop with parity to the [Rust hip](./_old_version_backup) it replaces.
-
-```
-                           ████         ████▌    █        ▀
-                           ████         ████▌    █ ▄▄   ▄▄▄    ▄▄▄▄   ▄▄▄▄    ▄▄▄
-                            ▐██████████████     █▀  █    █    █▀ ▀█  █▀ ▀█  █▀ ▀█
-                                                █   █    █    █   █  █   █  █   █
-                                                █   █  ▄▄█▄▄  ██▄█▀  ██▄█▀  ▀█▄█▀
-                                                              █      █
-                                                              ▀      ▀
-
-                                                       ▄▄▄    ▄▄▄    ▄▄▄█   ▄▄▄
-                                                       █▀  ▀  █▀ ▀█  █▀ ▀█  █▀  █
-                                                       █      █   █  █   █  █▀▀▀▀
-                                                       ▀█▄▄▀  ▀█▄█▀  ▀█▄██  ▀█▄▄▀
-```
 
 ## Install
 
