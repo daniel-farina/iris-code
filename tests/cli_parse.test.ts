@@ -84,4 +84,25 @@ describe('parseFlags', () => {
     // Bare flag followed by another flag still resolves to default 30.
     expect(parseFlags(['--clear-stale-sessions', '--quiet']).clearStaleSessionsMinutes).toBe(30);
   });
+
+  it('--session sets a stable session id', () => {
+    expect(parseFlags(['--session', 'my-proj']).session).toBe('my-proj');
+    expect(parseFlags([]).session).toBeUndefined();
+  });
+
+  it('HIP_SESSION env var is a fallback for --session; flag wins', () => {
+    const prev = process.env['HIP_SESSION'];
+    try {
+      process.env['HIP_SESSION'] = 'env-id';
+      expect(parseFlags([]).session).toBe('env-id');
+      // Explicit flag overrides the env var.
+      expect(parseFlags(['--session', 'flag-id']).session).toBe('flag-id');
+      // Empty/whitespace env var is treated as absent.
+      process.env['HIP_SESSION'] = '   ';
+      expect(parseFlags([]).session).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env['HIP_SESSION'];
+      else process.env['HIP_SESSION'] = prev;
+    }
+  });
 });

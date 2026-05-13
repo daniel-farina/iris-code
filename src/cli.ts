@@ -134,7 +134,11 @@ export function parseFlags(argv: string[]): Flags {
     print: printPrompt,
     url: (values.url as string | undefined) ?? DEFAULT_MTPLX_URL,
     model: (values.model as string | undefined) ?? DEFAULT_MODEL,
-    session: (values.session as string | undefined) ?? undefined,
+    // --session > $HIP_SESSION env var > undefined (auto-id at resolve).
+    // The env var lets shell wrappers / cron jobs pin a stable session id
+    // across hip invocations so MTPLX's session-bank LRU keeps the slot warm.
+    session:
+      (values.session as string | undefined) ?? (process.env['HIP_SESSION']?.trim() || undefined),
     maxTokens: num('max-tokens', values['max-tokens'] as string | undefined, DEFAULT_MAX_TOKENS),
     maxRounds: num('max-rounds', values['max-rounds'] as string | undefined, DEFAULT_MAX_ROUNDS),
     temperature: num('temperature', values.temperature as string | undefined, DEFAULT_TEMPERATURE),
@@ -175,7 +179,7 @@ Options:
   --print, --one-shot <prompt>       headless mode (also reads positional args)
   --url <url>                        MTPLX base URL (default ${DEFAULT_MTPLX_URL})
   --model <id>                       model id (default ${DEFAULT_MODEL})
-  --session <id>                     session id (default auto-YYYYMMDD-HHMMSS-<hex>)
+  --session <id>                     stable session id; reuse across hip runs so MTPLX's 8-slot session bank keeps the prefix cache warm (default auto-YYYYMMDD-HHMMSS-<hex>)
   -c, --continue-last                resume the most recent session from ~/.hip/sessions.jsonl
   --resume <id>                      resume a specific session id
   -q, --quiet                        --print mode: suppress tool-call logs on stderr (final answer only)
@@ -198,6 +202,7 @@ Options:
 Environment:
   MLX_CODE_URL                       overrides --url
   MLX_CODE_MODEL                     overrides --model
+  HIP_SESSION                        fallback for --session (--session flag wins)
   HIP_HOME                           override session-store dir (default ~/.hip)
 `);
 }

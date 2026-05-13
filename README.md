@@ -39,6 +39,18 @@ hip --help                          # all flags
 
 In the TUI: `/help` lists slash commands. Up arrow walks prompt history. Ctrl-C cancels a stream; press twice to exit. Esc clears input. Type while busy to queue messages.
 
+### Pinning a stable session id
+
+MTPLX keeps a small (8-slot) LRU "session bank" of warm prefix caches. If a long-prefix session goes idle while shorter sessions land, the bank can evict it (POLICY_MISMATCH) and the next request from hip pays the full prefill cost again. To keep the slot warm across hip invocations, pin a stable id:
+
+```sh
+hip --session my-project                          # same id every run
+HIP_SESSION=my-project hip                        # env var fallback
+hip --clear-stale-sessions=30 --session my-project  # also evict slots idle >30min at startup
+```
+
+The `--session` flag wins over `HIP_SESSION` which wins over the auto-generated `auto-YYYYMMDD-...` id. Combine with `--clear-stale-sessions` (default 30min cutoff if no value is passed) to proactively free slots held by older sessions.
+
 ## Highlights
 
 - **10 tools** with 1:1 parity to Rust hip: `read`, `search` (ripgrep), `grep`, `glob`, `edit`, `bash`, `list`, `tree`, `diff`, `peek_log`
