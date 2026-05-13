@@ -194,14 +194,11 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
     // with a stub here so subsequent rounds stay alive. The per-call
     // tool dispatch below sees the stub and surfaces a clear error to
     // the model.
-    const truncatedCalls: string[] = [];
     for (const call of res.tool_calls) {
       if (!call.function.arguments) continue;
       try {
         JSON.parse(call.function.arguments);
       } catch {
-        const sizeKb = (call.function.arguments.length / 1024).toFixed(1);
-        truncatedCalls.push(`${call.function.name} (${sizeKb}KB)`);
         call.function.arguments = JSON.stringify({
           _malformed: true,
           _hint:
