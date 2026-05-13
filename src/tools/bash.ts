@@ -31,12 +31,25 @@ export const bashTool: Tool = {
     const timeout_s = Math.min(argU64(args, 'timeout_s') ?? 30, 600);
 
     return new Promise<string>((resolve) => {
-      const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['ignore', 'pipe', 'pipe'] });
+      // detached: true creates a new process group so we can SIGKILL
+      // the whole group when the timeout fires. Otherwise on Linux,
+      // `/bin/sh -c "sleep 5"` may fork sleep as a child; killing the
+      // shell alone leaves sleep running and stdio pipes open, so
+      // child.on('close') waits until sleep exits naturally.
+      const child = spawn('/bin/sh', ['-c', cmd], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true,
+      });
       const chunks: Buffer[] = [];
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGKILL');
+        try {
+          if (child.pid) process.kill(-child.pid, 'SIGKILL'); // negative pid = whole group
+        } catch {
+          // Group may already be dead; fall back to direct kill.
+          child.kill('SIGKILL');
+        }
       }, timeout_s * 1000);
 
       child.stdout.on('data', (d: Buffer) => chunks.push(d));
