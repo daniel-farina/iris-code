@@ -26,13 +26,28 @@ export interface CompactResult {
   tokensAfter: number;
 }
 
-export const COMPACT_SUMMARIZE_PROMPT =
-  'Summarize the conversation above in 5-12 short bullet points covering: ' +
-  '(a) the original user goal, (b) what files were read/edited/created and why, ' +
-  '(c) any architectural decisions or constraints discovered, ' +
-  '(d) the immediate next step. Be terse and concrete; this summary will replace ' +
-  'the full conv so the model can keep working without losing context. ' +
-  'Do not address the user; write as a note-to-self.';
+export const COMPACT_SUMMARIZE_PROMPT = [
+  'Write a terse note-to-self that will REPLACE this conversation, so future-you can keep working without re-reading anything. Use this exact structure:',
+  '',
+  '## Original goal',
+  '<one sentence — what the user originally asked for>',
+  '',
+  '## Files touched',
+  '<bulleted list. one line per file. include path + status + KEY exports/structure.>',
+  '- `src/foo.js` (created): exports `createFoo(opts)` returning `{a, b, update(dt)}`',
+  '- `src/bar.js` (edited): now imports `createFoo`; updateLoop calls foo.update(dt)',
+  '',
+  '## Decisions / constraints',
+  '<bullet list of any non-obvious choices or constraints — e.g. "using Catmull-Rom curve, not bezier", "files >50 lines split via append">',
+  '',
+  '## Done so far',
+  '<bullet list — concrete results, NOT process>',
+  '',
+  '## Next action',
+  '<one sentence — the single next concrete step to keep moving toward the goal>',
+  '',
+  'Rules: terse > complete. Concrete > abstract. Mention exact file paths and function/export names so the resumed model can `edit` or `read` precisely. Skip pleasantries.',
+].join('\n');
 
 export async function compactConv(opts: {
   client: MtplxClient;

@@ -353,7 +353,8 @@ describe('runLoop', () => {
         const isSummarize =
           last?.role === 'user' &&
           typeof last.content === 'string' &&
-          last.content.includes('Summarize the conversation');
+          (last.content.includes('Summarize the conversation') ||
+            last.content.includes('REPLACE this conversation'));
         if (isSummarize) {
           summarizeCalls++;
           return {
@@ -411,7 +412,8 @@ describe('runLoop', () => {
         if (
           last?.role === 'user' &&
           typeof last.content === 'string' &&
-          last.content.includes('Summarize the conversation')
+          (last.content.includes('Summarize the conversation') ||
+            last.content.includes('REPLACE this conversation'))
         ) {
           summarizeCalls++;
         }

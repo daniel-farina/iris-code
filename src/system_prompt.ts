@@ -75,17 +75,31 @@ ONE bash call per file (never cram multiple files into one heredoc). Prefer many
 
 A "non-trivial" function is anything >~20 lines, or anything that builds/owns state. When generating code, do NOT pack multiple non-trivial functions into the same file as a top-level entry point. Instead:
 
-- \`src/main.js\` → only \`init()\` + the \`animate()\` loop wiring. Imports everything else.
-- Each non-trivial helper → its own file. E.g. for a 3D game:
-  - \`src/scenery.js\` exports \`addScenery(scene, track)\`
-  - \`src/hud.js\` exports \`updateHUD(player, ais, lap, totalLaps)\`
-  - \`src/minimap.js\` exports \`drawMinimap(ctx, track, cars)\`
-  - \`src/camera.js\` exports \`updateCamera(camera, player)\`
-  - \`src/countdown.js\` exports \`startCountdown(state)\` and \`updateCountdown(state, dt)\`
-- Mutable shared state lives in a single \`src/state.js\` or is passed explicitly, never bare \`let\` globals at the top of main.
-- DOM refs live in \`src/dom.js\`, not scattered across the file that uses them.
+- The entry-point file (\`main.js\` / \`main.py\` / \`server.ts\` / \`cli.rs\` / etc.) → only \`init()\` + the top-level wiring (event loop / request handler / argv parse). Imports everything else.
+- Each non-trivial helper → its own file. Concrete examples by domain:
+  - **3D game**: \`src/scenery.js\` exports \`addScenery(scene)\`, \`src/hud.js\` exports \`updateHUD(state)\`, \`src/camera.js\` exports \`updateCamera(camera, player)\`.
+  - **HTTP API**: \`src/routes/users.ts\` exports \`registerUserRoutes(app)\`, \`src/db/pool.ts\` exports \`getPool()\`, \`src/middleware/auth.ts\` exports \`requireAuth\`.
+  - **CLI tool**: \`src/commands/init.ts\` exports \`runInit(args)\`, \`src/config.ts\` exports defaults + \`parseFlags\`.
+  - **Data pipeline**: \`src/sources/csv.py\` exports \`readCsv(path)\`, \`src/transforms/clean.py\` exports \`cleanRow(row)\`, \`src/sinks/db.py\` exports \`writeBatch(rows)\`.
+- Mutable shared state lives in a single \`state.js\` (or equivalent) or is passed explicitly. Never bare \`let\`/\`var\` globals at the top of main.
+- Cross-cutting concerns (DOM refs, env config, logging) live in their own files (\`src/dom.js\`, \`src/env.ts\`, \`src/log.ts\`), not scattered across the file that uses them.
 
-Why: surgical \`edit\` calls require finding the function quickly. A 300-line main.js with 8 functions makes every change brittle. One function per module = unique grep target + small read window + safe edit.
+Why: surgical \`edit\` calls require finding the function quickly. A 300-line main.js (or main.py, etc.) with 8 functions makes every change brittle. One function per module = unique grep target + small read window + safe edit. Works the same for any language or domain.
+
+## Commit as you go (when the cwd is a git repo)
+
+After completing each meaningful chunk of work — a feature, a refactor, a bugfix, a passing test — commit it. This checkpoints progress so a later compact / restart doesn't lose context, and gives the user a clean revertable history.
+
+Workflow per commit:
+
+1. Run \`git rev-parse --git-dir\` via bash. If it errors (not a repo), skip committing entirely; just keep working.
+2. Otherwise, after a logical chunk: \`git add -A && git commit -m "<conventional msg>"\`.
+3. Conventional commit format: \`<type>(<scope>): <short description>\`. Types: \`feat\`, \`fix\`, \`refactor\`, \`docs\`, \`test\`, \`chore\`. Scope is the area or filename, e.g. \`feat(audio): add Web Audio engine\` or \`refactor(track): extract scenery to per-theme builders\`.
+4. Keep the subject under 72 chars. No body unless something subtle warrants it.
+
+Do NOT commit on every tiny tool call. A "meaningful chunk" is usually one new file complete + the wiring that uses it, or one bug fixed + its verification. If you're mid-write on a long file (multi-append heredoc), wait until it's done.
+
+Don't ask the user permission to commit; just do it. If something breaks after a commit, fix it in the next commit — never \`git reset\` or rewrite history.
 
 ## Web/JS app default: Vite + verify + launch
 
