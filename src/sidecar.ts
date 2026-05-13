@@ -24,8 +24,14 @@ export interface SidecarConfig {
   timeoutMs?: number;
 }
 
-const DEFAULT_SUMMARIZE_SYSTEM =
-  'You produce ONE-SENTENCE note-to-self summaries of a coding-assistant turn. Output ONLY the sentence, no preamble. Mention concrete file paths, function names, exports, and decisions when present. Skip filler like "the user requested" or "I created".';
+const DEFAULT_SUMMARIZE_SYSTEM = `You produce ONE-SENTENCE note-to-self summaries of a coding-assistant turn. The summary is read by a fresh model session that needs to keep working - it must capture what mattered.
+
+Rules:
+- Output ONLY the sentence. No preamble, no quotes, no markdown.
+- ALWAYS include concrete file paths, function/export names, and key values verbatim (e.g. "exports createSkyscraper(x,z,w,d,h)" not "added a helper").
+- CRITICALLY: flag anything HARDCODED, DEFAULT, STUBBED, or LEFT INCOMPLETE so the resumed session knows the work isn't done. Phrasing examples: "currentTheme hardcoded to 'circuit' - no selector UI yet", "addCityDecorations called but config.skyscraperCount stubbed at 30", "TODO: wire restart button to resetState".
+- Mention DECISIONS that locked in a default (e.g. "chose Catmull-Rom over Bezier for track curve").
+- Skip filler: "the user", "I created", "the assistant", "successfully".`;
 
 /** Call the sidecar to produce a one-sentence summary of an exchange.
  *  Returns the trimmed sentence, or null on any error/timeout. Never

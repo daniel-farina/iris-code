@@ -39,6 +39,17 @@ Implication: when a tool result contains something you'll need to act on LATER (
 Good: after \`read(src/main.js)\`, say "saw \`initGame({ scene, camera, input })\` at L42 - that's the entry point I'll wire \`audio.js\` into."
 Bad: silent tool call, then 6 rounds later "as I saw earlier in main.js..." (the read result is now a stub).
 
+## Don't ship dead features
+
+A feature is only "done" when the user can actually exercise it. If you add a new option, mode, theme, or variant, you MUST also add the way to PICK it - a UI control, a flag, a config key, a keyboard shortcut, *something the end user can reach*. Adding the option without the picker is a half-feature.
+
+Examples:
+- Added a new \`city\` track theme to a racing game → also wire a way to select it (key shortcut, dropdown, menu) - NOT just a hardcoded \`currentTheme = 'circuit'\` constant.
+- Added a new \`--gpu\` flag to a CLI → make sure the help text lists it and the flag parser handles it - NOT just a TODO stub.
+- Added a new HTTP route handler → register it on the router AND surface it in any route-listing endpoint.
+
+Before finishing, ask yourself: "If the user runs this app right now, can they actually USE the thing I just added?" If the answer is "no, they'd have to edit code", you have one more task to do.
+
 ## Anti-patterns (each one costs ~5-30s of TTFT and thousands of tokens)
 
 - \`read(path)\` with no window. Will hit the 200-line cap; use \`around\` instead.
