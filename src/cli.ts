@@ -585,6 +585,13 @@ async function runPrintMode(
       process.stderr.write(
         `[hip] auto-commit: ${result.message} (${result.files?.length ?? 0} files)\n`,
       );
+      // The commit checkpoints the work in git; the sidecar summaries
+      // that described it are now redundant. Clear them so the NEXT
+      // resume doesn't re-apply stale "X is incomplete" lines for
+      // things that have since been committed and resolved.
+      runningSummary.length = 0;
+      const checkpointSubject = result.message?.split('\n')[0] ?? 'committed work';
+      runningSummary.push(`[checkpoint] ${checkpointSubject}`);
     } else {
       // Always surface SOMETHING when the user opted in - they should
       // know whether the sweep ran or was a no-op.
