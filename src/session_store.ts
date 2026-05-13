@@ -48,12 +48,37 @@ export async function readAllSessions(): Promise<SessionRecord[]> {
   for (const line of body.split('\n')) {
     if (!line.trim()) continue;
     try {
-      out.push(JSON.parse(line) as SessionRecord);
+      const rec = JSON.parse(line) as SessionRecord;
+      sanitizeMalformedToolCalls(rec);
+      out.push(rec);
     } catch {
       // Skip malformed lines.
     }
   }
   return out;
+}
+
+/** A session persisted before the agent.ts sanitizer fix may contain
+ *  assistant messages with malformed tool_call.arguments. Resuming
+ *  such a session sends invalid JSON to MTPLX → 422. Rewrite any
+ *  unparseable args to the same stub shape the live sanitizer uses,
+ *  so a recovered session can keep going. Idempotent. */
+function sanitizeMalformedToolCalls(rec: SessionRecord): void {
+  for (const msg of rec.conv) {
+    if (msg.role !== 'assistant' || !msg.tool_calls) continue;
+    for (const call of msg.tool_calls) {
+      if (!call.function?.arguments) continue;
+      try {
+        JSON.parse(call.function.arguments);
+      } catch {
+        call.function.arguments = JSON.stringify({
+          _malformed: true,
+          _hint: 'arguments were truncated in a previous run; sanitized on load',
+          _original_size_bytes: call.function.arguments.length,
+        });
+      }
+    }
+  }
 }
 
 export async function findSession(sessionId: string): Promise<SessionRecord | undefined> {

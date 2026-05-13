@@ -392,6 +392,12 @@ async function runPrintMode(
     },
     maxRounds: flags.maxRounds,
     postcommitDelayMs: flags.postcommitDelayMs,
+    // Mid-loop auto-compact only when explicitly enabled by the user
+    // (or by default if they didn't pass --no-auto-compact). The TUI
+    // already wires its own auto-compact; in --print mode this is
+    // brand new and gates on the same flag.
+    autoCompactThresholdTokens: flags.autoCompact === false ? 0 : 9000,
+    systemPromptForCompact: flags.system,
     events: {
       onRound: (_n, info) => {
         if (typeof info.ctok === 'number') completionTokens += info.ctok;
@@ -405,6 +411,16 @@ async function runPrintMode(
         : (landed, elapsedMs) =>
             process.stderr.write(
               `[hip] postcommit ${landed ? 'landed' : 'timed-out'} after ${elapsedMs.toFixed(0)}ms\n`,
+            ),
+      onCompactStart: flags.quiet
+        ? undefined
+        : (tokensBefore) =>
+            process.stderr.write(`\n[hip] auto-compact starting (conv ~${tokensBefore} tok)...\n`),
+      onCompactDone: flags.quiet
+        ? undefined
+        : (tokensBefore, tokensAfter, msgsBefore) =>
+            process.stderr.write(
+              `[hip] auto-compacted ${msgsBefore} msgs / ~${tokensBefore} tok → ~${tokensAfter} tok\n`,
             ),
       onToolStart: flags.quiet
         ? undefined

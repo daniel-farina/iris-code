@@ -103,7 +103,16 @@ describe('runLoop', () => {
       { content: '', tool_calls: [toolCall('b', 'list', { path: '/tmp' })], finish_reason: 'tool_calls' },
       { content: '', tool_calls: [toolCall('c', 'list', { path: '/tmp' })], finish_reason: 'tool_calls' },
     ]);
-    const stats = await runLoop({ client, conv, sampling, maxRounds: 3 });
+    // Disable auto-compact - this test piles up /tmp listings which
+    // can cross the 9K-token threshold and consume a scripted call
+    // for the compact step.
+    const stats = await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 3,
+      autoCompactThresholdTokens: 0,
+    });
     expect(stats.rounds).toBe(3);
     expect(stats.finishReason).toBeUndefined();
     expect(stats.toolCalls).toBe(3);
@@ -323,6 +332,104 @@ describe('runLoop', () => {
       signal: ctl.signal,
     });
     expect(Date.now() - t0).toBeLessThan(500); // aborted, didn't wait the full 5s
+  });
+
+  it('auto-compacts mid-loop when conv crosses the token threshold', async () => {
+    // Bloat the seed conv to >9K tokens via a fake earlier tool result.
+    const big = 'x'.repeat(40000); // ~10K tokens at 4 char/tok estimate
+    const conv: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'do work' },
+      { role: 'assistant', content: '', tool_calls: [toolCall('c0', 'read', { path: '/' })] },
+      { role: 'tool', tool_call_id: 'c0', name: 'read', content: big },
+    ];
+    let summarizeCalls = 0;
+    let firstStreamCall = true;
+    const client = {
+      stream: async (msgs: ChatMessage[]) => {
+        const last = msgs[msgs.length - 1];
+        // The summarize step asks the model with a tools-free `user` msg
+        // tail. Detect it and return a summary.
+        const isSummarize =
+          last?.role === 'user' &&
+          typeof last.content === 'string' &&
+          last.content.includes('Summarize the conversation');
+        if (isSummarize) {
+          summarizeCalls++;
+          return {
+            content: '- did stuff\n- need to keep going',
+            tool_calls: [],
+            finish_reason: 'stop',
+          } satisfies CompletionResult;
+        }
+        if (firstStreamCall) {
+          firstStreamCall = false;
+          // After compact, conv should be small; just emit a stop.
+          return {
+            content: 'done',
+            tool_calls: [],
+            finish_reason: 'stop',
+          } satisfies CompletionResult;
+        }
+        throw new Error('unexpected extra call');
+      },
+    } as unknown as MtplxClient;
+
+    const events = { tokensBefore: 0, tokensAfter: 0 };
+    await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 5,
+      autoCompactThresholdTokens: 9000,
+      events: {
+        onCompactDone: (before, after) => {
+          events.tokensBefore = before;
+          events.tokensAfter = after;
+        },
+      },
+    });
+
+    expect(summarizeCalls).toBe(1);
+    expect(events.tokensBefore).toBeGreaterThan(9000);
+    expect(events.tokensAfter).toBeLessThan(events.tokensBefore);
+    // Conv is now the compacted shape: [system, user(summary), assistant(ack)].
+    expect(conv.length).toBeLessThanOrEqual(4); // 3 from compact + maybe 1 final
+  });
+
+  it('skips auto-compact when threshold=0', async () => {
+    const big = 'x'.repeat(40000);
+    const conv: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'go' },
+      { role: 'tool', tool_call_id: 'c0', name: 'read', content: big },
+    ];
+    let summarizeCalls = 0;
+    const client = {
+      stream: async (msgs: ChatMessage[]) => {
+        const last = msgs[msgs.length - 1];
+        if (
+          last?.role === 'user' &&
+          typeof last.content === 'string' &&
+          last.content.includes('Summarize the conversation')
+        ) {
+          summarizeCalls++;
+        }
+        return {
+          content: 'done',
+          tool_calls: [],
+          finish_reason: 'stop',
+        } satisfies CompletionResult;
+      },
+    } as unknown as MtplxClient;
+    await runLoop({
+      client,
+      conv,
+      sampling,
+      maxRounds: 3,
+      autoCompactThresholdTokens: 0,
+    });
+    expect(summarizeCalls).toBe(0);
   });
 
   it('sanitizes malformed tool_call args so the conv stays valid for the next round', async () => {

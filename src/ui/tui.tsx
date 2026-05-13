@@ -454,6 +454,11 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         },
         maxRounds: runtimeMaxRounds,
         postcommitDelayMs: flags.postcommitDelayMs,
+        // The TUI has its own auto-compact path that fires after the
+        // round completes (so the user sees the compact reflected
+        // before the next round); disable runLoop's internal one to
+        // avoid double-compaction.
+        autoCompactThresholdTokens: 0,
         events: {
           onPostcommitWait: (maxMs) => {
             setStatus(`waiting up to ${(maxMs / 1000).toFixed(0)}s for postcommit`);

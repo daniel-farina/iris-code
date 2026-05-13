@@ -12,6 +12,7 @@
 //     can recover (don't blow up the loop)
 
 import type { MtplxClient, SamplingOpts } from './client.js';
+import { approxTokens, compactConv } from './compact.js';
 import {
   DEFAULT_MAX_ROUNDS,
   DEFAULT_POSTCOMMIT_DELAY_MS,
@@ -40,6 +41,10 @@ export interface AgentEvents {
   /** Fired after the postcommit wait finishes with the actual outcome:
    *  whether MTPLX confirmed the commit landed, and how long we waited. */
   onPostcommitDone?: (landed: boolean, elapsedMs: number) => void;
+  /** Fired before a mid-loop auto-compact. */
+  onCompactStart?: (tokensBefore: number) => void;
+  /** Fired after a mid-loop auto-compact completes. */
+  onCompactDone?: (tokensBefore: number, tokensAfter: number, msgsBefore: number) => void;
 }
 
 export interface RunLoopOptions {
@@ -59,6 +64,16 @@ export interface RunLoopOptions {
    * depending on prefix size, device, and memory pressure. Set to 0
    * to disable polling entirely (cache will stay cold on big convs). */
   postcommitDelayMs?: number;
+  /** Mid-loop auto-compact: once the running conv crosses this many
+   *  approximate tokens, the agent inserts a summarization round and
+   *  replaces the conv with the summary. Keeps prefixes under MTPLX's
+   *  ~10-15K eviction cliff so the cache stays warm. Default 9000.
+   *  Set to 0 to disable. */
+  autoCompactThresholdTokens?: number;
+  /** Custom system prompt to reseed after compaction (defaults to the
+   *  built-in coding-assistant prompt). Lets the TUI / --system flag
+   *  preserve their override across the compact. */
+  systemPromptForCompact?: string;
 }
 
 export interface LoopStats {
@@ -72,6 +87,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
   const { client, conv, sampling, events, signal } = opts;
   const maxRounds = opts.maxRounds ?? DEFAULT_MAX_ROUNDS;
   const postcommitDelayMs = opts.postcommitDelayMs ?? DEFAULT_POSTCOMMIT_DELAY_MS;
+  const autoCompactThreshold = opts.autoCompactThresholdTokens ?? 9000;
   const specs = toolSpecs();
   const startTotal = performance.now();
   let consecutiveLength = 0;
@@ -81,6 +97,30 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
   for (let round = 0; round < maxRounds; round++) {
     if (signal?.aborted) {
       return finish(startTotal, round, toolCallCount, 'aborted');
+    }
+    // Mid-loop auto-compact: if conv has crossed the cache-eviction
+    // cliff, summarize it down before the next round. Costs one
+    // model call but pays back many cold prefills on subsequent
+    // rounds. Skipped when disabled (threshold=0) or conv is short.
+    if (autoCompactThreshold > 0) {
+      const tokensNow = approxTokens(conv);
+      if (tokensNow >= autoCompactThreshold && conv.length > 3) {
+        events?.onCompactStart?.(tokensNow);
+        const result = await compactConv({
+          client,
+          conv,
+          sampling,
+          systemPrompt: opts.systemPromptForCompact,
+          signal,
+        });
+        if (result) {
+          // Rewrite the caller's conv array in place so they see the
+          // change (we're operating on the same reference).
+          conv.length = 0;
+          for (const m of result.newConv) conv.push(m);
+          events?.onCompactDone?.(result.tokensBefore, result.tokensAfter, result.msgsBefore);
+        }
+      }
     }
     let res: CompletionResult;
     try {
