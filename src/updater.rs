@@ -277,9 +277,11 @@ async fn check_mtplx_updates() {
 
     // Brew installs: also offer the picker so users who want the fork
     // (with the local long-context-ladder patch) get nudged at every
-    // --update. If they pick fork on a brew install we can't auto-flip
-    // them (brew formula points at upstream), but we print exact
-    // instructions to overlay the fork via pip in the brew venv.
+    // --update. If they pick fork on a brew install we execute the
+    // overlay automatically: clone-or-pull the fork to ~/code/MTPLX and
+    // `pip install --force-reinstall --no-deps` into the brew venv.
+    // Brew formula still points at upstream so the next `brew upgrade
+    // mtplx` will revert it (we warn about that).
     if let InstallKind::Brew { .. } = state.kind {
         let default_src = read_persisted_source().unwrap_or_else(MtplxSource::fork);
         match read_persisted_source() {
@@ -288,33 +290,18 @@ async fn check_mtplx_updates() {
                     "  {d}source preference{r}: {a}{} @ {}{r} {d}(already persisted; --pick-source to change){r}",
                     persisted.repo, persisted.branch
                 );
+                // Even with a persisted preference we ensure the overlay is
+                // current: re-pull + re-install so the brew venv keeps the
+                // fork's latest HEAD if anything's drifted.
+                if persisted.label == "fork" {
+                    apply_brew_fork_overlay(&persisted.repo, &persisted.branch);
+                }
             }
             _ => {
                 let c = prompt_mtplx_source(default_src);
                 persist_source(&c);
                 if c.label == "fork" {
-                    eprintln!();
-                    eprintln!(
-                        "  {w}!{r} you're on a brew install which serves {a}youssofal/mtplx{r}."
-                    );
-                    eprintln!(
-                        "    To run the fork's code with brew's venv (one-time overlay), clone"
-                    );
-                    eprintln!("    the fork and pip-install it over the brew install:");
-                    eprintln!();
-                    eprintln!(
-                        "      {a}git clone https://github.com/daniel-farina/MTPLX ~/code/MTPLX{r}"
-                    );
-                    eprintln!(
-                        "      {a}/opt/homebrew/var/mtplx/venv-*/bin/pip install --force-reinstall --no-deps ~/code/MTPLX{r}"
-                    );
-                    eprintln!();
-                    eprintln!(
-                        "    Note: next {a}brew upgrade mtplx{r} will revert this. For a permanent"
-                    );
-                    eprintln!(
-                        "    switch, use {a}hip --setup{r} to install from a git checkout instead."
-                    );
+                    apply_brew_fork_overlay(&c.repo, &c.branch);
                 }
             }
         }
@@ -603,6 +590,160 @@ fn tempdir() -> Result<PathBuf> {
     let p = std::env::temp_dir().join(format!("hip-update-{}", std::process::id()));
     std::fs::create_dir_all(&p)?;
     Ok(p)
+}
+
+/// On a brew-based MTPLX install, overlay the chosen fork's source into
+/// the brew-managed venv: clone (or pull) the fork to ~/code/MTPLX, then
+/// `pip install --force-reinstall --no-deps` into the highest-numbered
+/// venv under /opt/homebrew/var/mtplx/. Idempotent and chatty so the
+/// user can see what happened. Brew formula still points at upstream so
+/// the next `brew upgrade mtplx` will revert this overlay - we warn.
+fn apply_brew_fork_overlay(repo_url: &str, branch: &str) {
+    use crate::theme::{accent, dim, good, warn, RESET};
+    use std::process::Command;
+    let d = dim();
+    let a = accent();
+    let g = good();
+    let w = warn();
+    let r = RESET;
+
+    eprintln!();
+    eprintln!("{d}─ applying fork overlay onto brew venv ─{r}");
+
+    // 1. Resolve a destination for the fork checkout.
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let dest = PathBuf::from(&home).join("code").join("MTPLX");
+
+    // 2. Clone (if absent) or pull (if present). We don't switch remotes
+    //    here on purpose - if the user has an existing checkout with a
+    //    different remote, leave it alone and just `git pull` from
+    //    whichever origin they've got. The picker already persisted the
+    //    label; the overlay just needs a working tree pointing at the
+    //    fork's branch.
+    if dest.exists() {
+        eprintln!("  {d}using existing checkout{r}: {a}{}{r}", dest.display());
+        // Fetch + fast-forward the branch we want to overlay from.
+        let _ = Command::new("git")
+            .args(["-C", dest.to_str().unwrap_or("."), "fetch", "--quiet"])
+            .status();
+        let pull = Command::new("git")
+            .args([
+                "-C",
+                dest.to_str().unwrap_or("."),
+                "pull",
+                "--ff-only",
+                "--quiet",
+                "origin",
+                branch,
+            ])
+            .status();
+        match pull {
+            Ok(s) if s.success() => eprintln!("  {g}✓{r} {d}git pull --ff-only origin {branch}{r}"),
+            _ => eprintln!(
+                "  {w}!{r} git pull failed (working tree may have local changes); using current HEAD"
+            ),
+        }
+    } else {
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        eprintln!(
+            "  {d}cloning{r} {a}{}{r} {d}->{r} {a}{}{r}",
+            repo_url,
+            dest.display()
+        );
+        let clone = Command::new("git")
+            .args([
+                "clone",
+                "--quiet",
+                "--branch",
+                branch,
+                repo_url,
+                dest.to_str().unwrap_or("."),
+            ])
+            .status();
+        if !matches!(clone, Ok(s) if s.success()) {
+            eprintln!("  {w}!{r} git clone failed; aborting overlay");
+            return;
+        }
+        eprintln!("  {g}✓{r} cloned");
+    }
+
+    // 3. Find the brew venv pip. There is exactly one /opt/homebrew/var/
+    //    mtplx/venv-X.Y.Z directory per brew install; pick whichever
+    //    exists. If multiple are present (after a brew upgrade leaves an
+    //    old one) take the newest by directory name.
+    let venv_root = PathBuf::from("/opt/homebrew/var/mtplx");
+    let pip_path: Option<PathBuf> = std::fs::read_dir(&venv_root)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.starts_with("venv-"))
+        })
+        .max()
+        .map(|p| p.join("bin").join("pip"));
+
+    let Some(pip) = pip_path.filter(|p| p.exists()) else {
+        eprintln!(
+            "  {w}!{r} could not locate brew venv pip under {a}{}{r}; skipping pip overlay",
+            venv_root.display()
+        );
+        eprintln!(
+            "  {d}run manually:{r} {a}/opt/homebrew/var/mtplx/venv-*/bin/pip install --force-reinstall --no-deps {}{r}",
+            dest.display()
+        );
+        return;
+    };
+
+    // 4. pip install --force-reinstall --no-deps <fork-path>. --no-deps
+    //    avoids touching numpy/mlx/etc. that brew set up; we only want
+    //    the python source layer swapped.
+    eprintln!(
+        "  {d}pip install --force-reinstall --no-deps{r} {a}{}{r}",
+        dest.display()
+    );
+    let pip_status = Command::new(&pip)
+        .args([
+            "install",
+            "--force-reinstall",
+            "--no-deps",
+            "--quiet",
+            dest.to_str().unwrap_or("."),
+        ])
+        .status();
+    match pip_status {
+        Ok(s) if s.success() => {
+            // Re-probe installed version so the user sees the overlay landed.
+            let ver = Command::new(&pip)
+                .args(["show", "mtplx"])
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .and_then(|s| {
+                    s.lines()
+                        .find_map(|l| l.strip_prefix("Version: ").map(|v| v.to_string()))
+                })
+                .unwrap_or_else(|| "unknown".to_string());
+            eprintln!("  {g}✓{r} fork overlay applied (venv now reports mtplx=={a}{ver}{r})");
+            eprintln!("  {d}note{r}: next {a}brew upgrade mtplx{r} will revert this overlay.");
+            eprintln!(
+                "  {d}for a permanent switch, use {a}hip --setup{r}{d} to install from a git checkout.{r}"
+            );
+        }
+        _ => {
+            eprintln!("  {w}!{r} pip install failed; brew venv unchanged");
+            eprintln!(
+                "  {d}retry manually:{r} {a}{} install --force-reinstall --no-deps {}{r}",
+                pip.display(),
+                dest.display()
+            );
+        }
+    }
 }
 
 #[cfg(test)]
