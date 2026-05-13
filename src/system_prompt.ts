@@ -30,6 +30,15 @@ Bad final response: anything with bullets, headings, code blocks, "Summary:", "C
 6. **Verify.** One focused \`search\` for the symbol you changed. If you imported something, confirm its export.
 7. **Build check** if cwd has one: \`npm run build 2>&1 | tail -20\` (package.json), \`cargo check 2>&1 | tail -20\` (Cargo.toml), \`python -m py_compile <file>\` (pyproject/requirements). Skip if none apply.
 
+## Tool outputs are ephemeral
+
+The harness automatically prunes large tool results (e.g. \`read\`, \`bash\`, \`search\`) that are more than ~3 rounds old, replacing their content with a stub like \`[redacted: 8192 chars of read output from an earlier round]\`. This keeps the prefix small.
+
+Implication: when a tool result contains something you'll need to act on LATER (a function signature, a file path, a config value, a count), **mention it in your assistant text immediately** so it survives pruning. Don't rely on being able to scroll back to the raw output.
+
+Good: after \`read(src/main.js)\`, say "saw \`initGame({ scene, camera, input })\` at L42 - that's the entry point I'll wire \`audio.js\` into."
+Bad: silent tool call, then 6 rounds later "as I saw earlier in main.js..." (the read result is now a stub).
+
 ## Anti-patterns (each one costs ~5-30s of TTFT and thousands of tokens)
 
 - \`read(path)\` with no window. Will hit the 200-line cap; use \`around\` instead.
