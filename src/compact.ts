@@ -53,7 +53,8 @@ export const COMPACT_SUMMARIZE_PROMPT = [
  *  TAIL (recent turns). Summarize the HEAD, keep the TAIL verbatim.
  *  Model still has fresh context for the immediate next step instead of
  *  ONLY a summary. Default keepTailMessages=6 covers roughly the last
- *  3 user/assistant pairs (or 2 tool-using rounds). */
+ *  3 user/assistant pairs (or 2 tool-using rounds), bounded by
+ *  keepTailMaxTokens so a single fat tool result can't blow the tail. */
 export async function compactConv(opts: {
   client: MtplxClient;
   conv: ChatMessage[];
@@ -62,9 +63,14 @@ export async function compactConv(opts: {
   signal?: AbortSignal;
   /** How many of the most recent messages to keep verbatim. Default 6. */
   keepTailMessages?: number;
+  /** Hard cap on the kept tail's approximate tokens. If the last
+   *  keepTailMessages exceed this, we shrink the tail from the front
+   *  (oldest-of-tail) until it fits. Default 3000. */
+  keepTailMaxTokens?: number;
 }): Promise<CompactResult | null> {
   const { client, conv, sampling, systemPrompt, signal } = opts;
   const keepTail = opts.keepTailMessages ?? 6;
+  const keepTailMaxTokens = opts.keepTailMaxTokens ?? 3000;
   if (conv.length <= 3) return null;
 
   const msgsBefore = conv.length;
@@ -74,7 +80,13 @@ export async function compactConv(opts: {
   // Anything between gets summarized. If conv is so short there's
   // nothing to summarize after that cut, fall back to full compaction.
   const sysSlice = conv[0]?.role === 'system' ? conv.slice(0, 1) : [];
-  const tailStart = Math.max(sysSlice.length, conv.length - keepTail);
+  let tailStart = Math.max(sysSlice.length, conv.length - keepTail);
+  // Shrink the tail from the FRONT until it fits the token budget.
+  // (Trimming from the back would lose the most-recent message, which
+  // is exactly the one the next round needs to act on.)
+  while (tailStart < conv.length - 1 && approxTokens(conv.slice(tailStart)) > keepTailMaxTokens) {
+    tailStart++;
+  }
   const headForSummary = conv.slice(sysSlice.length, tailStart);
   const tail = conv.slice(tailStart);
   // Don't bother summarizing if there's barely anything to summarize.

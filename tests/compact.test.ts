@@ -124,6 +124,69 @@ describe('compactConv', () => {
     expect(r).toBeNull();
   });
 
+  it('shrinks the tail when it exceeds keepTailMaxTokens', async () => {
+    // 6 recent messages, two of them are huge tool spam. Use a
+    // 500-token tail budget so all the huge ones must be dropped.
+    const huge = 'x'.repeat(8000); // ~2000 tokens each
+    const conv: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user', content: 'u3' },
+      { role: 'assistant', content: huge },
+      { role: 'user', content: 'u4' },
+      { role: 'assistant', content: huge },
+      { role: 'user', content: 'u5-recent' },
+      { role: 'assistant', content: 'small recent' },
+    ];
+    const r = await compactConv({
+      client: fakeClient(),
+      conv,
+      sampling,
+      systemPrompt: 'sys',
+      keepTailMaxTokens: 500,
+    });
+    expect(r).not.toBeNull();
+    // The most-recent message must always survive.
+    const last = r?.newConv[r.newConv.length - 1];
+    expect(last?.content).toBe('small recent');
+    // None of the kept tail should be one of the huge tool-spam messages.
+    const tailContent =
+      r?.newConv
+        .slice(3)
+        .map((m) => (typeof m.content === 'string' ? m.content : ''))
+        .join('|') ?? '';
+    expect(tailContent.includes(huge)).toBe(false);
+  });
+
+  it('always keeps the most-recent message when budget is tiny', async () => {
+    const conv: ChatMessage[] = [
+      { role: 'system', content: 'sys' },
+      { role: 'user', content: 'u1' },
+      { role: 'assistant', content: 'a1' },
+      { role: 'user', content: 'u2' },
+      { role: 'assistant', content: 'a2' },
+      { role: 'user', content: 'u3' },
+      { role: 'assistant', content: 'a3' },
+      { role: 'user', content: 'u4-recent' },
+      { role: 'assistant', content: 'a4-recent' },
+    ];
+    const r = await compactConv({
+      client: fakeClient(),
+      conv,
+      sampling,
+      systemPrompt: 'sys',
+      keepTailMaxTokens: 1, // effectively zero budget
+    });
+    expect(r).not.toBeNull();
+    // Must end with the most-recent message even when budget would
+    // force a fully empty tail.
+    const last = r?.newConv[r.newConv.length - 1];
+    expect(last?.content).toBe('a4-recent');
+  });
+
   it('approxTokens grows with conv content size', async () => {
     const { approxTokens } = await import('../src/compact.js');
     const small = [{ role: 'user' as const, content: 'hi' }];
