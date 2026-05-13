@@ -389,12 +389,35 @@ async fn check_mtplx_updates() {
         None => {}
     }
 
-    // If on-disk code is now newer than the running process, restart with
-    // optimal config to land on the new bytes. Same trigger for brew
-    // (version mismatch) and git (we just successfully pulled or switched).
+    // Explicit server-state line so every run tells the user what
+    // happened to the running process. Previously a "no restart needed"
+    // case was indistinguishable from "we forgot to check" -- the user
+    // had to infer from the absence of output.
     if is_running_stale(&state, just_upgraded) {
         eprintln!("  {w}!{r} running server is on stale code; brew/disk has newer bytes.");
         restart_with_optimal_config(&state).await;
+    } else if state.is_running() {
+        match &state.kind {
+            crate::mtplx_runner::InstallKind::Brew {
+                installed_version, ..
+            } => match state.running_venv_version.as_deref() {
+                Some(rv) => eprintln!(
+                    "  {g}✓{r} server is on current code {d}(running venv {} == brew {}){r}",
+                    rv, installed_version
+                ),
+                None => eprintln!(
+                    "  {g}✓{r} server is running {d}(venv version not detected; assuming current){r}"
+                ),
+            },
+            crate::mtplx_runner::InstallKind::Git { head_sha, .. } => {
+                eprintln!(
+                    "  {g}✓{r} server is on current code {d}(checkout HEAD {}){r}",
+                    head_sha
+                );
+            }
+        }
+    } else {
+        eprintln!("  {d}(no MTPLX server running -- run {a}hip --start-mtplx{d} to launch){r}");
     }
 }
 
