@@ -300,6 +300,15 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
       void summarizeExchange(sidecarCfg, exchange, signal).then((line) => {
         if (line) {
           summaries.push(line);
+          // Cap the running summary so it can't grow unboundedly within
+          // a single session. Without this, every compact splices in
+          // an ever-larger numbered list (50+ lines after a few rounds
+          // of in-session compaction), and the "compressed" conv ends
+          // up nearly as big as the original.
+          const MAX_RUNNING_SUMMARY_LINES = 20;
+          if (summaries.length > MAX_RUNNING_SUMMARY_LINES) {
+            summaries.splice(0, summaries.length - MAX_RUNNING_SUMMARY_LINES);
+          }
           events?.onSidecarSummary?.(line, summaries.length);
         }
       });
