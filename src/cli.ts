@@ -542,6 +542,7 @@ async function runPrintMode(
   process.on('SIGINT', onSigint);
   // Wall-clock cap so cron-style invocations can't hang forever. 0 = off.
   let maxTimeTimer: NodeJS.Timeout | undefined;
+  let maxTimeKillTimer: NodeJS.Timeout | undefined;
   if (flags.maxTime && flags.maxTime > 0) {
     maxTimeTimer = setTimeout(() => {
       if (!abort.signal.aborted) {
@@ -549,8 +550,14 @@ async function runPrintMode(
         abort.abort();
       }
     }, flags.maxTime * 1000);
-    // Don't keep the event loop alive just for this timer.
     maxTimeTimer.unref?.();
+    // Outer wall-clock SIGKILL: if the abort above doesn't terminate
+    // within 5s (e.g. model stream hung at 0% CPU), force-kill.
+    maxTimeKillTimer = setTimeout(() => {
+      process.stderr.write(`[hip] wall-clock kill: process did not exit after abort\n`);
+      process.kill(process.pid, 'SIGKILL');
+    }, (flags.maxTime + 5) * 1000);
+    maxTimeKillTimer.unref?.();
   }
   // Thread delegate-tool context so sub-agents reuse the same MTPLX
   // server + model + sampling as the main loop.
@@ -664,6 +671,7 @@ async function runPrintMode(
   });
   process.off('SIGINT', onSigint);
   if (maxTimeTimer) clearTimeout(maxTimeTimer);
+  if (maxTimeKillTimer) clearTimeout(maxTimeKillTimer);
   const tps =
     completionTokens > 0 && stats.totalMs > 0
       ? ` tok/s=${((completionTokens / stats.totalMs) * 1000).toFixed(1)}`
