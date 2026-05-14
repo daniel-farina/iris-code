@@ -18,7 +18,7 @@ export const browserTool: Tool = {
     function: {
       name: 'browser_check',
       description:
-        "Open a URL in headless Chrome and capture console.error + uncaught exceptions for a short window. Use after finishing a UI/JS change to verify the page actually loads cleanly. Returns 'OK' or a list of errors with file:line. Default url is the local Vite dev server at http://localhost:5173.",
+        "Open a URL in headless Chrome, load the page, then CLICK every visible button to also catch errors thrown by click handlers (e.g. 'selectedTrack is not defined' that only fires on click). Captures console.error + uncaught exceptions throughout. Use as the final step after any UI/JS change. Returns 'OK' or a list of errors with file:line.",
       parameters: {
         type: 'object',
         properties: {
@@ -29,7 +29,12 @@ export const browserTool: Tool = {
           wait_ms: {
             type: 'integer',
             description:
-              'milliseconds to listen for console events after the page loads. Default 3000.',
+              'milliseconds to wait for the page to settle before the click sweep. Default 3000.',
+          },
+          interact: {
+            type: 'boolean',
+            description:
+              'if true (default), click every visible button after load to catch handler errors. Set false to only check page-load errors.',
           },
         },
       },
@@ -38,7 +43,8 @@ export const browserTool: Tool = {
   async run(args) {
     const url = argString(args, 'url') ?? 'http://localhost:5173';
     const waitMs = argU64(args, 'wait_ms') ?? 3000;
-    const r = await browserCheck({ url, waitMs });
+    const interact = args.interact !== false;
+    const r = await browserCheck({ url, waitMs, interact });
     if (r.checkError) {
       return `[browser_check skipped] ${r.checkError}`;
     }

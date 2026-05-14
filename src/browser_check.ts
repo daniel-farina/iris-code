@@ -52,13 +52,18 @@ function findChrome(): string | null {
 
 /** Run a browser-side check of the given URL. Spawns headless Chrome,
  *  navigates, captures console + exceptions for `waitMs`, kills Chrome,
- *  returns the result. Never throws - returns {checkError} on failure. */
+ *  returns the result. When `interact: true` (default), after page load
+ *  it simulates a click on every visible button to surface errors that
+ *  fire from click handlers (which load-only checks miss).
+ *  Never throws - returns {checkError} on failure. */
 export async function browserCheck(opts: {
   url: string;
   waitMs?: number;
+  interact?: boolean;
 }): Promise<BrowserCheckResult> {
   const t0 = performance.now();
   const waitMs = opts.waitMs ?? 3000;
+  const interact = opts.interact ?? true;
   const chromePath = findChrome();
   if (!chromePath) {
     return {
@@ -106,7 +111,7 @@ export async function browserCheck(opts: {
     }
     // Hit /json to find or create a page target.
     const restUrl = wsUrl.replace(/^ws:\/\//, 'http://').replace(/\/devtools\/browser\/.+$/, '');
-    const result = await collectErrors(restUrl, opts.url, waitMs);
+    const result = await collectErrors(restUrl, opts.url, waitMs, interact);
     return { ...result, elapsedMs: performance.now() - t0 };
   } catch (e) {
     return {
@@ -155,6 +160,7 @@ async function collectErrors(
   restUrl: string,
   pageUrl: string,
   waitMs: number,
+  interact: boolean,
 ): Promise<Omit<BrowserCheckResult, 'elapsedMs'>> {
   // Create a new page target so we don't interfere with anything else.
   const createRes = await fetch(`${restUrl}/json/new?${encodeURIComponent(pageUrl)}`, {
@@ -244,8 +250,34 @@ async function collectErrors(
   ws.send(JSON.stringify({ id: ++msgId, method: 'Console.enable' }));
   ws.send(JSON.stringify({ id: ++msgId, method: 'Page.enable' }));
 
-  // Wait for events.
+  // Wait for page to settle.
   await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
+
+  // Interaction sweep: click every visible <button>. Catches errors
+  // thrown by click handlers (like `selectedTrack is not defined`)
+  // that load-only checks miss. Each click is wrapped so an error
+  // surfaces via Runtime.exceptionThrown but doesn't stop the sweep.
+  if (interact) {
+    const clickScript = `
+      (async () => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        for (const b of buttons) {
+          if (b.offsetParent === null) continue; // not visible
+          try { b.click(); } catch (e) { console.error('[interact-click]', b.id || b.textContent?.trim()?.slice(0, 40) || '<button>', e?.message ?? e); }
+          await new Promise(r => setTimeout(r, 50));
+        }
+      })();
+    `;
+    ws.send(
+      JSON.stringify({
+        id: ++msgId,
+        method: 'Runtime.evaluate',
+        params: { expression: clickScript, awaitPromise: true, returnByValue: true },
+      }),
+    );
+    // Listen a bit longer for click-triggered errors.
+    await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+  }
 
   try {
     ws.close();
