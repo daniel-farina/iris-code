@@ -59,6 +59,11 @@ export interface AgentEvents {
    *  reseed for a task transition). May return a Promise; the loop
    *  awaits it. */
   onBetweenRounds?: (conv: ChatMessage[], round: number) => void | Promise<void>;
+  /** Fired when the loop auto-injects a continuation nudge because
+   *  the model emitted no tool_calls while tasks are still pending.
+   *  Carries the in_progress task id, if any. Used by the TUI to
+   *  print a visible note in the transcript. */
+  onAutoContinuation?: (activeTaskId: string | undefined) => void;
 }
 
 export interface RunLoopOptions {
@@ -109,6 +114,10 @@ export interface RunLoopOptions {
    *  preventing the subagent from spawning its own subagents or
    *  creating tasks that would pollute the parent's state. */
   availableTools?: Tool[];
+  /** Internal flag: set to true after the loop injects a one-shot
+   *  continuation nudge (model stopped with tasks still pending).
+   *  Prevents nudge loops. Callers don't set this. */
+  continuationNudged?: boolean;
 }
 
 export interface LoopStats {
@@ -244,8 +253,27 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
     consecutiveLength = 0;
 
     if (res.tool_calls.length === 0) {
-      // Done. Append the assistant text and return.
       if (res.content.trim().length > 0) conv.push({ role: 'assistant', content: res.content });
+      // Auto-continuation: when the model emits no tool_calls but a
+      // task is still in_progress or pending, the dispatch would
+      // normally end with work undone. Inject a one-shot nudge as a
+      // user message and let the loop iterate. Limited to ONE nudge
+      // per dispatch to avoid infinite ping-pong if the model keeps
+      // refusing to act.
+      const { taskManager } = await import('./task_manager.js');
+      const counts = taskManager.counts();
+      const needsContinue = counts.pending + counts.inProgress > 0;
+      if (needsContinue && !opts.continuationNudged) {
+        opts.continuationNudged = true;
+        const active = taskManager.active();
+        const nudge = active
+          ? `Continue. Task id=${active.id} ("${active.subject}") is still in_progress. Per the Continuation rule, you must not end your turn while tasks remain. Either complete the current task with task_update, advance with task_next, or state a real blocker explicitly.`
+          : `Continue. ${counts.pending} task(s) still pending and ${counts.inProgress} in_progress. Call task_next or task_update to proceed.`;
+        events?.onAutoContinuation?.(active?.id);
+        conv.push({ role: 'user', content: nudge });
+        // Loop continues. No finish.
+        continue;
+      }
       return finish(startTotal, round + 1, toolCallCount, res.finish_reason);
     }
 

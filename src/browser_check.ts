@@ -18,6 +18,7 @@ import { existsSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createConnection } from 'node:net';
 
 const CHROME_PATHS = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -28,7 +29,7 @@ const CHROME_PATHS = [
 ];
 
 export interface BrowserError {
-  source: 'console.error' | 'exception';
+  source: 'console.error' | 'exception' | 'strict_port';
   text: string;
   url?: string;
   line?: number;
@@ -50,6 +51,28 @@ function findChrome(): string | null {
   return null;
 }
 
+/** Parse host and port from a URL string. Returns null on failure. */
+function parseUrl(url: string): { host: string; port: number } | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return { host: u.hostname, port: u.port ? parseInt(u.port, 10) : (u.protocol === 'https:' ? 443 : 80) };
+  } catch { return null; }
+}
+
+/** Check if a TCP port is accepting connections. Returns the port number or null. */
+async function checkPortListening(url: string): Promise<number | null> {
+  const parsed = parseUrl(url);
+  if (!parsed) return null;
+  return new Promise((resolve) => {
+    const sock = createConnection({ host: parsed.host, port: parsed.port }, () => {
+      sock.destroy();
+      resolve(parsed.port);
+    }).on('error', () => resolve(null));
+    setTimeout(() => { sock.destroy(); resolve(null); }, 2000);
+  });
+}
+
 /** Run a browser-side check of the given URL. Spawns headless Chrome,
  *  navigates, captures console + exceptions for `waitMs`, kills Chrome,
  *  returns the result. When `interact: true` (default), after page load
@@ -60,10 +83,27 @@ export async function browserCheck(opts: {
   url: string;
   waitMs?: number;
   interact?: boolean;
+  strictPort?: boolean;
 }): Promise<BrowserCheckResult> {
   const t0 = performance.now();
   const waitMs = opts.waitMs ?? 3000;
   const interact = opts.interact ?? true;
+  const strictPort = opts.strictPort ?? false;
+
+  // When strict_port is set, verify the target port is actually listening
+  // before launching Chrome. Prevents testing a stale dev server.
+  if (strictPort) {
+    const port = await checkPortListening(opts.url);
+    if (port === null) {
+      return {
+        ok: false,
+        errors: [{ source: 'strict_port', text: `no server listening on ${opts.url}` }],
+        log: [],
+        elapsedMs: performance.now() - t0,
+      };
+    }
+  }
+
   const chromePath = findChrome();
   if (!chromePath) {
     return {

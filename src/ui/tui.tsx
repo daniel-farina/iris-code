@@ -754,6 +754,15 @@ const App: FC<AppProps> = ({
             void line;
             void total;
           },
+          onAutoContinuation: (activeTaskId) => {
+            setTranscript((p) => [
+              ...p,
+              {
+                kind: 'system',
+                text: `[auto-continue: model stopped with task${activeTaskId ? ` id=${activeTaskId}` : 's'} still pending - nudging to continue]`,
+              },
+            ]);
+          },
           onCompactStart: (tokensBefore) => {
             setStatus(`auto-compacting (${tokensBefore} tok)...`);
             setTranscript((p) => [

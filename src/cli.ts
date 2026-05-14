@@ -347,7 +347,7 @@ async function main() {
       const piped = await readAllStdin();
       if (piped.trim().length > 0) flags.print = piped.trim();
     }
-    return runPrintMode(flags, resolvedSessionId, startConv, startRunningSummary);
+    return runPrintMode(flags, resolvedSessionId, startConv, startRunningSummary, startTasks, startTaskNextId);
   }
 
   // Interactive TUI - lazy-import so --print doesn't pay the React load cost.
@@ -463,7 +463,22 @@ async function runPrintMode(
   sessionId: string,
   startConv: ChatMessage[],
   startRunningSummary?: string[],
+  startTasks?: import('./task_manager.js').Task[],
+  startTaskNextId?: number,
 ): Promise<void> {
+  // Rehydrate the task manager from the resumed session snapshot. The
+  // TUI does this via its mount effect; --print needs to do it here so
+  // `--continue-last` actually preserves task plans across runs (the
+  // loop-driver use case relies on this).
+  if (startTasks && startTasks.length > 0) {
+    const { taskManager } = await import('./task_manager.js');
+    taskManager.rehydrate({ tasks: startTasks, nextNum: startTaskNextId });
+    if (!flags.quiet) {
+      process.stderr.write(
+        `[hip] rehydrated ${startTasks.length} task(s) from prior session\n`,
+      );
+    }
+  }
   if (!flags.print || flags.print.trim().length === 0) {
     process.stderr.write(
       'hip --print: empty prompt (pass prompt as positional, or pipe via stdin)\n',
@@ -629,7 +644,11 @@ async function runPrintMode(
   });
 
   // Persist the session so --continue-last / --resume can pick it up.
+  // Snapshot the task list too - the loop-driver scenario depends on
+  // task state surviving across --print invocations.
   const { updateSession } = await import('./session_store.js');
+  const { taskManager } = await import('./task_manager.js');
+  const taskSnap = taskManager.snapshot();
   const firstUser = conv.find((m) => m.role === 'user')?.content ?? '';
   await updateSession({
     session_id: sessionId,
@@ -640,6 +659,8 @@ async function runPrintMode(
     // Persist sidecar lines so a future --resume / --continue-last
     // inherits them and the first compact in that run is also ~free.
     running_summary: runningSummary.length > 0 ? runningSummary : undefined,
+    tasks: taskSnap.tasks.length > 0 ? taskSnap.tasks : undefined,
+    task_next_id: taskSnap.nextNum,
   });
   process.off('SIGINT', onSigint);
   if (maxTimeTimer) clearTimeout(maxTimeTimer);

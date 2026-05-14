@@ -25,6 +25,7 @@ export const browserTool: Tool = {
           url: { type: 'string', description: 'default http://localhost:5173' },
           wait_ms: { type: 'integer', description: 'settle time before clicks (default 3000)' },
           interact: { type: 'boolean', description: 'click buttons (default true)' },
+          strict_port: { type: 'boolean', description: 'fail if target port is not listening (default false)' },
         },
       },
     },
@@ -33,7 +34,8 @@ export const browserTool: Tool = {
     const url = argString(args, 'url') ?? 'http://localhost:5173';
     const waitMs = argU64(args, 'wait_ms') ?? 3000;
     const interact = args.interact !== false;
-    const r = await browserCheck({ url, waitMs, interact });
+    const strictPort = args.strict_port === true;
+    const r = await browserCheck({ url, waitMs, interact, strictPort });
     if (r.checkError) {
       return `[browser_check skipped] ${r.checkError}`;
     }

@@ -8,12 +8,14 @@ export const DEFAULT_MODEL = process.env['MLX_CODE_MODEL'] ?? 'mtplx-qwen36-27b-
 export const DEFAULT_TEMPERATURE = 0.6;
 export const DEFAULT_TOP_P = 0.95;
 export const DEFAULT_TOP_K = 20;
-// Bumped from Rust hip's 4096 to 6144 (1.5x) - the qwen3 tool_call JSON
-// parser truncates mid-arg when long bash heredocs hit the old cap,
-// producing malformed-JSON 422s. A small headroom bump shifts the
-// failure mode from "fatal parse error" to "finish_reason=length" which
-// auto-continues. Still much smaller than the model's 32k context window.
-export const DEFAULT_MAX_TOKENS = 6144;
+// Raised from 6144 -> 8192 after observing rounds repeatedly hitting
+// the 6144 cap on long multi_edit + analysis turns. With qwen3.6-27B
+// and 128K context window, an 8K output budget is comfortably within
+// the per-turn time envelope and lets reasoning-heavy turns complete
+// without finish_reason=length retries. Per-turn cost on M3 sustained
+// profile: ~8K tok ÷ 40 tok/s ≈ 3.5 min worst case, but rarely fills
+// (most rounds emit 50-2000 tok).
+export const DEFAULT_MAX_TOKENS = 8192;
 // Auto-compact threshold (approximate tokens). Empirically MTPLX's
 // session-bank entries can grow to ~24K tokens before getting evicted
 // (observed on a 32-entry bank with MTPLX_SESSION_BANK_MAX_ENTRIES=32).
