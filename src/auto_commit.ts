@@ -50,7 +50,7 @@ export function deriveCommitMessage(
     .trim()
     .split('\n')[0]
     ?.replace(/[.!?]+$/, '')
-    .slice(0, 60);
+    .slice(0, 50);
   const subject = `chore(hip): ${promptHead || 'session changes'}`;
 
   // No summary lines? Just the subject is fine.
@@ -58,11 +58,19 @@ export function deriveCommitMessage(
   if (lines.length === 0) return subject;
 
   // Body: bulleted sidecar lines. Conventional commits use one blank
-  // line between subject and body. Cap each bullet so the body stays
-  // readable in `git log --oneline` / `git show`. Up to 10 bullets;
-  // beyond that the commit is probably TOO chunked anyway.
-  const bullets = lines.slice(0, 10).map((l) => `- ${l.slice(0, 140)}`);
-  return `${subject}\n\n${bullets.join('\n')}`;
+  // line between subject and body. Cap total message to 200 chars
+  // so the chore commit stays readable in git log.
+  const maxBody = 200 - subject.length - 2; // -2 for the blank line separator
+  if (maxBody <= 0) return subject;
+  const bullets = lines.slice(0, 5).map((l) => `- ${l.slice(0, 60)}`);
+  let body = bullets.join('\n');
+  // Truncate body to budget, cutting at last complete bullet
+  if (body.length > maxBody) {
+    body = body.slice(0, maxBody);
+    const lastBullet = body.lastIndexOf('\n');
+    if (lastBullet > 0) body = body.slice(0, lastBullet);
+  }
+  return `${subject}\n\n${body}`;
 }
 
 /** Run a sweep commit if cwd is a git repo with uncommitted changes.
