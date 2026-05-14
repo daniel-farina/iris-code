@@ -10,6 +10,7 @@
 import { parseArgs } from 'node:util';
 import { runLoop } from './agent.js';
 import { MtplxClient } from './client.js';
+import { setDelegateContext } from './tools/delegate.js';
 import {
   DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS,
   DEFAULT_MAX_ROUNDS,
@@ -24,7 +25,8 @@ import {
   generateCwdStableSessionId,
 } from './config.js';
 import { type ChatMessage, systemMessage, userMessage } from './schema.js';
-import { DEFAULT_SYSTEM_PROMPT } from './system_prompt.js';
+import { DEFAULT_SYSTEM_PROMPT, withEnv } from './system_prompt.js';
+import { VERSION } from './version.js';
 
 interface Flags {
   print?: string;
@@ -37,6 +39,7 @@ interface Flags {
   topP: number;
   topK: number;
   continueLast?: boolean;
+  fresh?: boolean;
   resume?: string;
   quiet?: boolean;
   system?: string;
@@ -76,8 +79,6 @@ interface Flags {
   /** URL to check; default http://localhost:5173 (Vite). */
   browserCheckUrl?: string;
 }
-
-const VERSION = '0.4.1-dev';
 
 /** Normalize a bare `--clear-stale-sessions` (with no following value or
  *  followed by another flag) to `--clear-stale-sessions=30`. node:parseArgs
@@ -125,6 +126,7 @@ export function parseFlags(argv: string[]): Flags {
       'top-p': { type: 'string' },
       'top-k': { type: 'string' },
       'continue-last': { type: 'boolean', short: 'c' },
+      fresh: { type: 'boolean' },
       resume: { type: 'string' },
       quiet: { type: 'boolean', short: 'q' },
       system: { type: 'string' },
@@ -176,6 +178,7 @@ export function parseFlags(argv: string[]): Flags {
     topP: num('top-p', values['top-p'] as string | undefined, DEFAULT_TOP_P),
     topK: num('top-k', values['top-k'] as string | undefined, DEFAULT_TOP_K),
     continueLast: (values['continue-last'] as boolean | undefined) ?? false,
+    fresh: (values.fresh as boolean | undefined) ?? false,
     resume: (values.resume as string | undefined) ?? undefined,
     quiet: (values.quiet as boolean | undefined) ?? false,
     system: (values.system as string | undefined) ?? undefined,
@@ -234,6 +237,7 @@ Options:
   --model <id>                       model id (default ${DEFAULT_MODEL})
   --session <id>                     stable session id; reuse across hip runs so MTPLX's 8-slot session bank keeps the prefix cache warm (default auto-YYYYMMDD-HHMMSS-<hex>)
   -c, --continue-last                resume the most recent session in this cwd (falls back to global-latest if none)
+  --fresh                            force a brand-new session, skip auto-resume of the last cwd session
   --resume <id>                      resume a specific session id
   -q, --quiet                        --print mode: suppress tool-call logs on stderr (final answer only)
   --system <prompt>                  override the default coding-assistant system prompt
@@ -247,7 +251,7 @@ Options:
   --browser-check / --no-browser-check  after --print exits, headless-Chrome load URL + dump console errors (default ON; env: HIP_NO_BROWSER_CHECK=1 to disable)
   --browser-check-url <url>          URL to check (default http://localhost:5173; env: HIP_BROWSER_CHECK_URL)
   --clear-stale-sessions [N]         at startup, clear MTPLX sessions idle >N min (default 30) to free session-bank slots
-  --update                           download + install the latest release from GitHub
+  --update                           download the latest hip release, install over the current binary, then verify MTPLX config
   --install-info                     print where hip is installed and the target platform
   --setup                            interactive: detect MTPLX, diff vs recommended, offer restart
   --no-drift-check                   suppress the MTPLX config-drift banner on launch
@@ -309,7 +313,8 @@ async function main() {
   //   --resume <id>     -> load conv from store
   //   --continue-last   -> load the most recent session's conv
   //   else              -> new conv with system prompt only
-  const { resolvedSessionId, startConv, startRunningSummary } = await resolveSessionAndConv(flags);
+  const { resolvedSessionId, startConv, startRunningSummary, startTasks, startTaskNextId } =
+    await resolveSessionAndConv(flags);
 
   // Pre-flight stale-session cleanup (frees MTPLX session-bank slots).
   // Runs AFTER session resolution so we know which id to protect.
@@ -347,13 +352,20 @@ async function main() {
 
   // Interactive TUI - lazy-import so --print doesn't pay the React load cost.
   const { runTui } = await import('./ui/tui.js');
-  await runTui(flags, resolvedSessionId);
+  await runTui(flags, resolvedSessionId, {
+    startConv,
+    startRunningSummary,
+    startTasks,
+    startTaskNextId,
+  });
 }
 
 async function resolveSessionAndConv(flags: Flags): Promise<{
   resolvedSessionId: string;
   startConv: ChatMessage[];
   startRunningSummary?: string[];
+  startTasks?: import('./task_manager.js').Task[];
+  startTaskNextId?: number;
 }> {
   const { findSession, lastSession, lastSessionForCwd } = await import('./session_store.js');
   if (flags.resume) {
@@ -371,6 +383,8 @@ async function resolveSessionAndConv(flags: Flags): Promise<{
         resolvedSessionId: rec.session_id,
         startConv: rec.conv,
         startRunningSummary: rec.running_summary,
+        startTasks: rec.tasks,
+        startTaskNextId: rec.task_next_id,
       };
     }
   } else if (flags.continueLast) {
@@ -392,17 +406,47 @@ async function resolveSessionAndConv(flags: Flags): Promise<{
         resolvedSessionId: rec.session_id,
         startConv: rec.conv,
         startRunningSummary: rec.running_summary,
+        startTasks: rec.tasks,
+        startTaskNextId: rec.task_next_id,
       };
     }
   }
-  // No explicit session id: derive one from cwd so subsequent runs in
-  // the same directory share the same MTPLX session-bank slot. Rolls
-  // over daily to avoid unbounded growth. Falls back to the random
-  // auto-id if cwd somehow isn't resolvable.
-  const stableId = generateCwdStableSessionId(process.cwd());
+  // No --resume, no --continue-last: by default we still resume the
+  // most recent session for this cwd if one exists and is recent
+  // enough. This matches the user's mental model of "I closed hip in
+  // this folder; reopening picks up where I left off." A --fresh flag
+  // (or /new inside the TUI) escapes to a brand-new session.
+  // Recency cutoff: 24 hours. Older sessions are stale enough that
+  // auto-resuming them would surprise the user; in that case we fall
+  // through to a fresh session id.
+  if (!flags.fresh) {
+    const rec = await lastSessionForCwd(process.cwd());
+    if (rec) {
+      const ageMs = Date.now() - rec.ts_unix * 1000;
+      const ageH = ageMs / (1000 * 60 * 60);
+      if (ageH < 24) {
+        const sumHint = rec.running_summary?.length
+          ? `, ${rec.running_summary.length} summary lines`
+          : '';
+        process.stderr.write(
+          `[hip] auto-resume ${rec.session_id} (${rec.conv.length} msgs${sumHint}, ${Math.round(ageH * 60)}m ago) - pass --fresh for a new session\n`,
+        );
+        return {
+          resolvedSessionId: rec.session_id,
+          startConv: rec.conv,
+          startRunningSummary: rec.running_summary,
+        };
+      }
+    }
+  }
+  // Fresh session: a brand-new auto-id (not cwd-stable). The
+  // cwd-stable-id experiment caused confusion - MTPLX would keep
+  // the old session's cached prefix under that id, but hip's conv
+  // would be fresh, so the cache diverged on the very first round.
+  // A fresh auto-id cold-prefills the small new prompt cleanly.
   return {
-    resolvedSessionId: flags.session ?? stableId,
-    startConv: [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)],
+    resolvedSessionId: flags.session ?? generateAutoSessionId(),
+    startConv: [systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT))],
   };
 }
 
@@ -440,7 +484,7 @@ async function runPrintMode(
   let baseConv = startConv;
   if (detectResetIntent(flags.print, startConv.length)) {
     const sysMsg = startConv.find((m) => m.role === 'system');
-    baseConv = sysMsg ? [sysMsg] : [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)];
+    baseConv = sysMsg ? [sysMsg] : [systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT))];
     if (!flags.quiet) {
       process.stderr.write(
         `[hip] detected reset/new-task signal in prompt; cleared ${startConv.length - baseConv.length} prior messages\n`,
@@ -493,6 +537,19 @@ async function runPrintMode(
     // Don't keep the event loop alive just for this timer.
     maxTimeTimer.unref?.();
   }
+  // Thread delegate-tool context so sub-agents reuse the same MTPLX
+  // server + model + sampling as the main loop.
+  setDelegateContext({
+    baseUrl: flags.url,
+    model: flags.model,
+    parentSessionId: sessionId,
+    sampling: {
+      temperature: flags.temperature,
+      top_p: flags.topP,
+      top_k: flags.topK,
+      max_tokens: flags.maxTokens,
+    },
+  });
   const stats = await runLoop({
     client,
     conv,

@@ -1,6 +1,6 @@
 {
   "name": "hippo-code",
-  "version": "0.4.1-dev",
+  "version": "0.5.0-dev",
   "description": "Lean coding agent for the local MTPLX server (Bun + Ink TUI; ports the Rust hip).",
   "type": "module",
   "main": "src/cli.ts",

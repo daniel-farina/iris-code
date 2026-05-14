@@ -11,7 +11,7 @@ export const bashTool: Tool = {
     function: {
       name: 'bash',
       description:
-        'Run a shell command via /bin/sh -c and capture combined stdout+stderr. Default timeout 30s; pass timeout_s to override (max 600). Returns the captured output (possibly truncated to last ~16KB) plus the exit status.',
+        'Run a shell command (combined stdout+stderr, 30s default timeout, output capped at last 16KB). For long-running commands use `bg_run`.',
       parameters: {
         type: 'object',
         properties: {

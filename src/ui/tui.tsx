@@ -11,14 +11,28 @@ import React, { type FC, useEffect, useRef, useState } from 'react';
 // import even though TypeScript can't see the usage in JSX.
 void React;
 import { runLoop } from '../agent.js';
+import { setDelegateContext } from '../tools/delegate.js';
+import { VERSION } from '../version.js';
+import { type BgTaskInfo, bgTasks, shortLabel } from '../background_tasks.js';
 import { MtplxClient } from '../client.js';
 import { generateAutoSessionId } from '../config.js';
 import { type ChatMessage, systemMessage, userMessage } from '../schema.js';
 import { updateSession } from '../session_store.js';
 import type { SidecarConfig } from '../sidecar.js';
-import { DEFAULT_SYSTEM_PROMPT } from '../system_prompt.js';
+import {
+  formatTaskList,
+  statusGlyph as taskStatusGlyph,
+  taskManager,
+  type Task,
+} from '../task_manager.js';
+import { DEFAULT_SYSTEM_PROMPT, withEnv } from '../system_prompt.js';
 import { detectResetIntent } from '../topic_detect.js';
-import { estimateTokens, formatTokens, shouldAutoCompact } from './auto_compact.js';
+import {
+  AUTO_COMPACT_TOKEN_THRESHOLD,
+  estimateTokens,
+  formatTokens,
+  shouldAutoCompact,
+} from './auto_compact.js';
 import { nextHippoWord, randomHippoWord } from './hippo_words.js';
 import { listLoops, parseLoopInput, scheduleLoop, stopAllLoops, stopLoop } from './loop.js';
 import { emptyStats, formatPerTool, formatStats } from './stats.js';
@@ -60,15 +74,56 @@ type TranscriptItem =
 interface AppProps {
   flags: TuiFlags;
   initialSessionId: string;
+  /** Conv array to seed the session with. Defaults to just the system
+   *  prompt for a fresh start. Pass the persisted record's `conv` to
+   *  resume. */
+  startConv?: ChatMessage[];
+  /** Sidecar running-summary lines from a previous run (preserved
+   *  across restart so /compact can splice them in for free). */
+  startRunningSummary?: string[];
+  /** Task list snapshot to rehydrate the task manager with. */
+  startTasks?: Task[];
+  /** Next task id counter from the snapshot, so new tasks continue
+   *  numbering instead of colliding with rehydrated ones. */
+  startTaskNextId?: number;
 }
 
-const App: FC<AppProps> = ({ flags, initialSessionId }) => {
+const App: FC<AppProps> = ({
+  flags,
+  initialSessionId,
+  startConv,
+  startRunningSummary,
+  startTasks,
+  startTaskNextId,
+}) => {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const [transcript, setTranscript] = useState<TranscriptItem[]>([
-    { kind: 'system', text: `hip · ${flags.model} · session ${initialSessionId.slice(0, 30)}` },
-    { kind: 'system', text: 'type a message · /help for commands · /quit to exit' },
-  ]);
+  // Build the initial transcript. For a fresh start: just the
+  // session-id + help-hint banners. For a resumed session: same
+  // banners + a "resumed N messages" line + a compact replay of the
+  // prior conv so the user sees their history.
+  const [transcript, setTranscript] = useState<TranscriptItem[]>(() => {
+    const items: TranscriptItem[] = [
+      { kind: 'system', text: `hip · ${flags.model} · session ${initialSessionId.slice(0, 30)}` },
+      { kind: 'system', text: 'type a message · /help for commands · /quit to exit' },
+    ];
+    if (startConv && startConv.length > 1) {
+      items.push({
+        kind: 'system',
+        text: `[resumed ${startConv.length} messages from this session]`,
+      });
+      // Replay user/assistant messages (skip system and tool_results -
+      // tool calls are summarized in the prior assistant items).
+      for (const m of startConv) {
+        if (m.role === 'user' && typeof m.content === 'string') {
+          items.push({ kind: 'user', text: m.content });
+        } else if (m.role === 'assistant' && typeof m.content === 'string' && m.content.trim().length > 0) {
+          items.push({ kind: 'assistant', text: m.content });
+        }
+      }
+    }
+    return items;
+  });
   // In-progress streaming item, rendered OUTSIDE Ink's <Static> wrapper
   // so it can redraw without forcing the whole transcript to redraw
   // (which is what was causing the flicker). On round end, this gets
@@ -89,10 +144,36 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   const [autoCompactOn, setAutoCompactOn] = useState<boolean>(flags.autoCompact !== false);
   // /browser on|off: run headless-Chrome console check on demand.
   const [browserCheckUrl, setBrowserCheckUrl] = useState<string>('http://localhost:5173');
-  const convRef = useRef<ChatMessage[]>([systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)]);
+  // Browser-check enabled flag for the top status bar. /browser off
+  // disables it; /browser on or /browser <url> re-enables.
+  const [browserEnabled, setBrowserEnabled] = useState<boolean>(true);
+  // Mirror of bgTasks for the top/bottom status bars. Updated via the
+  // subscribe() callback so the TUI re-renders whenever a task starts,
+  // stops, or emits output (preview text in the bar).
+  const [bgTaskList, setBgTaskList] = useState<BgTaskInfo[]>([]);
+  // Mirror of taskManager state for the task panel. Updated via the
+  // subscribe() callback.
+  const [tasks, setTasks] = useState<Task[]>([]);
+  // When the model (or the user) advances to a new task, we set this
+  // to the task that should drive the post-round reset. The reset
+  // itself happens in dispatchPrompt's `finally` so the model's
+  // current round can finish cleanly first.
+  const pendingTaskResetRef = useRef<Task | null>(null);
+  // Sidecar display state for the top bar. Tracked separately from
+  // sidecarCfgRef because refs don't trigger re-renders.
+  const [sidecarLabel, setSidecarLabel] = useState<string>('detecting…');
+  // Seed conv from a resumed session if one was passed; otherwise
+  // start with just the (env-prepended) system prompt. The startConv
+  // already contains its own system message from the persisted record,
+  // so we don't re-prepend one in that case.
+  const convRef = useRef<ChatMessage[]>(
+    startConv && startConv.length > 0
+      ? [...startConv]
+      : [systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT))],
+  );
   // Sidecar running-summary: one line per round, used to short-circuit
   // expensive main-model summarize calls in /compact.
-  const runningSummaryRef = useRef<string[]>([]);
+  const runningSummaryRef = useRef<string[]>(startRunningSummary ? [...startRunningSummary] : []);
   const sidecarCfgRef = useRef<SidecarConfig | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const [stats, setStats] = useState(() => emptyStats());
@@ -142,6 +223,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
           url: flags.sidecarUrl ?? 'http://localhost:11434',
           model: flags.sidecarModel,
         };
+        setSidecarLabel(flags.sidecarModel);
         setTranscript((p) => [
           ...p,
           {
@@ -152,8 +234,10 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         return;
       }
       const status = await probeSidecar(flags.sidecarUrl);
+      if (status.kind !== 'ok') setSidecarLabel('off');
       if (status.kind === 'ok') {
         sidecarCfgRef.current = status.config;
+        setSidecarLabel(status.config.model);
         setTranscript((p) => [
           ...p,
           {
@@ -162,6 +246,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
           },
         ]);
       } else if (!quietSidecar && status.kind === 'no-ollama') {
+        setSidecarLabel('off');
         setTranscript((p) => [
           ...p,
           {
@@ -170,6 +255,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
           },
         ]);
       } else if (!quietSidecar) {
+        setSidecarLabel('off');
         // Ollama up, but no preferred model installed.
         const top = status.kind === 'no-model' ? status.preferred[0] : 'gemma4:e2b';
         const list =
@@ -186,6 +272,66 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     // Sidecar config doesn't change after mount, but include them to
     // satisfy the linter without a suppression comment.
   }, [flags.sidecarModel, flags.sidecarUrl]);
+
+  // Mirror bgTasks state into React. Subscribe once at mount and clean
+  // up on unmount. Each emit (start, stop, output chunk) re-pulls the
+  // full list - cheap because the list is bounded to ~20 retained tasks.
+  useEffect(() => {
+    setBgTaskList(bgTasks.list());
+    const unsub = bgTasks.subscribe(() => setBgTaskList(bgTasks.list()));
+    return () => {
+      unsub();
+    };
+  }, []);
+
+  // Mirror taskManager state into React and react to lifecycle events.
+  // - 'created'/'updated': refresh the local list so the panel updates.
+  // - 'started': remember the active task so dispatchPrompt's finally
+  //   block can run a between-task context reset after the round ends.
+  //   We don't reset mid-round: the agent loop is in the middle of
+  //   processing the task_next tool result; cutting its conv out from
+  //   under it would orphan its in-flight messages.
+  useEffect(() => {
+    // Rehydrate the task manager from the resumed snapshot (if any)
+    // BEFORE subscribing - the rehydrate emits 'cleared' which our
+    // subscriber would otherwise see as a no-op.
+    if (startTasks && startTasks.length > 0) {
+      taskManager.rehydrate({ tasks: startTasks, nextNum: startTaskNextId });
+      setTranscript((p) => [
+        ...p,
+        {
+          kind: 'system',
+          text: `[resumed ${startTasks.length} tasks - use /tasks to view]`,
+        },
+      ]);
+    }
+    setTasks(taskManager.list());
+    const unsub = taskManager.subscribe((ev) => {
+      setTasks(taskManager.list());
+      if (ev.kind === 'started') {
+        pendingTaskResetRef.current = ev.task;
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: `[task id=${ev.task.id} started: ${ev.task.subject} - context will reset after this round]`,
+          },
+        ]);
+      }
+      if (ev.kind === 'completed') {
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: `[task id=${ev.task.id} completed: ${ev.task.subject}]`,
+          },
+        ]);
+      }
+    });
+    return () => {
+      unsub();
+    };
+  }, []);
   // While busy, rotate the hippo word + tick the elapsed counter every
   // second. The hippoWord cycles independently every ~1.5s; elapsed
   // ticks at 1Hz. Both stop and reset on busy=false.
@@ -335,7 +481,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     if (key.ctrl && _input === 'n') {
       void persistCurrentSession();
       const newId = generateAutoSessionId();
-      convRef.current = [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)];
+      convRef.current = [systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT))];
       setSessionId(newId);
       setStats(emptyStats());
       setTranscript([
@@ -348,9 +494,13 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   async function persistCurrentSession(): Promise<void> {
     // Mirror runPrintMode: rewrite this session's record so /resume picks
     // it up on a future launch. Idempotent - safe to call after every turn.
+    // Persists conv + sidecar running_summary + the task plan snapshot
+    // so a restart restores the full session state, not just the conv.
     const conv = convRef.current;
     if (conv.length <= 1) return; // system prompt only, nothing to save
     const firstUser = conv.find((m) => m.role === 'user')?.content ?? '';
+    const summary = runningSummaryRef.current.length > 0 ? [...runningSummaryRef.current] : undefined;
+    const taskSnap = taskManager.snapshot();
     try {
       await updateSession({
         session_id: sessionId,
@@ -358,6 +508,9 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         cwd: process.cwd(),
         first_user: typeof firstUser === 'string' ? firstUser.slice(0, 200) : '',
         conv,
+        running_summary: summary,
+        tasks: taskSnap.tasks.length > 0 ? taskSnap.tasks : undefined,
+        task_next_id: taskSnap.nextNum,
       });
     } catch {
       // Best-effort - don't crash the REPL if disk is full / locked.
@@ -417,7 +570,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         return;
       }
       convRef.current = [
-        systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT),
+        systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT)),
         userMessage(`[Compacted session summary]\n${summary}`),
         { role: 'assistant', content: 'OK, continuing from the summary.' },
       ];
@@ -484,7 +637,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     if (detectResetIntent(t, convRef.current.length)) {
       const sysMsg = convRef.current.find((m) => m.role === 'system');
       const before = convRef.current.length;
-      convRef.current = sysMsg ? [sysMsg] : [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)];
+      convRef.current = sysMsg ? [sysMsg] : [systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT))];
       setTranscript((p) => [
         ...p,
         {
@@ -493,8 +646,31 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         },
       ]);
     }
-    setTranscript((prev) => [...prev, { kind: 'user', text: t }]);
-    convRef.current.push(userMessage(t));
+    // Surface any bg-task completions that landed since the previous
+    // turn. Show them in the transcript AND prepend a one-line system
+    // note to the user message so the model knows to react (e.g. after
+    // a build finishes, switch to running tests).
+    const bgDone = bgTasks.drainCompletions();
+    if (bgDone.length > 0) {
+      const lines = bgDone
+        .map(
+          (d) =>
+            `[bg ${d.id}] ${d.status}${
+              d.exitCode !== undefined ? ` (exit ${d.exitCode})` : ''
+            } - ${d.command}`,
+        )
+        .join('\n');
+      setTranscript((prev) => [...prev, { kind: 'system', text: lines }]);
+      // Prepend to the user turn so the round sees it. Marked with
+      // <bg-notification> so the system_prompt rule about flagging
+      // hardcoded/incomplete state still applies cleanly.
+      const annotated = `<bg-notification>\n${lines}\n</bg-notification>\n${t}`;
+      setTranscript((prev) => [...prev, { kind: 'user', text: t }]);
+      convRef.current.push(userMessage(annotated));
+    } else {
+      setTranscript((prev) => [...prev, { kind: 'user', text: t }]);
+      convRef.current.push(userMessage(t));
+    }
     setBusy(true);
     setStatus(''); // let the hippo-word rotator render the default state
 
@@ -532,6 +708,21 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     });
 
     abortRef.current = new AbortController();
+    // Refresh the delegate-tool context so sub-agents inherit the
+    // current runtime model / sampling / session. Set per-dispatch
+    // rather than once at mount because /model / /temperature can
+    // change these between turns.
+    setDelegateContext({
+      baseUrl: flags.url,
+      model: runtimeModel,
+      parentSessionId: sessionId,
+      sampling: {
+        temperature: runtimeTemperature,
+        top_p: runtimeTopP,
+        top_k: runtimeTopK,
+        max_tokens: runtimeMaxTokens,
+      },
+    });
     try {
       await runLoop({
         client,
@@ -545,11 +736,14 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
         },
         maxRounds: runtimeMaxRounds,
         postcommitDelayMs: flags.postcommitDelayMs,
-        // The TUI has its own auto-compact path that fires after the
-        // round completes (so the user sees the compact reflected
-        // before the next round); disable runLoop's internal one to
-        // avoid double-compaction.
-        autoCompactThresholdTokens: 0,
+        // Mid-round auto-compact. Without this, long single-prompt
+        // dispatches (one user message → 60+ rounds of work) drift
+        // past MTPLX's session-bank size cliff (~24K tok), every turn
+        // after becomes a 45s cold prefill. We compact at the config
+        // default with sidecar summaries to stay warm.
+        // autoCompactOn=false disables entirely.
+        autoCompactThresholdTokens: autoCompactOn ? AUTO_COMPACT_TOKEN_THRESHOLD : 0,
+        systemPromptForCompact: flags.system,
         sidecar: sidecarCfgRef.current ?? undefined,
         runningSummary: sidecarCfgRef.current ? runningSummaryRef.current : undefined,
         events: {
@@ -559,6 +753,62 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
             // (Future: show in a footer line.)
             void line;
             void total;
+          },
+          onCompactStart: (tokensBefore) => {
+            setStatus(`auto-compacting (${tokensBefore} tok)...`);
+            setTranscript((p) => [
+              ...p,
+              {
+                kind: 'system',
+                text: `[auto-compact triggered at ${tokensBefore} tokens]`,
+              },
+            ]);
+          },
+          onCompactDone: (tokensBefore, tokensAfter, msgsBefore) => {
+            setStatus('');
+            setTranscript((p) => [
+              ...p,
+              {
+                kind: 'system',
+                text: `[auto-compact: ${tokensBefore} → ${tokensAfter} tok (${msgsBefore} msgs collapsed) - prefix cache should stay warm]`,
+              },
+            ]);
+          },
+          onBetweenRounds: async (conv) => {
+            // Apply a queued task-transition reset mid-loop. The
+            // taskManager subscription set pendingTaskResetRef when a
+            // task flipped to in_progress; we run the actual conv
+            // rewrite here (rather than in dispatchPrompt's finally)
+            // so the next round starts with a fresh narrow context.
+            const taskToResetTo = pendingTaskResetRef.current;
+            if (!taskToResetTo) return;
+            pendingTaskResetRef.current = null;
+            const sysMsg =
+              conv.find((m) => m.role === 'system') ??
+              systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT));
+            const sideLines = runningSummaryRef.current.filter((s) => s.trim().length > 0);
+            const summaryBlock =
+              sideLines.length > 0
+                ? `[prior-task summary]\n${sideLines.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n`
+                : '';
+            const taskList = formatTaskList(taskManager.list());
+            const reseed = userMessage(
+              `${summaryBlock}[current task] id=${taskToResetTo.id}: ${taskToResetTo.subject}\n${taskToResetTo.description}\n\n[task list so far]\n${taskList}\n\nWork this task. When done, call task_update with id="${taskToResetTo.id}" status="completed", then task_next. Stick to the plan.`,
+            );
+            const beforeCount = conv.length;
+            // Mutate conv in place so the agent loop sees the new
+            // contents on its next stream call. NEVER replace the
+            // reference - the loop captured it by reference.
+            conv.length = 0;
+            conv.push(sysMsg);
+            conv.push(reseed);
+            setTranscript((p) => [
+              ...p,
+              {
+                kind: 'system',
+                text: `[task reset mid-loop: dropped ${beforeCount - 2} msgs · reseeded with summary digest + task id=${taskToResetTo.id}]`,
+              },
+            ]);
           },
           onToolResultPrune: (pruned, charsSaved) => {
             setTranscript((p) => [
@@ -585,6 +835,12 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
               rounds: prev.rounds + 1,
               completionTokens: prev.completionTokens + (info.ctok ?? 0),
             }));
+            // Persist after every round, not just every dispatch.
+            // Long single-prompt dispatches can run 20+ rounds; without
+            // per-round persist, external monitors (and recovery on
+            // crash) see nothing until the whole dispatch completes.
+            // Cost: one async write per round (~1-2ms, off the hot path).
+            void persistCurrentSession();
           },
           onToolStart: (name, args) => {
             toolStartTimes.current[name] = performance.now();
@@ -649,11 +905,14 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       setStatus('');
       // Persist after every turn so the REPL session survives an exit.
       void persistCurrentSession();
-      // Auto-compact: if conv crossed the ~10K-token eviction cliff,
-      // summarize before the next round so MTPLX keeps our session
-      // bank slot warm. Fires before the queue drain so the next
-      // queued prompt starts from a short prefix. setTimeout(0) so we
-      // don't stack on top of React's render cycle.
+      // Task-transition resets and auto-compact now both happen
+      // MID-LOOP in the runLoop onBetweenRounds hook (above), not
+      // here. This block used to fire at end-of-dispatch but for
+      // long single-prompt dispatches (60+ rounds in one user
+      // message) that meant resets/compacts never ran in time.
+      // We still leave the end-of-dispatch auto-compact fallback as
+      // a safety net for cases where the threshold was raised
+      // mid-flight or the conv crossed it between dispatches.
       if (shouldAutoCompact(convRef.current, autoCompactOn)) {
         setTimeout(() => void runCompact('auto'), 0);
       }
@@ -708,7 +967,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
             runtimeModel +
             ')\n  /top-p [0-1|default]        get/set sampler top-p\n  /top-k [int|default]        get/set sampler top-k\n  /temperature [0-2|default]  get/set sampler temperature (current ' +
             runtimeTemperature +
-            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)\n  /browser [url]              headless-Chrome console-error check (default http://localhost:5173)\n  /auto-compact [on|off]      toggle auto-/compact at ~9K tokens (current\n  /setup                      check MTPLX config drift\n  /setup-apply                restart MTPLX with recommended env (after /setup)' +
+            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)\n  /browser [url]              headless-Chrome console-error check (default http://localhost:5173)\n  /auto-compact [on|off]      toggle auto-/compact at ~9K tokens (current\n  /setup                      check MTPLX config drift\n  /setup-apply                restart MTPLX with recommended env (after /setup)\n  /tasks                      list the model task plan (created via task_create)\n  /next                       claim the next pending task (resets context next round)\n  /tasks-clear                drop all tasks from the manager\n  /browser on|off|<url>       toggle / set browser_check (status shown in top bar)' +
             (autoCompactOn ? 'on' : 'off') +
             ')',
         },
@@ -720,9 +979,11 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       // /resume <id> from the next launch.
       void persistCurrentSession();
       const newId = generateAutoSessionId();
-      convRef.current = [systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)];
+      convRef.current = [systemMessage(withEnv(flags.system ?? DEFAULT_SYSTEM_PROMPT))];
       setSessionId(newId);
       setStats(emptyStats());
+      taskManager.clear();
+      runningSummaryRef.current.length = 0;
       setTranscript([{ kind: 'system', text: `[new session: ${newId}]` }]);
       return true;
     }
@@ -798,6 +1059,48 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
     // prefix cache small for long-running iterative work.
     if (lower === '/compact' || lower === ':compact') {
       void runCompact('manual');
+      return true;
+    }
+    // /tasks: print the current plan (whatever the model has created
+    // via task_create). Read-only - the model still owns the list.
+    if (lower === '/tasks' || lower === ':tasks') {
+      const list = taskManager.list();
+      const c = taskManager.counts();
+      setTranscript((p) => [
+        ...p,
+        {
+          kind: 'system',
+          text:
+            list.length === 0
+              ? '[no tasks - the model will create them as needed]'
+              : `tasks: ${c.completed}/${c.total} done\n${formatTaskList(list)}`,
+        },
+      ]);
+      return true;
+    }
+    // /tasks-clear: drop all tasks from the manager. Use when the user
+    // pivots to a completely different request and wants a clean slate.
+    if (lower === '/tasks-clear' || lower === ':tasks-clear') {
+      taskManager.clear();
+      setTranscript((p) => [...p, { kind: 'system', text: '[task list cleared]' }]);
+      return true;
+    }
+    // /next: manually advance to the next pending task. Same effect as
+    // the model calling task_next - flips status to in_progress and
+    // arms a context reset for the next round.
+    if (lower === '/next' || lower === ':next') {
+      const n = taskManager.next();
+      if (!n) {
+        setTranscript((p) => [...p, { kind: 'system', text: '[no pending tasks]' }]);
+      } else {
+        setTranscript((p) => [
+          ...p,
+          {
+            kind: 'system',
+            text: `[advanced to id=${n.id}: ${n.subject} - context will reset on the next round]`,
+          },
+        ]);
+      }
       return true;
     }
     // /setup: detect MTPLX config drift + offer to fix from inside the
@@ -897,13 +1200,31 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       })();
       return true;
     }
-    // /browser [url]: run a headless-Chrome console check now and show
-    // any errors found. `/browser <url>` updates the default URL too.
+    // /browser [url|on|off]: run a headless-Chrome console check now and
+    // show any errors found. `/browser <url>` updates the default URL.
+    // `/browser off` disables the browser feature (shown in top bar);
+    // `/browser on` re-enables.
     const bcm = cmd.match(/^[/:]browser(?:\s+(\S+))?\s*$/i);
     if (bcm) {
-      const argUrl = bcm[1];
-      if (argUrl?.startsWith('http')) setBrowserCheckUrl(argUrl);
-      const target = argUrl?.startsWith('http') ? argUrl : browserCheckUrl;
+      const arg = bcm[1];
+      if (arg === 'off') {
+        setBrowserEnabled(false);
+        setTranscript((p) => [...p, { kind: 'system', text: 'browser_check disabled' }]);
+        return true;
+      }
+      if (arg === 'on') {
+        setBrowserEnabled(true);
+        setTranscript((p) => [
+          ...p,
+          { kind: 'system', text: `browser_check enabled (url: ${browserCheckUrl})` },
+        ]);
+        return true;
+      }
+      if (arg?.startsWith('http')) {
+        setBrowserCheckUrl(arg);
+        setBrowserEnabled(true);
+      }
+      const target = arg?.startsWith('http') ? arg : browserCheckUrl;
       setTranscript((p) => [
         ...p,
         { kind: 'system', text: `running browser_check on ${target}...` },
@@ -1182,6 +1503,8 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   }
 
   const width = stdout?.columns ?? 80;
+  const runningBg = bgTaskList.filter((t) => t.status === 'running');
+  const cwdLabel = compactPath(process.cwd(), Math.max(20, Math.floor(width * 0.4)));
 
   return (
     <Box flexDirection="column" width={width}>
@@ -1192,11 +1515,29 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       <Static items={transcript}>
         {(item, i) => <TranscriptLine key={i} item={item} width={width} />}
       </Static>
+      {/* Top status bar of the live region: cwd · sidecar · browser
+          on the left, hip version on the right. Sits just below
+          scrollback and re-renders when any of those values change.
+          NOT inside <Static> because <Static> would freeze its
+          content at first render. */}
+      <Box justifyContent="space-between" width={width}>
+        <Text color={HIPPO_SHADOW}>
+          {`▎ cwd: `}
+          <Text color={HIPPO_PURPLE}>{cwdLabel}</Text>
+          {`  ·  sidecar: `}
+          <Text color={sidecarLabel === 'off' ? HIPPO_DEEP : HIPPO_MOSS}>{sidecarLabel}</Text>
+          {`  ·  browser: `}
+          <Text color={browserEnabled ? HIPPO_MOSS : HIPPO_DEEP}>
+            {browserEnabled ? 'enabled' : 'disabled'}
+          </Text>
+        </Text>
+        <Text color={HIPPO_DEEP}>{`hip ${VERSION} ▎`}</Text>
+      </Box>
       {/* Live streaming text: only this re-renders during streaming.
           Empty string = no live item showing. */}
       {liveText.length > 0 && (
         <Box flexDirection="column">
-          <Text>{truncateLines(liveText, 200, Math.max(20, width - 4))}</Text>
+          <Text>{wrapToWidth(liveText, Math.max(20, width - 4))}</Text>
         </Box>
       )}
       {/* Queue: messages typed while the model was busy. Shows just
@@ -1229,7 +1570,79 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
       {busy && (
         <Box>
           <Spinner type="dots" />
-          <Text color={HIPPO_MUSTARD}>{` ${status || `${hippoWord}...`} (${busyElapsed}s)`}</Text>
+          <Text color={HIPPO_MUSTARD}>{` ${status || `${hippoWord}...`}`}</Text>
+          <Text dimColor>{` · ${formatElapsed(busyElapsed)} since prompt`}</Text>
+        </Box>
+      )}
+      {/* Task panel: shows the model's plan (created via task_create)
+          and progress through it. Hidden when there are no tasks. */}
+      {tasks.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={HIPPO_SHADOW}>
+            {(() => {
+              const c = taskManager.counts();
+              return `tasks: ${c.completed}/${c.total} done${
+                c.inProgress > 0 ? ` · ${c.inProgress} active` : ''
+              }${c.pending > 0 ? ` · ${c.pending} pending` : ''}  (task_list / task_next)`;
+            })()}
+          </Text>
+          {tasks.slice(0, 6).map((t) => (
+            <Text
+              key={t.id}
+              color={
+                t.status === 'in_progress'
+                  ? HIPPO_MUSTARD
+                  : t.status === 'completed'
+                    ? HIPPO_MOSS
+                    : t.status === 'deleted'
+                      ? HIPPO_SOFT_RED
+                      : HIPPO_DEEP
+              }
+            >
+              {`  ${taskStatusGlyph(t.status)} id=${t.id}  ${
+                t.subject.length > Math.max(20, width - 14)
+                  ? t.subject.slice(0, Math.max(20, width - 15)) + '…'
+                  : t.subject
+              }`}
+            </Text>
+          ))}
+          {tasks.length > 6 && <Text dimColor>{`  … ${tasks.length - 6} more`}</Text>}
+        </Box>
+      )}
+      {/* Bottom bg-task bar: list of active background tasks (running)
+          plus a one-line preview of the most recent output. Only
+          renders when at least one task is active OR has been retained
+          after finishing in the current session. */}
+      {bgTaskList.length > 0 && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={HIPPO_MUSTARD}>
+            {`bg tasks: ${runningBg.length} running`}
+            {bgTaskList.length > runningBg.length
+              ? ` · ${bgTaskList.length - runningBg.length} finished`
+              : ''}
+            {`  (bg_list / bg_output / bg_stop)`}
+          </Text>
+          {bgTaskList.slice(0, 4).map((t) => (
+            <Text
+              key={t.id}
+              color={
+                t.status === 'running'
+                  ? HIPPO_MOSS
+                  : t.status === 'completed'
+                    ? HIPPO_DEEP
+                    : HIPPO_SOFT_RED
+              }
+            >
+              {`  ${statusGlyph(t.status)} ${t.id}  ${shortLabel(t, 28).padEnd(28)}  ${
+                t.status === 'running'
+                  ? (t.preview || '(no output yet)').slice(0, Math.max(20, width - 50))
+                  : `${t.status}${t.exitCode !== undefined ? ` (exit ${t.exitCode})` : ''}`
+              }`}
+            </Text>
+          ))}
+          {bgTaskList.length > 4 && (
+            <Text dimColor>{`  … ${bgTaskList.length - 4} more`}</Text>
+          )}
         </Box>
       )}
       <Box>
@@ -1274,18 +1687,22 @@ const TranscriptLine: FC<{ item: TranscriptItem; width: number }> = ({ item, wid
   const w = Math.max(20, width - 4);
   switch (item.kind) {
     case 'user':
+      // Show user messages in full - never truncate. They're what the
+      // user typed; truncating loses context the user explicitly
+      // provided and surprises them. Terminal scrollback handles
+      // long messages naturally.
       return (
         <Box flexDirection="column">
-          <Text color={HIPPO_PURPLE}>{'▶ ' + truncateLines(item.text, 6, w)}</Text>
+          <Text color={HIPPO_PURPLE}>{'▶ ' + wrapToWidth(item.text, w)}</Text>
         </Box>
       );
     case 'assistant':
+      // Show assistant messages in full, including any <think>…</think>
+      // blocks the reasoning model emits. We don't filter or cap -
+      // letting the user see the model's reasoning is part of trust.
       return (
         <Box flexDirection="column">
-          {/* 200 lines is generous; covers most <think> blocks + answer
-              without sacrificing render perf. Terminal scrollback
-              handles longer overflow naturally. */}
-          <Text>{truncateLines(item.text, 200, w)}</Text>
+          <Text>{wrapToWidth(item.text, w)}</Text>
         </Box>
       );
     case 'tool': {
@@ -1303,6 +1720,69 @@ const TranscriptLine: FC<{ item: TranscriptItem; width: number }> = ({ item, wid
   }
 };
 
+/** Shorten a path for the top status bar: collapse $HOME to `~`, then
+ *  if still too wide, replace the middle path components with `…` so
+ *  the basename remains visible. */
+function compactPath(p: string, maxLen: number): string {
+  const home = process.env['HOME'];
+  let s = home && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
+  if (s.length <= maxLen) return s;
+  const parts = s.split('/');
+  if (parts.length <= 2) return s.slice(0, maxLen - 1) + '…';
+  // Keep first segment + last 2 (so the project + cwd remain visible).
+  const head = parts[0] || '/';
+  const tail = parts.slice(-2).join('/');
+  const candidate = `${head}/…/${tail}`;
+  return candidate.length <= maxLen ? candidate : `…/${tail}`.slice(-maxLen);
+}
+
+function statusGlyph(status: string): string {
+  switch (status) {
+    case 'running':
+      return '◆';
+    case 'completed':
+      return '✓';
+    case 'failed':
+      return '✗';
+    case 'killed':
+      return '■';
+    default:
+      return '·';
+  }
+}
+
+/** Render a seconds-since-X counter as a compact human-readable
+ *  string. Used so a long dispatch reads "16m5s" instead of "(965s)"
+ *  which the user mistook for postcommit-wait time. */
+function formatElapsed(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  if (m < 60) return `${m}m${s}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h${m % 60}m`;
+}
+
+/** Wrap long lines at the given width without dropping any content.
+ *  Used for user + assistant messages where the full text matters
+ *  (truncation would lose what the user typed or what the model
+ *  reasoned). Terminal scrollback handles vertical overflow. */
+function wrapToWidth(text: string, width: number): string {
+  const out: string[] = [];
+  for (const line of text.split('\n')) {
+    if (line.length <= width) {
+      out.push(line);
+      continue;
+    }
+    // Greedy line wrap on character boundary - good enough for code
+    // and prose. Word-aware wrapping breaks long URLs and identifiers.
+    for (let i = 0; i < line.length; i += width) {
+      out.push(line.slice(i, i + width));
+    }
+  }
+  return out.join('\n');
+}
+
 function truncateLines(text: string, maxLines: number, width: number): string {
   const lines = text.split('\n');
   const head = lines
@@ -1312,7 +1792,16 @@ function truncateLines(text: string, maxLines: number, width: number): string {
   return head.join('\n');
 }
 
-export async function runTui(flags: TuiFlags, sessionId: string): Promise<void> {
+export async function runTui(
+  flags: TuiFlags,
+  sessionId: string,
+  resume?: {
+    startConv?: ChatMessage[];
+    startRunningSummary?: string[];
+    startTasks?: Task[];
+    startTaskNextId?: number;
+  },
+): Promise<void> {
   // Print the hippo-purple ANSI logo before Ink boots so it lives in
   // the terminal scrollback above the live UI region. Done in stdout
   // (not stderr) because Ink writes to stdout; this keeps the logo
@@ -1320,7 +1809,16 @@ export async function runTui(flags: TuiFlags, sessionId: string): Promise<void> 
   const logo = await loadLogo();
   if (logo) process.stdout.write(logo);
   await new Promise<void>((resolve) => {
-    const { waitUntilExit } = render(<App flags={flags} initialSessionId={sessionId} />);
+    const { waitUntilExit } = render(
+      <App
+        flags={flags}
+        initialSessionId={sessionId}
+        startConv={resume?.startConv}
+        startRunningSummary={resume?.startRunningSummary}
+        startTasks={resume?.startTasks}
+        startTaskNextId={resume?.startTaskNextId}
+      />,
+    );
     void waitUntilExit().then(resolve);
   });
 }

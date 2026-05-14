@@ -9,6 +9,7 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatMessage } from './schema.js';
+import type { Task } from './task_manager.js';
 
 // Read HIP_HOME lazily so tests that change it between cases get the
 // current value (module-cached consts were sticking to the first test's
@@ -32,6 +33,14 @@ export interface SessionRecord {
    *  Persisted so a resumed session can skip the first main-model
    *  summarize call and reuse the cheap sidecar lines. */
   running_summary?: string[];
+  /** Optional task list snapshot. The taskManager is in-memory only;
+   *  without this field, restarting hip loses the user's plan. We
+   *  snapshot the full task array (pending, in_progress, completed,
+   *  deleted) on every persist and rehydrate on resume. */
+  tasks?: Task[];
+  /** Monotonic counter so a rehydrated session continues numbering
+   *  from where it left off (no T1 collision with new tasks). */
+  task_next_id?: number;
 }
 
 async function ensureDir(): Promise<void> {

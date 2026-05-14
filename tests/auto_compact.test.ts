@@ -49,11 +49,14 @@ describe('auto_compact helpers', () => {
   });
 
   it('shouldAutoCompact returns true above threshold', () => {
-    // Generate enough content that JSON.stringify is well over 36K chars
-    // (which translates to >9K tokens by the /4 estimate).
+    // Generate enough content that JSON.stringify is well over the
+    // threshold-bytes mark (threshold * 4 chars).
+    const need = AUTO_COMPACT_TOKEN_THRESHOLD * 4 + 8000;
+    const perTurn = 1200;
+    const turns = Math.ceil(need / perTurn);
     const big: ChatMessage[] = [
       systemMessage('sys'),
-      ...Array.from({ length: 50 }, (_, i) => userMessage(`turn ${i}: ${'x'.repeat(800)}`)),
+      ...Array.from({ length: turns }, (_, i) => userMessage(`turn ${i}: ${'x'.repeat(perTurn)}`)),
     ];
     expect(estimateTokens(big)).toBeGreaterThan(AUTO_COMPACT_TOKEN_THRESHOLD);
     expect(shouldAutoCompact(big, true)).toBe(true);

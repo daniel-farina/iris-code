@@ -3,6 +3,7 @@
 // 1MB file cap. Supports offset+limit and around+context modes.
 
 import { readFile, stat } from 'node:fs/promises';
+import { readState } from '../read_state.js';
 import { type Tool, argString, argU64 } from './types.js';
 
 const MAX_BYTES = 1_048_576;
@@ -15,21 +16,14 @@ export const readTool: Tool = {
     function: {
       name: 'read',
       description:
-        'Read a UTF-8 text file slice. Default: 200 lines from start (small on purpose - large blind reads blow the prompt budget). After a search hit, use `around=<line>` with `context` for a symmetric window. For a known section, use `offset`+`limit`. Output shows `[truncated at N/<total>]` when the file extends beyond what you asked for, so you know to request more if needed. Refuses files >1MB.',
+        'Read a UTF-8 text file. Default 200 lines from start. Use `around=N`+`context` for a window around a search hit, or `offset`+`limit` for a known range. Returns `[truncated at N/total]` when more remains. Refuses files >1MB.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'absolute or cwd-relative file path' },
-          offset: { type: 'integer', description: '1-based starting line (default 1)' },
-          limit: {
-            type: 'integer',
-            description: 'max lines to return (default 200; raise explicitly for larger reads)',
-          },
-          around: {
-            type: 'integer',
-            description:
-              '1-based target line; overrides offset/limit. Returns ±context lines around it.',
-          },
+          path: { type: 'string' },
+          offset: { type: 'integer', description: '1-based start line (default 1)' },
+          limit: { type: 'integer', description: 'max lines (default 200)' },
+          around: { type: 'integer', description: '1-based target line; overrides offset/limit' },
           context: { type: 'integer', description: 'context lines for `around` (default 20)' },
         },
         required: ['path'],
@@ -58,9 +52,19 @@ export const readTool: Tool = {
     if (st.size > MAX_BYTES)
       throw new Error(`read: file is ${st.size} bytes (>1MB), refuse. Use offset/limit.`);
 
-    const content = await readFile(path, 'utf8');
+    const raw = await readFile(path, 'utf8');
+    // Normalize CRLF/CR to LF so the model sees uniform line breaks
+    // and the content hash matches what `edit` computes (edit also
+    // LF-normalizes via file_io.readFileForEdit).
+    const content = raw.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     const lines = content.split('\n');
     const totalLines = lines.length;
+    // Record this read so `edit` can verify the model has actually
+    // seen this file. A read covering offset=1 with no limit cap
+    // counts as a full read; anything else is partial and won't
+    // satisfy the edit pre-read check.
+    const partial = !(offset === 1 && limit >= totalLines && around === undefined);
+    readState.recordRead(path, content, partial);
     const out: string[] = [];
     let emitted = 0;
     for (let i = 0; i < lines.length; i++) {

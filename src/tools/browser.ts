@@ -18,24 +18,13 @@ export const browserTool: Tool = {
     function: {
       name: 'browser_check',
       description:
-        "Open a URL in headless Chrome, load the page, then CLICK every visible button to also catch errors thrown by click handlers (e.g. 'selectedTrack is not defined' that only fires on click). Captures console.error + uncaught exceptions throughout. Use as the final step after any UI/JS change. Returns 'OK' or a list of errors with file:line.",
+        'Open URL in headless Chrome, click every visible button, capture console.error + uncaught exceptions. Run as the final step after a UI/JS change.',
       parameters: {
         type: 'object',
         properties: {
-          url: {
-            type: 'string',
-            description: 'page URL to load. Default http://localhost:5173',
-          },
-          wait_ms: {
-            type: 'integer',
-            description:
-              'milliseconds to wait for the page to settle before the click sweep. Default 3000.',
-          },
-          interact: {
-            type: 'boolean',
-            description:
-              'if true (default), click every visible button after load to catch handler errors. Set false to only check page-load errors.',
-          },
+          url: { type: 'string', description: 'default http://localhost:5173' },
+          wait_ms: { type: 'integer', description: 'settle time before clicks (default 3000)' },
+          interact: { type: 'boolean', description: 'click buttons (default true)' },
         },
       },
     },

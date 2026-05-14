@@ -12,21 +12,15 @@ export const searchTool: Tool = {
     function: {
       name: 'search',
       description:
-        'Recursive ripgrep-style search. Two modes: output_mode="files_with_matches" returns only the file paths; output_mode="content" returns matching lines with ±context (default 0). Pass glob to restrict file types. Returns at most 200 matches before truncation. Use this BEFORE read - it is much cheaper than reading whole files.',
+        'Ripgrep-style search. `output_mode="files_with_matches"` (default) returns paths; `"content"` returns lines with ±context. Use before read - cheaper than reading whole files.',
       parameters: {
         type: 'object',
         properties: {
-          pattern: { type: 'string', description: 'regex pattern (PCRE2 if rg supports it)' },
-          path: { type: 'string', description: 'directory to search (default cwd)' },
-          glob: { type: 'string', description: 'file glob like "*.js" or "src/**/*.ts"' },
-          output_mode: {
-            type: 'string',
-            description: '"files_with_matches" (default) or "content"',
-          },
-          context: {
-            type: 'integer',
-            description: 'lines of context above/below each match (content mode)',
-          },
+          pattern: { type: 'string', description: 'regex' },
+          path: { type: 'string', description: 'dir (default cwd)' },
+          glob: { type: 'string', description: 'e.g. "src/**/*.ts"' },
+          output_mode: { type: 'string', description: '"files_with_matches" | "content"' },
+          context: { type: 'integer', description: 'context lines (content mode)' },
         },
         required: ['pattern'],
       },

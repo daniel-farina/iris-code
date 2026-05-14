@@ -53,6 +53,12 @@ export interface AgentEvents {
   onCompactStart?: (tokensBefore: number) => void;
   /** Fired after a mid-loop auto-compact completes. */
   onCompactDone?: (tokensBefore: number, tokensAfter: number, msgsBefore: number) => void;
+  /** Fired between agent rounds (before the next stream call, after
+   *  any prune/auto-compact). Receives the conv array by reference so
+   *  the callback can mutate it in place (e.g. drop everything and
+   *  reseed for a task transition). May return a Promise; the loop
+   *  awaits it. */
+  onBetweenRounds?: (conv: ChatMessage[], round: number) => void | Promise<void>;
 }
 
 export interface RunLoopOptions {
@@ -97,6 +103,12 @@ export interface RunLoopOptions {
    *  short sentence per round when sidecar is configured. compactConv
    *  reads from it. Pass the same array across resumes to preserve. */
   runningSummary?: string[];
+  /** Restrict the tool pool used by this loop. When omitted, the full
+   *  REGISTRY is exposed. Subagents use this to run with just
+   *  read/edit/multi_edit/grep/etc., keeping the prefix small AND
+   *  preventing the subagent from spawning its own subagents or
+   *  creating tasks that would pollute the parent's state. */
+  availableTools?: Tool[];
 }
 
 export interface LoopStats {
@@ -112,7 +124,15 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
   const postcommitDelayMs = opts.postcommitDelayMs ?? DEFAULT_POSTCOMMIT_DELAY_MS;
   const autoCompactThreshold =
     opts.autoCompactThresholdTokens ?? DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS;
-  const specs = toolSpecs();
+  // Tool pool: caller-supplied subset (for subagents) or the full
+  // registry. We build the specs list from whichever pool is active
+  // AND swap findTool's behavior at dispatch time so the model can't
+  // call a tool we excluded from the prompt-side list.
+  const toolPool = opts.availableTools ?? null;
+  const specs = toolPool ? toolPool.map((t) => t.spec) : toolSpecs();
+  const localFindTool = toolPool
+    ? (name: string) => toolPool.find((t) => t.name === name)
+    : findTool;
   const startTotal = performance.now();
   let consecutiveLength = 0;
   let toolCallCount = 0;
@@ -165,6 +185,17 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
           }
           events?.onCompactDone?.(tokensNow, tokensNow, conv.length);
         }
+      }
+    }
+    // Caller-driven between-rounds hook. The TUI uses this to apply
+    // a task-transition reset mid-loop: when the model called
+    // task_next during the previous round, the TUI rewrites conv
+    // here so the next round starts with a short focused prompt.
+    if (events?.onBetweenRounds) {
+      try {
+        await events.onBetweenRounds(conv, round);
+      } catch {
+        /* don't let a callback bug break the loop */
       }
     }
     let res: CompletionResult;
@@ -243,7 +274,7 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
 
     for (const call of res.tool_calls) {
       toolCallCount++;
-      const tool: Tool | undefined = findTool(call.function.name);
+      const tool: Tool | undefined = localFindTool(call.function.name);
       let args: Record<string, unknown> = {};
       try {
         args = call.function.arguments ? JSON.parse(call.function.arguments) : {};

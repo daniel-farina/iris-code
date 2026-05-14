@@ -19,10 +19,10 @@ afterEach(() => {
 });
 
 describe('registry', () => {
-  it('exposes all 11 tools with unique names', () => {
+  it('exposes all 22 tools with unique names', () => {
     const names = REGISTRY.map((t) => t.name);
-    expect(names.length).toBe(11);
-    expect(new Set(names).size).toBe(11);
+    expect(names.length).toBe(22);
+    expect(new Set(names).size).toBe(22);
     expect(names).toEqual(
       expect.arrayContaining([
         'read',
@@ -30,11 +30,23 @@ describe('registry', () => {
         'grep',
         'glob',
         'edit',
+        'multi_edit',
         'bash',
         'list',
         'tree',
         'diff',
         'peek_log',
+        'browser_check',
+        'bg_run',
+        'bg_list',
+        'bg_output',
+        'bg_stop',
+        'task_create',
+        'task_list',
+        'task_get',
+        'task_update',
+        'task_next',
+        'delegate',
       ]),
     );
   });

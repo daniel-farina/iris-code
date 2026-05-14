@@ -14,13 +14,13 @@ export const DEFAULT_TOP_K = 20;
 // failure mode from "fatal parse error" to "finish_reason=length" which
 // auto-continues. Still much smaller than the model's 32k context window.
 export const DEFAULT_MAX_TOKENS = 6144;
-// Auto-compact threshold (approximate tokens). MTPLX's paged-KV cache
-// thrashes once a session's prefix crosses ~10K tokens (session-bank
-// eviction + page reclaim under memory pressure). We trigger compact
-// a bit below this so prefixes stay small and the bank slot warm.
-// Both the TUI path (src/ui/auto_compact.ts) and the print-mode loop
-// (src/agent.ts via cli.ts) should use this same value.
-export const DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS = 9000;
+// Auto-compact threshold (approximate tokens). Empirically MTPLX's
+// session-bank entries can grow to ~24K tokens before getting evicted
+// (observed on a 32-entry bank with MTPLX_SESSION_BANK_MAX_ENTRIES=32).
+// Crossing that wall flips every subsequent turn from WARM (~0.3s
+// TTFT) to COLD (~45s TTFT full prefill), so we target ~75% of the
+// wall to compact before the cliff. Override via --auto-compact-tokens.
+export const DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS = 18000;
 
 // Round cap. With auto-compact + postcommit polling each round is
 // fast and warm, so the bottleneck for multi-feature refactors used

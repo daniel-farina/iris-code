@@ -20,7 +20,10 @@ export interface StreamOptions {
   baseUrl: string;
   model: string;
   sessionId?: string;
-  /** Called with each content delta as it arrives (after `<think>` filtering). */
+  /** Called with each content delta as it arrives - includes any
+   *  `<think>…</think>` reasoning the model emits. We do not filter
+   *  thinking; the TUI renders it inline so users can see the model's
+   *  reasoning. */
   onContent?: (text: string) => void;
   /** Called once when the first byte arrives - useful for TTFT timing. */
   onTtft?: () => void;
@@ -162,6 +165,21 @@ export class MtplxClient {
         function: { name: s.name, arguments: s.args },
       }));
 
+    // Recovery path: qwen3 sometimes emits the tool-call XML as plain
+    // text content instead of through the structured tool_calls delta
+    // channel. When that happens our acc map is empty and the model's
+    // intended call is lost, the agent loop ends with no work done.
+    // Scan the accumulated content for `<tool_call>` blocks and
+    // recover them as structured tool_calls; strip the recovered XML
+    // from content so we don't double-report it.
+    if (tool_calls.length === 0 && content.includes('<tool_call>')) {
+      const { recovered, strippedContent } = recoverInlineToolCalls(content);
+      if (recovered.length > 0) {
+        for (const tc of recovered) tool_calls.push(tc);
+        content = strippedContent;
+      }
+    }
+
     return {
       content,
       tool_calls,
@@ -170,4 +188,85 @@ export class MtplxClient {
       totalMs: performance.now() - started,
     };
   }
+}
+
+/** Recover tool_call entries that the model emitted as plain text
+ *  content. Tolerates several qwen3 emission shapes:
+ *
+ *    <tool_call><function=NAME>{ARGS_JSON}</function></tool_call>
+ *    <tool_call><function=NAME></tool_call>                       (no-arg tools)
+ *    <tool_call>{"name":"NAME","arguments":{...}}</tool_call>
+ *    <tool_call>{"name":"NAME"}</tool_call>
+ *
+ *  Returns the parsed calls + the content with all recovered XML
+ *  stripped (so callers don't double-render it).
+ *
+ *  Exported for testing. */
+export function recoverInlineToolCalls(content: string): {
+  recovered: ToolCall[];
+  strippedContent: string;
+} {
+  const recovered: ToolCall[] = [];
+  const stripRanges: [number, number][] = [];
+  // Capture each <tool_call>...</tool_call> block. The body is matched
+  // non-greedily; we'll parse the body separately. \s* allows the
+  // newlines qwen3 typically inserts.
+  const blockRe = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/g;
+  let m: RegExpExecArray | null;
+  while ((m = blockRe.exec(content)) !== null) {
+    const body = m[1] ?? '';
+    const parsed = parseToolCallBody(body);
+    if (parsed) {
+      recovered.push({
+        id: `recovered_${recovered.length}`,
+        type: 'function',
+        function: { name: parsed.name, arguments: parsed.args },
+      });
+      stripRanges.push([m.index, m.index + m[0].length]);
+    }
+  }
+  if (stripRanges.length === 0) return { recovered, strippedContent: content };
+  // Remove from end to start so indices stay valid.
+  let out = content;
+  for (let i = stripRanges.length - 1; i >= 0; i--) {
+    const [s, e] = stripRanges[i]!;
+    out = out.slice(0, s) + out.slice(e);
+  }
+  return { recovered, strippedContent: out.trim() };
+}
+
+function parseToolCallBody(body: string): { name: string; args: string } | undefined {
+  // Shape A: <function=NAME>{ARGS}</function> or <function=NAME></function>
+  const fnTag = /<function=([A-Za-z_][\w-]*)>([\s\S]*?)(?:<\/function>|$)/;
+  const tag = fnTag.exec(body);
+  if (tag) {
+    const name = tag[1] ?? '';
+    let argsRaw = (tag[2] ?? '').trim();
+    if (!argsRaw) argsRaw = '{}';
+    // Make sure args parses as JSON; if not, wrap.
+    try {
+      JSON.parse(argsRaw);
+    } catch {
+      argsRaw = JSON.stringify({ _raw: argsRaw });
+    }
+    return { name, args: argsRaw };
+  }
+  // Shape B: JSON object {"name": ..., "arguments": ...}
+  const jsonStart = body.indexOf('{');
+  if (jsonStart !== -1) {
+    const jsonText = body.slice(jsonStart);
+    try {
+      const obj = JSON.parse(jsonText) as { name?: unknown; arguments?: unknown };
+      if (typeof obj.name === 'string') {
+        const args =
+          typeof obj.arguments === 'string'
+            ? obj.arguments
+            : JSON.stringify(obj.arguments ?? {});
+        return { name: obj.name, args };
+      }
+    } catch {
+      /* not JSON; fall through */
+    }
+  }
+  return undefined;
 }
