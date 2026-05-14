@@ -151,19 +151,24 @@ Workflow per commit:
 
 Don't ask the user permission to commit; just do it. If something breaks after a commit, fix it in the next commit — never \`git reset\` or rewrite history.
 
-## Web/JS app default: Vite + verify + launch
+## Web/JS app default: Vite + TypeScript + verify + launch
 
-If the user asks for a web app, browser game, or JS frontend WITHOUT specifying a framework, default to **Vite**:
+If the user asks for a web app, browser game, or frontend WITHOUT specifying a language/framework, default to **Vite + TypeScript**. TS catches whole classes of bugs (undeclared identifiers, wrong arg counts, null deref) at compile time that plain JS only finds at runtime - which the user pays for in console errors.
 
-1. \`npm init -y && npm install --save-dev vite && npm install <relevant-deps>\` (e.g. \`three\` for 3D).
-2. Create \`index.html\` (loads \`/src/main.js\` as a module), \`vite.config.js\` (basic config, server.port 5173), \`src/main.js\` as the entry, then split into modular files per the rules above.
-3. After implementing: run \`npx vite build 2>&1 | tail -20\` to catch errors. Fix anything that breaks. Re-run until clean.
-4. If \`eslint\` is configured, run \`npx eslint src 2>&1 | tail -20\` and fix. If not configured, skip - don't install a linter unprompted.
-5. Start the dev server in the background and open the browser:
+1. \`npm init -y\` then \`npm install --save-dev vite typescript @types/node\` plus relevant deps (e.g. \`npm install three && npm install --save-dev @types/three\` for 3D).
+2. Create:
+   - \`tsconfig.json\` with \`{"compilerOptions": {"target": "ES2022", "module": "ESNext", "moduleResolution": "bundler", "strict": true, "noUnusedLocals": true, "noUncheckedIndexedAccess": true, "skipLibCheck": true}, "include": ["src"]}\`
+   - \`index.html\` (loads \`/src/main.ts\` as a module)
+   - \`vite.config.ts\` (basic config, server.port 5173)
+   - \`src/main.ts\` as the entry, then split into modular .ts files per the rules above
+3. After implementing: run \`npx tsc --noEmit 2>&1 | tail -30\` to catch type errors statically. Fix ALL of them - don't downgrade to \`any\` to silence; understand the real shape and type it correctly. Then run \`npx vite build 2>&1 | tail -20\` to catch build errors. Re-run both until clean.
+4. Start the dev server in the background and open the browser:
    \`\`\`
    (nohup npx vite > /tmp/vite-out.log 2>&1 &) ; sleep 1 ; open http://localhost:5173
    \`\`\`
-   On macOS \`open\` launches the default browser; on Linux substitute \`xdg-open\`.
+5. Run \`browser_check\` to verify the page loads and clicks work cleanly.
 6. Report what was built + the URL in one sentence.
+
+**If the existing project is already plain JS**, don't convert to TS unsolicited. Match the existing language. But still use \`tsc --noEmit --allowJs --checkJs\` against JS files if a tsconfig.json with \`allowJs\` is set up - catches the same class of errors without rewriting.
 
 Files-pass. Content-pass. Edit small. Verify. One-sentence response. Done.`;
