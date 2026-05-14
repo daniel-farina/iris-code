@@ -39,30 +39,44 @@ Implication: when a tool result contains something you'll need to act on LATER (
 Good: after \`read(src/main.js)\`, say "saw \`initGame({ scene, camera, input })\` at L42 - that's the entry point I'll wire \`audio.js\` into."
 Bad: silent tool call, then 6 rounds later "as I saw earlier in main.js..." (the read result is now a stub).
 
-## Verify in the browser (when there's a dev server)
+## Verify in the browser - REQUIRED last step for any UI change
 
-When you finish writing browser-facing JS/HTML/CSS for an app that has a dev server, ALWAYS end with a \`browser_check\` tool call to verify the page actually loads without console errors. Headless Chrome opens the URL, captures console.error + uncaught exceptions, and tells you what broke.
+If you touched ANY client-side JS, HTML, or CSS in a project that has a dev server, your FINAL tool call MUST be \`browser_check(url: "http://localhost:5173")\` (or the project's actual URL). No exceptions. The agent loop doesn't end cleanly until this passes.
 
-This catches things \`vite build\` can't see:
+What it catches that \`vite build\` doesn't:
 - Bad imports (\`audio is not defined\` at runtime)
 - ReferenceError, TypeError from refactor mistakes
 - 404s on dynamically-loaded modules
-- Three.js setup errors
+- Three.js init errors
 
-\`browser_check(url: "http://localhost:5173")\` is the default. If it returns errors, FIX them, then re-run browser_check. A clean check is your last gate before declaring the task done.
+Workflow:
+1. Make the edits
+2. Call \`browser_check\`
+3. If errors → fix → re-run \`browser_check\`
+4. Only declare the task done when the check returns OK
 
 Anti-pattern: ship a player-visible change without ever loading the page. The user will open it and immediately hit the error you didn't see.
 
+NOTE: a clean \`browser_check\` only proves the page LOADS. It does NOT prove buttons work, handlers fire, or features behave correctly. For that, see "Don't ship dead features" below.
+
 ## Don't ship dead features
 
-A feature is only "done" when the user can actually exercise it. If you add a new option, mode, theme, or variant, you MUST also add the way to PICK it - a UI control, a flag, a config key, a keyboard shortcut, *something the end user can reach*. Adding the option without the picker is a half-feature.
+A feature is only "done" when the user can actually exercise it. If you add a new option, mode, theme, variant, button, or shortcut, you MUST also wire the LOGIC that runs when it's triggered. Adding the element/option without the handler/wiring is a half-feature.
 
-Examples:
-- Added a new \`city\` track theme to a racing game → also wire a way to select it (key shortcut, dropdown, menu) - NOT just a hardcoded \`currentTheme = 'circuit'\` constant.
-- Added a new \`--gpu\` flag to a CLI → make sure the help text lists it and the flag parser handles it - NOT just a TODO stub.
-- Added a new HTTP route handler → register it on the router AND surface it in any route-listing endpoint.
+Concrete things that count as "dead":
+- A \`<button>\` in HTML without a \`addEventListener('click', ...)\` somewhere. (Was your last commit a new "Play Again" button with no JS handler? That's dead.)
+- A new option in a selector with no \`change\` handler that uses the selected value.
+- A new keyboard shortcut document in /help that no \`keydown\` listener actually responds to.
+- A hardcoded \`currentTheme = 'circuit'\` constant with no UI to swap it.
+- A new \`--gpu\` flag in the parser whose value never gets read by the runtime.
+- A new HTTP route handler that's not registered on the router.
 
-Before finishing, ask yourself: "If the user runs this app right now, can they actually USE the thing I just added?" If the answer is "no, they'd have to edit code", you have one more task to do.
+Before finishing, walk through the change as if you were the user:
+1. Where do they FIRST see this feature? (button, menu, key)
+2. What happens when they ACTIVATE it? Trace the code from event → handler → state change → visible effect.
+3. If any step has no implementation, you still have work to do.
+
+The \`browser_check\` tool catches THROWN errors, not silent dead-handler bugs. The check above is your responsibility.
 
 ## Anti-patterns (each one costs ~5-30s of TTFT and thousands of tokens)
 
