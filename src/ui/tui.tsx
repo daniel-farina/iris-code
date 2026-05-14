@@ -87,6 +87,8 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
   // Auto-/compact toggle: defaults to on (flags.autoCompact undefined or true).
   // Off when --no-auto-compact was passed or after /auto-compact off.
   const [autoCompactOn, setAutoCompactOn] = useState<boolean>(flags.autoCompact !== false);
+  // /browser on|off: run headless-Chrome console check on demand.
+  const [browserCheckUrl, setBrowserCheckUrl] = useState<string>('http://localhost:5173');
   const convRef = useRef<ChatMessage[]>([systemMessage(flags.system ?? DEFAULT_SYSTEM_PROMPT)]);
   // Sidecar running-summary: one line per round, used to short-circuit
   // expensive main-model summarize calls in /compact.
@@ -706,7 +708,7 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
             runtimeModel +
             ')\n  /top-p [0-1|default]        get/set sampler top-p\n  /top-k [int|default]        get/set sampler top-k\n  /temperature [0-2|default]  get/set sampler temperature (current ' +
             runtimeTemperature +
-            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)\n  /auto-compact [on|off]      toggle auto-/compact at ~9K tokens (current\n  /setup                      check MTPLX config drift\n  /setup-apply                restart MTPLX with recommended env (after /setup)' +
+            ')\n  /info                       show full runtime settings\n  /loop <Nu> <prompt>         schedule recurring prompt (e.g. /loop 5m run tests)\n  /loop <prompt> every <Nu>   same, trailing form\n  /loops                      list active loops\n  /loop-stop <id|all>         cancel a loop\n  /sessions [N]               list N (default 10) most recent persisted sessions\n  /resume <id|last>           switch this REPL to a persisted session\n  /stats                      show round/tool/token/ms counters\n  /usage                      show per-tool call counts + avg ms\n  /tools                      list available tools\n  /compact                    summarize conv and reset (frees prefix cache, keeps gist)\n  /browser [url]              headless-Chrome console-error check (default http://localhost:5173)\n  /auto-compact [on|off]      toggle auto-/compact at ~9K tokens (current\n  /setup                      check MTPLX config drift\n  /setup-apply                restart MTPLX with recommended env (after /setup)' +
             (autoCompactOn ? 'on' : 'off') +
             ')',
         },
@@ -892,6 +894,24 @@ const App: FC<AppProps> = ({ flags, initialSessionId }) => {
           setBusy(false);
           setStatus('');
         }
+      })();
+      return true;
+    }
+    // /browser [url]: run a headless-Chrome console check now and show
+    // any errors found. `/browser <url>` updates the default URL too.
+    const bcm = cmd.match(/^[/:]browser(?:\s+(\S+))?\s*$/i);
+    if (bcm) {
+      const argUrl = bcm[1];
+      if (argUrl?.startsWith('http')) setBrowserCheckUrl(argUrl);
+      const target = argUrl?.startsWith('http') ? argUrl : browserCheckUrl;
+      setTranscript((p) => [
+        ...p,
+        { kind: 'system', text: `running browser_check on ${target}...` },
+      ]);
+      void (async () => {
+        const { browserCheck, formatBrowserCheck } = await import('../browser_check.js');
+        const r = await browserCheck({ url: target });
+        setTranscript((p) => [...p, { kind: 'system', text: formatBrowserCheck(r) }]);
       })();
       return true;
     }
