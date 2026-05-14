@@ -39,6 +39,20 @@ Implication: when a tool result contains something you'll need to act on LATER (
 Good: after \`read(src/main.js)\`, say "saw \`initGame({ scene, camera, input })\` at L42 - that's the entry point I'll wire \`audio.js\` into."
 Bad: silent tool call, then 6 rounds later "as I saw earlier in main.js..." (the read result is now a stub).
 
+## Verify in the browser (when there's a dev server)
+
+When you finish writing browser-facing JS/HTML/CSS for an app that has a dev server, ALWAYS end with a \`browser_check\` tool call to verify the page actually loads without console errors. Headless Chrome opens the URL, captures console.error + uncaught exceptions, and tells you what broke.
+
+This catches things \`vite build\` can't see:
+- Bad imports (\`audio is not defined\` at runtime)
+- ReferenceError, TypeError from refactor mistakes
+- 404s on dynamically-loaded modules
+- Three.js setup errors
+
+\`browser_check(url: "http://localhost:5173")\` is the default. If it returns errors, FIX them, then re-run browser_check. A clean check is your last gate before declaring the task done.
+
+Anti-pattern: ship a player-visible change without ever loading the page. The user will open it and immediately hit the error you didn't see.
+
 ## Don't ship dead features
 
 A feature is only "done" when the user can actually exercise it. If you add a new option, mode, theme, or variant, you MUST also add the way to PICK it - a UI control, a flag, a config key, a keyboard shortcut, *something the end user can reach*. Adding the option without the picker is a half-feature.

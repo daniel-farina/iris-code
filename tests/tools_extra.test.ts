@@ -19,10 +19,10 @@ afterEach(() => {
 });
 
 describe('registry', () => {
-  it('exposes all 10 tools with unique names', () => {
+  it('exposes all 11 tools with unique names', () => {
     const names = REGISTRY.map((t) => t.name);
-    expect(names.length).toBe(10);
-    expect(new Set(names).size).toBe(10);
+    expect(names.length).toBe(11);
+    expect(new Set(names).size).toBe(11);
     expect(names).toEqual(
       expect.arrayContaining([
         'read',

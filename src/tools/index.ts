@@ -5,6 +5,7 @@
 // onto whichever it sees first when ambiguous.
 
 import { bashTool } from './bash.js';
+import { browserTool } from './browser.js';
 import { diffTool } from './diff.js';
 import { editTool } from './edit.js';
 import { globTool } from './glob.js';
@@ -27,6 +28,7 @@ export const REGISTRY: Tool[] = [
   treeTool,
   diffTool,
   peekLogTool,
+  browserTool,
 ];
 
 export function findTool(name: string): Tool | undefined {

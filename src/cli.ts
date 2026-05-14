@@ -70,6 +70,11 @@ interface Flags {
    *  derived from runningSummary (sidecar) or the first user prompt.
    *  Safety net for when the model forgets to commit-as-it-goes. */
   autoCommit?: boolean;
+  /** Post-loop browser_check on a localhost dev URL. Catches JS load
+   *  errors the model never saw because it never loaded the page. */
+  browserCheck?: boolean;
+  /** URL to check; default http://localhost:5173 (Vite). */
+  browserCheckUrl?: string;
 }
 
 const VERSION = '0.4.1-dev';
@@ -134,6 +139,9 @@ export function parseFlags(argv: string[]): Flags {
       sidecar: { type: 'string' },
       'sidecar-url': { type: 'string' },
       'auto-commit': { type: 'boolean' },
+      'browser-check': { type: 'boolean' },
+      'no-browser-check': { type: 'boolean' },
+      'browser-check-url': { type: 'string' },
       'clear-stale-sessions': { type: 'string' },
       version: { type: 'boolean', short: 'V' },
       help: { type: 'boolean', short: 'h' },
@@ -190,6 +198,19 @@ export function parseFlags(argv: string[]): Flags {
       'http://localhost:11434',
     autoCommit:
       (values['auto-commit'] as boolean | undefined) ?? process.env['HIP_AUTO_COMMIT'] === '1',
+    // Browser-check defaults ON. Explicit --browser-check or
+    // --no-browser-check flag wins. Env HIP_NO_BROWSER_CHECK=1 also
+    // disables.
+    browserCheck:
+      (values['browser-check'] as boolean | undefined) ??
+      !(
+        (values['no-browser-check'] as boolean | undefined) === true ||
+        process.env['HIP_NO_BROWSER_CHECK'] === '1'
+      ),
+    browserCheckUrl:
+      (values['browser-check-url'] as string | undefined) ??
+      process.env['HIP_BROWSER_CHECK_URL'] ??
+      'http://localhost:5173',
     clearStaleSessionsMinutes: values['clear-stale-sessions']
       ? num('clear-stale-sessions', values['clear-stale-sessions'] as string, 30)
       : undefined,
@@ -223,6 +244,8 @@ Options:
   --sidecar <model>                  Ollama small-model id (e.g. gemma4:e2b) for parallel per-round summaries; free compact (env: HIP_SIDECAR_MODEL). Auto-detected if Ollama is reachable with a known small model.
   --sidecar-url <url>                Ollama base URL for --sidecar (default http://localhost:11434; env: HIP_SIDECAR_URL)
   --auto-commit                      after --print exits, sweep up any uncommitted changes into one commit using a sidecar-derived message (env: HIP_AUTO_COMMIT=1)
+  --browser-check / --no-browser-check  after --print exits, headless-Chrome load URL + dump console errors (default ON; env: HIP_NO_BROWSER_CHECK=1 to disable)
+  --browser-check-url <url>          URL to check (default http://localhost:5173; env: HIP_BROWSER_CHECK_URL)
   --clear-stale-sessions [N]         at startup, clear MTPLX sessions idle >N min (default 30) to free session-bank slots
   --update                           download + install the latest release from GitHub
   --install-info                     print where hip is installed and the target platform
@@ -578,6 +601,15 @@ async function runPrintMode(
   );
   // Safety-net auto-commit: if the user asked for it and the model
   // didn't commit on its own, sweep up any dirty changes.
+  // Post-loop browser check. Runs BEFORE auto-commit so a broken page
+  // doesn't get checkpointed. If errors found, we still let auto-commit
+  // proceed (the work might be partial-by-design) but the errors land
+  // in stderr so the user sees them.
+  if (flags.browserCheck) {
+    const { browserCheck, formatBrowserCheck } = await import('./browser_check.js');
+    const r = await browserCheck({ url: flags.browserCheckUrl ?? 'http://localhost:5173' });
+    process.stderr.write(`${formatBrowserCheck(r)}\n`);
+  }
   if (flags.autoCommit) {
     const { autoCommit } = await import('./auto_commit.js');
     const result = autoCommit(process.cwd(), runningSummary, flags.print ?? '');
