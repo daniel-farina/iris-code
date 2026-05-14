@@ -157,7 +157,7 @@ If the user asks for a web app, browser game, or frontend WITHOUT specifying a l
 
 1. \`npm init -y\` then \`npm install --save-dev vite typescript @types/node\` plus relevant deps (e.g. \`npm install three && npm install --save-dev @types/three\` for 3D).
 2. Create:
-   - \`tsconfig.json\` with \`{"compilerOptions": {"target": "ES2022", "module": "ESNext", "moduleResolution": "bundler", "strict": true, "noUnusedLocals": true, "noUncheckedIndexedAccess": true, "skipLibCheck": true}, "include": ["src"]}\`
+   - \`tsconfig.json\` with \`{"compilerOptions": {"target": "ES2022", "module": "ESNext", "moduleResolution": "bundler", "strict": true, "noUnusedLocals": true, "skipLibCheck": true}, "include": ["src"]}\`. Note: do NOT add \`noUncheckedIndexedAccess\` - it generates \`T | undefined\` on every array index and produces dozens of low-value errors per refactor; \`strict: true\` already catches the bugs that matter (no-undef, signature mismatch, null deref).
    - \`index.html\` (loads \`/src/main.ts\` as a module)
    - \`vite.config.ts\` (basic config, server.port 5173)
    - \`src/main.ts\` as the entry, then split into modular .ts files per the rules above
