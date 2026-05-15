@@ -8,14 +8,15 @@ export const DEFAULT_MODEL = process.env['MLX_CODE_MODEL'] ?? 'mtplx-qwen36-27b-
 export const DEFAULT_TEMPERATURE = 0.6;
 export const DEFAULT_TOP_P = 0.95;
 export const DEFAULT_TOP_K = 20;
-// Raised from 6144 -> 8192 after observing rounds repeatedly hitting
-// the 6144 cap on long multi_edit + analysis turns. With qwen3.6-27B
-// and 128K context window, an 8K output budget is comfortably within
-// the per-turn time envelope and lets reasoning-heavy turns complete
-// without finish_reason=length retries. Per-turn cost on M3 sustained
-// profile: ~8K tok ÷ 40 tok/s ≈ 3.5 min worst case, but rarely fills
-// (most rounds emit 50-2000 tok).
-export const DEFAULT_MAX_TOKENS = 8192;
+// Raised 6144 -> 8192 -> 12288: long code-write rounds (writing a
+// fresh module like physics.js or track.js from scratch) routinely
+// hit the 8K cap and trigger finish_reason=length auto-continues,
+// which re-tokenize the full conv prefix on the next round (mlx-lm
+// doesn't persist KV across requests). One round at 12K is cheaper
+// than two rounds at 8K for code-heavy turns. Per-turn cost on M3
+// sustained profile: ~12K tok ÷ 40 tok/s ≈ 5 min worst case, but
+// rarely fills (most rounds still emit 50-2000 tok).
+export const DEFAULT_MAX_TOKENS = 12288;
 // Auto-compact threshold (approximate tokens). Empirically MTPLX's
 // session-bank entries can grow to ~24K tokens before getting evicted
 // (observed on a 32-entry bank with MTPLX_SESSION_BANK_MAX_ENTRIES=32).
