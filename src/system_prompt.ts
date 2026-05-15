@@ -102,4 +102,17 @@ In a git repo, commit each completed unit of work: \`git add -A && git commit -m
 
 ## Web app default
 
-Web app or browser game without a stack specified → Vite + TypeScript (Three.js for 3D). \`strict: true\` tsconfig, skip \`noUncheckedIndexedAccess\` (noisy). After edits: \`npx tsc --noEmit\`, fix all errors. Use the standard Vite layout — \`index.html\` references \`src/main.ts\`, logic split across modules under \`src/\` (\`track.ts\`, \`car.ts\`, \`physics.ts\`, \`hud.ts\`, etc.). Start the dev server with \`bg_run\` so iteration is hot-reloaded.`;
+Web app or browser game without a stack specified → **plain vanilla JS with ES modules and a CDN-loaded Three.js**. No bundler, no TypeScript, no build step. The model has been observed shipping working features faster on this stack (no Vite-HMR-stale-cache issues, no tsc errors that aren't real bugs, no tooling overhead).
+
+Standard layout:
+- \`index.html\` at repo root with \`<script type="importmap">\` mapping \`"three"\` to \`https://unpkg.com/three@<latest>/build/three.module.js\` (and addons if needed)
+- \`index.html\` ends with \`<script type="module" src="./src/main.js"></script>\`
+- \`src/main.js\` imports from \`'three'\` and from neighbouring \`./car.js\`, \`./track.js\`, etc.
+- Each module ≤200 lines, one concept per file
+- Start the dev server with \`bg_run python3 -m http.server 5175\` (no build step needed) — refreshing the browser reloads everything cleanly, no cache games
+
+After edits, verify in this order:
+1. \`node --check src/<file>.js\` — fast syntax check per file you touched (no install required). For ES modules pass \`--input-type=module\` if needed.
+2. \`browser_check http://localhost:5175 strict_port:true\` — runtime verification. Console errors here are the source of truth.
+
+Skip the Vite + TS path unless the user explicitly asks for it (e.g. "set up a Next.js app", "use TypeScript strict mode"). The simplicity of vanilla JS + native ES modules wins for iterative game / prototype work.`;
