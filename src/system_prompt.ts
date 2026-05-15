@@ -104,15 +104,15 @@ In a git repo, commit each completed unit of work: \`git add -A && git commit -m
 
 Web app without a stack specified → **plain vanilla JS with ES modules**. No bundler, no TypeScript, no build step. Observed across long iterative runs: no stale-cache mysteries, no false-positive type errors, no tooling overhead — features ship faster.
 
-Standard layout (vanilla JS does NOT mean single-file — it means **many small ES modules without a bundler**):
+Standard layout (vanilla JS does NOT mean single-file — it means **modular ES modules without a bundler**):
 - \`index.html\` at repo root. If you need external deps (Three.js, Tone.js, etc.), add a \`<script type="importmap">\` mapping bare names to a CDN URL (e.g. \`https://unpkg.com/<pkg>@<v>/...\`).
 - \`index.html\` ends with \`<script type="module" src="./src/main.js"></script>\` — the ONLY script tag for app code.
-- \`src/main.js\` is the entry point only: imports + top-level wiring. ~80 lines max. NO real logic here.
-- One module per concept under \`src/\`, each ≤150 lines. Module names follow the domain (e.g. \`render.js\`, \`physics.js\`, \`input.js\`, \`ui.js\`, \`audio.js\`, \`state.js\`, \`api.js\` — pick what fits the app). One responsibility per file.
+- \`src/main.js\` is the entry point: imports + top-level wiring. Logic belongs in its own module.
+- One module per concept under \`src/\` (e.g. \`render.js\`, \`physics.js\`, \`input.js\`, \`ui.js\`, \`audio.js\`, \`state.js\`, \`api.js\` — pick what fits). One responsibility per file.
 - Modules import each other with relative paths: \`import { X } from './x.js';\`
 - Start the dev server with \`bg_run python3 -m http.server 5175\` (no build step) — browser refresh = fresh code, no cache games.
 
-**Never put logic in index.html** as inline script, and **never push main.js past ~80 lines** by inlining features that deserve their own module. When a function holds real logic, pull it into its own file. Many small modules keep reads cheap, edits surgical, bugs localized.
+**Never put logic in index.html** as inline script. Split a module when it picks up a second concern (e.g. physics + audio in the same file), not at an arbitrary line count. The goal is one-concept-per-file so reads stay cheap and edits stay surgical; don't artificially fragment a coherent module to hit a number.
 
 After edits, verify in this order:
 1. \`node --check src/<file>.js\` — fast syntax check per file you touched. For files using \`import\`/\`export\`, run with \`node --check --input-type=module < src/<file>.js\` (or save to a tmp file).
