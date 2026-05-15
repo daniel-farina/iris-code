@@ -114,11 +114,14 @@ export interface RunLoopOptions {
    *  preventing the subagent from spawning its own subagents or
    *  creating tasks that would pollute the parent's state. */
   availableTools?: Tool[];
-  /** Internal flag: set to true after the loop injects a one-shot
-   *  continuation nudge (model stopped with tasks still pending).
-   *  Prevents nudge loops. Callers don't set this. */
-  continuationNudged?: boolean;
+  /** Internal counter: number of auto-continuation nudges fired this
+   *  dispatch. Caps at MAX_CONTINUATION_NUDGES (3) so the loop can
+   *  cover multiple pending tasks but can't ping-pong forever if the
+   *  model keeps refusing to act. Callers don't set this. */
+  continuationNudgeCount?: number;
 }
+
+const MAX_CONTINUATION_NUDGES = 3;
 
 export interface LoopStats {
   rounds: number;
@@ -256,15 +259,17 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
       if (res.content.trim().length > 0) conv.push({ role: 'assistant', content: res.content });
       // Auto-continuation: when the model emits no tool_calls but a
       // task is still in_progress or pending, the dispatch would
-      // normally end with work undone. Inject a one-shot nudge as a
-      // user message and let the loop iterate. Limited to ONE nudge
-      // per dispatch to avoid infinite ping-pong if the model keeps
-      // refusing to act.
+      // normally end with work undone. Inject a nudge as a user
+      // message and let the loop iterate. Caps at MAX_CONTINUATION_NUDGES
+      // so the loop can re-nudge for each pending task (3 ticks per
+      // dispatch typical for a dual-objective directive) without
+      // infinite ping-pong if the model keeps refusing to act.
       const { taskManager } = await import('./task_manager.js');
       const counts = taskManager.counts();
       const needsContinue = counts.pending + counts.inProgress > 0;
-      if (needsContinue && !opts.continuationNudged) {
-        opts.continuationNudged = true;
+      const nudgesFired = opts.continuationNudgeCount ?? 0;
+      if (needsContinue && nudgesFired < MAX_CONTINUATION_NUDGES) {
+        opts.continuationNudgeCount = nudgesFired + 1;
         const active = taskManager.active();
         const nudge = active
           ? `Continue. Task id=${active.id} ("${active.subject}") is still in_progress. Per the Continuation rule, you must not end your turn while tasks remain. Either complete the current task with task_update, advance with task_next, or state a real blocker explicitly.`
