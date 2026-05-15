@@ -308,16 +308,14 @@ async function applyEditsToExisting(
     };
   }
 
-  // settings.json / *.json: validate that the result still parses.
-  // We don't want a broken settings file to brick the user's editor.
+  // *.json / *.jsonc: validate that the result still parses.
+  // Many ".json" files in the wild are actually JSONC: tsconfig.json,
+  // .eslintrc.json, .babelrc, .vscode/settings.json, package.json sometimes,
+  // etc. Always strip // and /* */ comments before the parse check -
+  // we only write the original text, so this is purely a syntax gate.
   if (abs.endsWith('.json') || abs.endsWith('.jsonc')) {
     try {
-      // .jsonc / settings.json allow comments - strip them for the
-      // syntax check only (we still write the original text).
-      const stripped = abs.endsWith('.jsonc') || /settings\.json$/.test(abs)
-        ? stripJsonComments(working)
-        : working;
-      JSON.parse(stripped);
+      JSON.parse(stripJsonComments(working));
     } catch (e) {
       throw new Error(
         `edit: applying these edits to ${displayPath} would produce invalid JSON: ${(e as Error).message}`,
