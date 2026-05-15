@@ -21,9 +21,13 @@ export const DEFAULT_MAX_TOKENS = 12288;
 // session-bank entries can grow to ~24K tokens before getting evicted
 // (observed on a 32-entry bank with MTPLX_SESSION_BANK_MAX_ENTRIES=32).
 // Crossing that wall flips every subsequent turn from WARM (~0.3s
-// TTFT) to COLD (~45s TTFT full prefill), so we target ~75% of the
-// wall to compact before the cliff. Override via --auto-compact-tokens.
-export const DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS = 18000;
+// TTFT) to COLD (~45s TTFT full prefill). Raised 18000 -> 24000 to
+// give conv-heavy stretches more headroom before /compact kicks in;
+// this sits ~at the cliff rather than ~75% short of it - the bet is
+// that fewer compact cycles is worth the occasional cold prefill if
+// a turn lands right past the wall. Drop back to ~22000 if cold-TTFT
+// turns become frequent. Override via --auto-compact-tokens.
+export const DEFAULT_AUTO_COMPACT_THRESHOLD_TOKENS = 24000;
 
 // Round cap. With auto-compact + postcommit polling each round is
 // fast and warm, so the bottleneck for multi-feature refactors used
