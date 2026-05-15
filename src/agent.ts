@@ -38,6 +38,12 @@ export interface AgentEvents {
   onToolResult?: (name: string, ok: boolean, body: string) => void;
   /** Each agent round (one model response + zero-or-more tool exec). */
   onRound?: (round: number, info: { finishReason?: string; ctok?: number }) => void;
+  /** Fired at the END of each round after all tool calls have been
+   *  appended to conv. Awaited synchronously so callers can persist
+   *  incremental state to disk before the NEXT round starts. This is
+   *  how we survive --max-time SIGKILL: each round's state is on disk
+   *  before the next risky stream begins. May return a Promise. */
+  onAfterRound?: (round: number, conv: ChatMessage[]) => void | Promise<void>;
   /** Fired before a postcommit-yielding pause between rounds; lets the
    * UI show a "yielding to MTPLX..." status. maxMs is the upper bound. */
   onPostcommitWait?: (maxMs: number) => void;
@@ -398,6 +404,18 @@ export async function runLoop(opts: RunLoopOptions): Promise<LoopStats> {
         result = { landed: true, elapsedMs: 0 };
       }
       events?.onPostcommitDone?.(result.landed, result.elapsedMs);
+    }
+
+    // Incremental persist hook. Awaited so the callback completes
+    // before the next stream call - that way a --max-time SIGKILL
+    // during round N+1 still leaves round N's state on disk. Errors
+    // are swallowed: a failing persist must not abort the agent.
+    if (events?.onAfterRound) {
+      try {
+        await events.onAfterRound(round + 1, conv);
+      } catch {
+        /* persist failure is non-fatal */
+      }
     }
   }
 

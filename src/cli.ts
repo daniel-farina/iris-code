@@ -485,6 +485,27 @@ async function runPrintMode(
     );
     process.exit(2);
   }
+  // Acquire a session lock so two concurrent --prints can't trample
+  // each other's tool-result + task-state writes on the same session.
+  // Stale locks (dead pid) are silently reclaimed. Refusal exits 73
+  // (EX_CANTCREAT) so cron-driven loops can detect the collision.
+  const { tryAcquireSessionLock } = await import('./session_lock.js');
+  const lock = tryAcquireSessionLock(sessionId);
+  if ('reason' in lock) {
+    process.stderr.write(
+      `[hip] session ${sessionId} is locked by pid ${lock.holderPid}.\n` +
+        `      Wait for that run to finish, or kill it (kill ${lock.holderPid}) then retry.\n` +
+        `      Lockfile: ${lock.path}\n`,
+    );
+    process.exit(73);
+  }
+  // Release on every exit path so a crash doesn't strand a stale lock
+  // for the lifetime of the session_id. The lockfile module already
+  // ignores dead-holder locks, but cleaning up keeps things tidy.
+  const releaseLock = () => {
+    try { (lock as { release: () => void }).release(); } catch { /* best-effort */ }
+  };
+  process.on('exit', releaseLock);
   const client = new MtplxClient({
     baseUrl: flags.url,
     model: flags.model,
@@ -597,6 +618,28 @@ async function runPrintMode(
       onRound: (_n, info) => {
         if (typeof info.ctok === 'number') completionTokens += info.ctok;
       },
+      // Incremental persist: write conv + task snapshot to disk at the
+      // END of each round. This survives --max-time SIGKILL (which
+      // bypasses the end-of-run persist block below). Without this,
+      // long --print runs that hit the wall-clock cap silently dropped
+      // task-state updates - we observed this repeatedly on the v7
+      // racing-game session before this change landed.
+      onAfterRound: async (_round, currentConv) => {
+        const { updateSession: _u } = await import('./session_store.js');
+        const { taskManager: _tm } = await import('./task_manager.js');
+        const snap = _tm.snapshot();
+        const fu = currentConv.find((m) => m.role === 'user')?.content ?? '';
+        await _u({
+          session_id: sessionId,
+          ts_unix: Math.floor(Date.now() / 1000),
+          cwd: process.cwd(),
+          first_user: typeof fu === 'string' ? fu.slice(0, 200) : '',
+          conv: currentConv,
+          running_summary: runningSummary.length > 0 ? [...runningSummary] : undefined,
+          tasks: snap.tasks.length > 0 ? snap.tasks : undefined,
+          task_next_id: snap.nextNum,
+        });
+      },
       onPostcommitWait: flags.quiet
         ? undefined
         : (maxMs) =>
@@ -672,6 +715,7 @@ async function runPrintMode(
   process.off('SIGINT', onSigint);
   if (maxTimeTimer) clearTimeout(maxTimeTimer);
   if (maxTimeKillTimer) clearTimeout(maxTimeKillTimer);
+  releaseLock();
   const tps =
     completionTokens > 0 && stats.totalMs > 0
       ? ` tok/s=${((completionTokens / stats.totalMs) * 1000).toFixed(1)}`
