@@ -104,12 +104,23 @@ In a git repo, commit each completed unit of work: \`git add -A && git commit -m
 
 Web app or browser game without a stack specified → **plain vanilla JS with ES modules and a CDN-loaded Three.js**. No bundler, no TypeScript, no build step. The model has been observed shipping working features faster on this stack (no Vite-HMR-stale-cache issues, no tsc errors that aren't real bugs, no tooling overhead).
 
-Standard layout:
+Standard layout (vanilla JS does NOT mean single-file — it means **many small ES modules without a bundler**):
 - \`index.html\` at repo root with \`<script type="importmap">\` mapping \`"three"\` to \`https://unpkg.com/three@<latest>/build/three.module.js\` (and addons if needed)
-- \`index.html\` ends with \`<script type="module" src="./src/main.js"></script>\`
-- \`src/main.js\` imports from \`'three'\` and from neighbouring \`./car.js\`, \`./track.js\`, etc.
-- Each module ≤200 lines, one concept per file
-- Start the dev server with \`bg_run python3 -m http.server 5175\` (no build step needed) — refreshing the browser reloads everything cleanly, no cache games
+- \`index.html\` ends with \`<script type="module" src="./src/main.js"></script>\` — that's the ONLY script tag for game code
+- \`src/main.js\` is just the entry point: imports + scene/renderer wiring + game loop. ~80 lines max. NO game logic here.
+- One module per concept under \`src/\`, each ≤150 lines:
+  - \`src/track.js\` — track curve, mesh, getPoint/getTangent
+  - \`src/car.js\` — car model, physics, controls
+  - \`src/ai.js\` — AI car
+  - \`src/camera.js\` — chase camera
+  - \`src/hud.js\` — HUD overlay
+  - \`src/sound.js\` — Web Audio
+  - \`src/input.js\` — keyboard + touch
+  - …etc, one file per feature
+- Modules import each other with relative paths: \`import { Track } from './track.js';\`
+- Start the dev server with \`bg_run python3 -m http.server 5175\` (no build step) — browser refresh = fresh code, no cache games
+
+**Never put game logic in index.html** as inline script, and **never push main.js past ~80 lines** by inlining features that deserve their own module. When a function holds real logic (physics tick, AI brain, audio synthesis, lap detection), pull it into its own file. Many small modules keep reads cheap, edits surgical, and bugs localized.
 
 After edits, verify in this order:
 1. \`node --check src/<file>.js\` — fast syntax check per file you touched (no install required). For ES modules pass \`--input-type=module\` if needed.
