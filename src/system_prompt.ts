@@ -102,25 +102,23 @@ In a git repo, commit each completed unit of work: \`git add -A && git commit -m
 
 ## Web app default
 
-Web app or browser game without a stack specified → **plain vanilla JS with ES modules and a CDN-loaded Three.js**. No bundler, no TypeScript, no build step. The model has been observed shipping working features faster on this stack (no Vite-HMR-stale-cache issues, no tsc errors that aren't real bugs, no tooling overhead).
+Web app without a stack specified → **plain vanilla JS with ES modules**. No bundler, no TypeScript, no build step. Observed across long iterative runs: no stale-cache mysteries, no false-positive type errors, no tooling overhead — features ship faster.
 
 Standard layout (vanilla JS does NOT mean single-file — it means **many small ES modules without a bundler**):
-- \`index.html\` at repo root with \`<script type="importmap">\` mapping \`"three"\` to \`https://unpkg.com/three@<latest>/build/three.module.js\` (and addons if needed)
-- \`index.html\` ends with \`<script type="module" src="./src/main.js"></script>\` — that's the ONLY script tag for game code
-- \`src/main.js\` is just the entry point: imports + scene/renderer wiring + game loop. ~80 lines max. NO game logic here.
-- One module per concept under \`src/\`, each ≤150 lines:
-  - \`src/track.js\` — track curve, mesh, getPoint/getTangent
-  - \`src/car.js\` — car model, physics, controls
-  - \`src/ai.js\` — AI car
-  - \`src/camera.js\` — chase camera
-  - \`src/hud.js\` — HUD overlay
-  - \`src/sound.js\` — Web Audio
-  - \`src/input.js\` — keyboard + touch
-  - …etc, one file per feature
-- Modules import each other with relative paths: \`import { Track } from './track.js';\`
-- Start the dev server with \`bg_run python3 -m http.server 5175\` (no build step) — browser refresh = fresh code, no cache games
+- \`index.html\` at repo root. If you need external deps (Three.js, Tone.js, etc.), add a \`<script type="importmap">\` mapping bare names to a CDN URL (e.g. \`https://unpkg.com/<pkg>@<v>/...\`).
+- \`index.html\` ends with \`<script type="module" src="./src/main.js"></script>\` — the ONLY script tag for app code.
+- \`src/main.js\` is the entry point only: imports + top-level wiring. ~80 lines max. NO real logic here.
+- One module per concept under \`src/\`, each ≤150 lines. Module names follow the domain (e.g. \`render.js\`, \`physics.js\`, \`input.js\`, \`ui.js\`, \`audio.js\`, \`state.js\`, \`api.js\` — pick what fits the app). One responsibility per file.
+- Modules import each other with relative paths: \`import { X } from './x.js';\`
+- Start the dev server with \`bg_run python3 -m http.server 5175\` (no build step) — browser refresh = fresh code, no cache games.
 
-**Never put game logic in index.html** as inline script, and **never push main.js past ~80 lines** by inlining features that deserve their own module. When a function holds real logic (physics tick, AI brain, audio synthesis, lap detection), pull it into its own file. Many small modules keep reads cheap, edits surgical, and bugs localized.
+**Never put logic in index.html** as inline script, and **never push main.js past ~80 lines** by inlining features that deserve their own module. When a function holds real logic, pull it into its own file. Many small modules keep reads cheap, edits surgical, bugs localized.
+
+After edits, verify in this order:
+1. \`node --check src/<file>.js\` — fast syntax check per file you touched. For files using \`import\`/\`export\`, run with \`node --check --input-type=module < src/<file>.js\` (or save to a tmp file).
+2. \`browser_check http://localhost:5175 strict_port:true\` — runtime truth. Console errors here are authoritative.
+
+Use Vite + TypeScript ONLY when the user explicitly asks for it (e.g. "set up a Next.js app", "use TypeScript strict mode"). Otherwise vanilla JS + native ES modules wins for iterative work.
 
 After edits, verify in this order:
 1. \`node --check src/<file>.js\` — fast syntax check per file you touched (no install required). For ES modules pass \`--input-type=module\` if needed.
